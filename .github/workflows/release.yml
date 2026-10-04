@@ -4,6 +4,10 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to build and publish instead of cutting a new version
+        required: false
 
 # Releases bump package.json and push a tag, so two runs must never overlap.
 concurrency:
@@ -23,9 +27,9 @@ jobs:
     permissions:
       contents: write
     outputs:
-      published: ${{ steps.semantic.outputs.published }}
+      published: ${{ inputs.tag != '' && 'true' || steps.semantic.outputs.published }}
       version: ${{ steps.semantic.outputs.version }}
-      tag: ${{ steps.semantic.outputs.tag }}
+      tag: ${{ inputs.tag || steps.semantic.outputs.tag }}
       release_id: ${{ steps.draft.outputs.release_id }}
     steps:
       - uses: actions/checkout@v7
@@ -43,6 +47,7 @@ jobs:
 
       - name: Semantic release
         id: semantic
+        if: inputs.tag == ''
         run: node scripts/release.mjs
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -52,14 +57,21 @@ jobs:
       # sees a release that is missing its installers or latest.json.
       - name: Create draft release
         id: draft
-        if: steps.semantic.outputs.published == 'true'
+        if: inputs.tag != '' || steps.semantic.outputs.published == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.semantic.outputs.tag }}
+          TAG: ${{ inputs.tag || steps.semantic.outputs.tag }}
+        # The release list lags behind creation, so the id comes from the create response.
+        # A rerun for an existing tag reuses the draft left by the earlier attempt.
         run: |
-          gh release create "$TAG" --draft --verify-tag --title "Zephyr $TAG" --notes-file "$RUNNER_TEMP/notes.md"
-          id=$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate \
-            --jq ".[] | select(.tag_name == \"$TAG\" and .draft) | .id" | head -n 1)
+          git ls-remote --exit-code --tags origin "refs/tags/$TAG" > /dev/null
+          id=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --jq "[.[] | select(.tag_name == \"$TAG\" and .draft)][0].id // empty")
+          if [ -z "$id" ]; then
+            notes=$(cat "$RUNNER_TEMP/notes.md" 2> /dev/null || true)
+            id=$(gh api --method POST "repos/$GITHUB_REPOSITORY/releases" \
+              -f tag_name="$TAG" -f name="Zephyr $TAG" -f body="$notes" -F draft=true --jq .id)
+          fi
           test -n "$id"
           echo "release_id=$id" >> "$GITHUB_OUTPUT"
 
