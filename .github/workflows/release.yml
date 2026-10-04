@@ -5,55 +5,158 @@ on:
       - main
   workflow_dispatch:
 
+# Releases bump package.json and push a tag, so two runs must never overlap.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
 jobs:
-  release:
+  checks:
+    uses: ./.github/workflows/checks.yml
+
+  version:
+    needs: checks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      published: ${{ steps.semantic.outputs.published }}
+      version: ${{ steps.semantic.outputs.version }}
+      tag: ${{ steps.semantic.outputs.tag }}
+      release_id: ${{ steps.draft.outputs.release_id }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # semantic-release reads the whole commit history
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Semantic release
+        id: semantic
+        run: node scripts/release.mjs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_NOTES_FILE: ${{ runner.temp }}/notes.md
+
+      # The release stays a draft until every platform is uploaded, so the updater never
+      # sees a release that is missing its installers or latest.json.
+      - name: Create draft release
+        id: draft
+        if: steps.semantic.outputs.published == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.semantic.outputs.tag }}
+        run: |
+          gh release create "$TAG" --draft --verify-tag --title "Zephyr $TAG" --notes-file "$RUNNER_TEMP/notes.md"
+          id=$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate \
+            --jq ".[] | select(.tag_name == \"$TAG\" and .draft) | .id" | head -n 1)
+          test -n "$id"
+          echo "release_id=$id" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: version
+    if: needs.version.outputs.published == 'true'
+    name: Build (${{ matrix.name }})
     permissions:
       contents: write
     strategy:
       fail-fast: false
-    runs-on: windows-latest
+      matrix:
+        include:
+          - name: windows
+            platform: windows-latest
+            args: ''
+            rust_targets: ''
+          - name: macos
+            platform: macos-latest
+            args: --target universal-apple-darwin
+            rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
+    runs-on: ${{ matrix.platform }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
-          fetch-depth: 0 # Important for semantic-release to analyze commit history
+          ref: ${{ needs.version.outputs.tag }} # the commit that carries the bumped version
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          bun-version: latest
+          targets: ${{ matrix.rust_targets }}
 
-      - name: Install frontend dependencies
-        run: bun install
-
-      - name: Setup Rust cache
-        uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-          cache-on-failure: true
 
-      - name: Semantic Release
-        id: semantic
-        uses: cycjimmy/semantic-release-action@v4
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+
+      # Signs and notarizes with a Developer ID when the Apple secrets exist. Otherwise the app
+      # is ad-hoc signed, which still installs (via right-click > Open) and still auto-updates.
+      - name: Configure macOS signing
+        if: runner.os == 'macOS'
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          semantic_version: 19
-          extra_plugins: |
-            @semantic-release/git
-            @semantic-release/changelog
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -n "$APPLE_CERTIFICATE" ]; then
+            for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+              echo "$name=${!name}" >> "$GITHUB_ENV"
+            done
+          else
+            echo "APPLE_SIGNING_IDENTITY=-" >> "$GITHUB_ENV"
+          fi
 
-      - name: Build and release Tauri app
-        if: steps.semantic.outputs.new_release_published == 'true'
-        uses: tauri-apps/tauri-action@v0
+      - name: Build and upload
+        uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
         with:
-          tagName: v${{ steps.semantic.outputs.new_release_version }}
-          releaseName: 'Release v${{ steps.semantic.outputs.new_release_version }}'
-          releaseBody: ${{ steps.semantic.outputs.new_release_notes }}
-          releaseDraft: false
-          prerelease: false
-          includeUpdaterJson: true
+          releaseId: ${{ needs.version.outputs.release_id }}
+          args: ${{ matrix.args }}
+          # The publish job writes latest.json once every platform is uploaded.
+          uploadUpdaterJson: false
+          retryAttempts: 1
+
+  publish:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Upload updater manifest
+        run: node scripts/updater-manifest.mjs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ needs.version.outputs.release_id }}
+          REQUIRED_PLATFORMS: windows-x86_64,darwin-aarch64,darwin-x86_64
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ needs.version.outputs.release_id }}
+        run: |
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
+            -F draft=false -f make_latest=true

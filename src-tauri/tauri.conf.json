@@ -1,28 +1,35 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "zephyr",
+  "productName": "Zephyr",
   "version": "../package.json",
   "identifier": "com.zephyr.app",
   "build": {
     "beforeDevCommand": "bun run vite",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "bun run vue-tsc --noEmit && vite build",
+    "beforeBuildCommand": "bun run vue-tsc --noEmit && bun run vite build",
     "frontendDist": "../dist"
   },
   "app": {
+    "macOSPrivateApi": true,
     "windows": [
       {
+        "label": "main",
         "title": "Zephyr",
-        "width": 750,
-        "height": 150,
-        "resizable": true,
+        "width": 680,
+        "height": 120,
+        "resizable": false,
+        "minimizable": false,
+        "maximizable": false,
+        "closable": false,
         "decorations": false,
-        "center": true,
-        "focus": true,
-        "alwaysOnTop": true,
         "transparent": true,
+        "backgroundColor": "#00000000",
+        "alwaysOnTop": true,
         "skipTaskbar": true,
-        "shadow": false
+        "visible": false,
+        "focus": false,
+        "shadow": false,
+        "center": false
       }
     ],
     "security": {
@@ -31,7 +38,11 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
+    "targets": [
+      "nsis",
+      "app",
+      "dmg"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -40,22 +51,20 @@
       "icons/icon.ico"
     ],
     "publisher": "Zephyr",
-    "createUpdaterArtifacts": true
+    "createUpdaterArtifacts": true,
+    "category": "Utility",
+    "shortDescription": "Desktop dispatch bar"
   },
   "plugins": {
     "updater": {
+      "endpoints": [
+        "https://github.com/z3k-md/zephyr/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEIzNzYxRUNGQURGMjkxRDAKUldUUWtmS3R6eDUyczRGeUJobEkzc0ZIUnY0SVQ2YTFYYkFXS0JFc2VjZVpZTk14YmRibS9jSmEK",
       "windows": {
         "installMode": "passive"
       },
-      "active": true,
-      "endpoints": [
-        "https://github.com/zmconnelly/zephyr/releases/latest/download/latest.json"
-      ],
-      "dialog": true,
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEIzNzYxRUNGQURGMjkxRDAKUldUUWtmS3R6eDUyczRGeUJobEkzc0ZIUnY0SVQ2YTFYYkFXS0JFc2VjZVpZTk14YmRibS9jSmEK"
-    },
-    "shell": {
-      "open": true
+      "requireSignedVersion": true
     }
   }
 }

@@ -1,74 +1,34 @@
-# Zephyr - One Search to Rule Them All
+# Zephyr
 
-A featherweight search bar at your fingertips. Ditch your browser's search and go straight to the source.
+A dispatch bar for Windows and macOS. Summon it over any app, type once, and send that text to Google, ChatGPT, Wikipedia, PubMed, or a destination you added.
 
-<p>
-  <img src="./assets/images/search_bang_options.png" alt="Zephyr in action" width="75%">
-</p>
+`Alt+Space` opens the bar (`Command+Space` on a Mac keyboard). Enter searches the armed destination. `Ctrl+1` through `Ctrl+8` send the same text to a pinned destination. `!` filters destinations, and `crispr !pm` searches PubMed directly.
 
-<table width="75%">
-  <tr>
-    <td>
-      <img src="./assets/images/search_bang_1.png" alt="Zephyr in action" width="100%">
-    </td>
-    <td>
-      <img src="./assets/images/search_results_1.png" alt="Zephyr in action" width="100%">
-    </td>
-  </tr>
-  <tr>
-    <td>
-      <img src="./assets/images/search_bang_2.png" alt="Zephyr in action" width="100%">
-    </td>
-    <td>
-      <img src="./assets/images/search_results_2.png" alt="Zephyr in action" width="100%">
-    </td>
-  </tr>
-</table>
+## Install
 
-## Summon any site, anywhere
+Download the latest installer from [Releases](https://github.com/z3k-md/zephyr/releases/latest): the `-setup.exe` for Windows, or the `.dmg` for macOS. Installed copies check for updates at launch and every six hours, and install them automatically. Settings and the tray menu also have **Check for updates**.
 
-1. Press `Ctrl + Space` from anywhere, no need to be in your browser
-2. Type away, get suggestions as you type
-3. Load it with bangs `!` to go straight to the site you want
-4. Hit `Enter` to launch in your default browser
+## Develop
 
-## Development
-
-### Prerequisites
-
-- [Rust](https://www.rust-lang.org/tools/install) (1.85.0+)
-- [Node.js](https://nodejs.org/) or [Bun](https://bun.sh/)
-- [Tauri CLI](https://tauri.app/start/)
-
-### Setup
-
-1. Clone the repository
-2. Install dependencies:
-
-   ```bash
-   bun install
-   ```
-
-3. Run the development server:
-
-   ```bash
-   bun dev
-   ```
-
-### Building
-
-To build the application for production:
+- [Rust](https://www.rust-lang.org/tools/install)
+- [Bun](https://bun.sh/)
 
 ```bash
-bun run build
+bun install
+bun dev
 ```
 
-## CI/CD
+`bun run test` runs the Rust tests. `bun run lint` runs every check CI runs: Prettier, vue-tsc, rustfmt, and Clippy with warnings as errors. `bun run format` fixes formatting.
 
-This project uses GitHub Actions:
+## Release
 
-- Automatic builds are triggered on merges to the `main` branch
-- Windows installers (NSIS) are automatically created
-- Releases are published to GitHub Releases with versions based on the build number
+Every push to `main` runs the checks on Windows and macOS. If [semantic-release](https://semantic-release.gitbook.io/) finds a `feat:` or `fix:` commit since the last tag, it bumps the version, tags it, and creates a draft GitHub release. Windows and macOS (universal) installers are then built, signed for the updater, and uploaded. A final job writes `latest.json` and publishes the release, and installed copies pick it up from there.
 
-To view the workflow configuration, see [.github/workflows/release.yml](.github/workflows/release.yml).
+Repository secrets:
+
+| Secret                                                                                                                     | Purpose                                                                                                                                                                                           |
+| -------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TAURI_PRIVATE_KEY`, `TAURI_KEY_PASSWORD`                                                                                  | Updater signing key. It must match the `pubkey` in `src-tauri/tauri.conf.json`, or installed copies will reject updates.                                                                          |
+| `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID` | Optional. With them, the macOS app is signed with a Developer ID and notarized. Without them it is ad-hoc signed: first launch needs right-click > Open, and updates still install automatically. |
+
+For a local signed build, copy `.env.example` to `.env`, fill in the signing key, and run `bun run build`.
