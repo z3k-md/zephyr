@@ -1,3 +1,15 @@
+# [2.0.0](https://github.com/z3k-md/zephyr/compare/v1.3.1...v2.0.0) (2026-10-04)
+
+
+* feat!: rewrite Zephyr as a desktop dispatch bar ([0e73d75](https://github.com/z3k-md/zephyr/commit/0e73d756e9d07fb7256522d9c475acdb61a91536))
+
+
+### BREAKING CHANGES
+
+* the bang search engine and the old search UI are removed.
+
+Co-authored-by: Cursor <cursoragent@cursor.com>
+
 ## [1.3.1](https://github.com/z3k-md/zephyr/compare/v1.3.0...v1.3.1) (2025-03-16)
 
 
