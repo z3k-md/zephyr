@@ -4,6 +4,7 @@ use std::time::Duration;
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::apps::{self, App, Catalog};
 use crate::destination::{self, Destination, SuggestKind};
 use crate::history::{self, HistoryEntry};
 use crate::query::{self, Parsed};
@@ -16,6 +17,8 @@ pub struct Suggestion {
     pub destination_id: String,
     pub kind: String,
     pub hint: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -24,21 +27,47 @@ pub struct SuggestResponse {
     pub mode: String,
     pub items: Vec<Suggestion>,
     pub notice: Option<String>,
+    /// Row Enter acts on before the user moves the selection.
+    pub preselect: Option<usize>,
 }
 
+/// Local results (apps, history) come back without waiting on the network unless
+/// `include_remote` is set; remote suggestions only ever append, so row indices stay put.
 pub async fn gather(
     input: &str,
     armed_id: &str,
     destinations: &[Destination],
     history: &[HistoryEntry],
-    now: i64,
+    catalog: Catalog<'_>,
+    include_remote: bool,
 ) -> SuggestResponse {
+    let now = catalog.now;
     let parsed = query::parse_input(input);
-    if parsed.only_bang {
+    let scoped = parsed.bang.as_deref().is_some_and(apps::is_scope);
+    if parsed.only_bang && !scoped {
         return palette(destinations, parsed.bang.as_deref().unwrap_or(""));
     }
     if input.trim().is_empty() {
         return recent(history, destinations, now);
+    }
+    if scoped {
+        let items: Vec<Suggestion> = if parsed.query.is_empty() {
+            catalog.recent(8).into_iter().map(app_item).collect()
+        } else {
+            catalog
+                .ranked(&parsed.query, 8)
+                .into_iter()
+                .map(|(app, _)| app_item(app))
+                .collect()
+        };
+        let notice = (items.is_empty() && !parsed.query.is_empty())
+            .then(|| format!("No app matches {}", parsed.query));
+        return SuggestResponse {
+            mode: "search".into(),
+            preselect: (!items.is_empty() && !parsed.query.is_empty()).then_some(0),
+            items,
+            notice,
+        };
     }
     if let Some(trigger) = &parsed.bang
         && destination::exact_trigger(destinations, trigger).is_none()
@@ -47,12 +76,41 @@ pub async fn gather(
             mode: "search".into(),
             items: history_items(history, &parsed.query, destinations, now, 8),
             notice: Some(format!("No destination !{trigger}")),
+            preselect: None,
         };
     }
 
+    // A bang or a URL names where the text goes, so apps stay out of the way.
+    let offer_apps = parsed.bang.is_none() && !query::looks_like_url(&parsed.query);
+    let preferred = offer_apps
+        .then(|| catalog.preferred(&parsed.query))
+        .flatten();
+    let other_apps: Vec<Suggestion> = if offer_apps {
+        catalog
+            .ranked(&parsed.query, 4)
+            .into_iter()
+            .filter(|(app, found)| {
+                *found >= apps::Strength::Substring
+                    && preferred.is_none_or(|chosen| chosen.id != app.id)
+            })
+            .take(2)
+            .map(|(app, _)| app_item(app))
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    let mut items = Vec::new();
+    if let Some(app) = preferred {
+        items.push(app_item(app));
+    }
+    items.extend(history_items(history, &parsed.query, destinations, now, 4));
+    items.extend(other_apps);
+    items.truncate(8);
+
     let destination = resolve_destination(&parsed, armed_id, destinations);
-    let mut items = history_items(history, &parsed.query, destinations, now, 4);
-    if let Some(destination) = destination
+    if include_remote
+        && let Some(destination) = destination
         && !parsed.query.is_empty()
     {
         let remote = fetch_remote(destination.suggest, &parsed.query).await;
@@ -63,6 +121,18 @@ pub async fn gather(
         mode: "search".into(),
         items,
         notice: None,
+        preselect: preferred.map(|_| 0),
+    }
+}
+
+fn app_item(app: &App) -> Suggestion {
+    Suggestion {
+        label: app.name.clone(),
+        query: String::new(),
+        destination_id: String::new(),
+        kind: "app".into(),
+        hint: "App".into(),
+        app_id: Some(app.id.clone()),
     }
 }
 
@@ -77,6 +147,7 @@ fn palette(destinations: &[Destination], prefix: &str) -> SuggestResponse {
             query: String::new(),
             destination_id: destination.id.clone(),
             kind: "destination".into(),
+            app_id: None,
             hint: destination
                 .triggers
                 .iter()
@@ -89,6 +160,7 @@ fn palette(destinations: &[Destination], prefix: &str) -> SuggestResponse {
         mode: "destinations".into(),
         items,
         notice,
+        preselect: None,
     }
 }
 
@@ -97,6 +169,7 @@ fn recent(history: &[HistoryEntry], destinations: &[Destination], now: i64) -> S
         mode: "recent".into(),
         items: history_items(history, "", destinations, now, 8),
         notice: None,
+        preselect: None,
     }
 }
 
@@ -115,6 +188,7 @@ fn history_items(
             destination_id: entry.destination_id.clone(),
             kind: "history".into(),
             hint: destination_name(destinations, &entry.destination_id),
+            app_id: None,
         })
         .collect()
 }
@@ -131,6 +205,7 @@ fn merge_remote(items: &mut Vec<Suggestion>, remote: Vec<String>, destination: &
             destination_id: destination.id.clone(),
             kind: "remote".into(),
             hint: destination.name.clone(),
+            app_id: None,
         });
     }
 }
