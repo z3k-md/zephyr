@@ -7,6 +7,7 @@
     formatShortcut,
     getSnapshot,
     hideBar,
+    launchApp,
     openSettings,
     setBarHeight,
     suggest,
@@ -24,7 +25,9 @@
   const selected = ref(-1);
   const loadError = ref<string | null>(null);
 
-  let requestSeq = 0;
+  let generation = 0;
+  let remoteApplied = false;
+  let userMoved = false;
   let suggestTimer = 0;
   let unlistens: UnlistenFn[] = [];
   let observer: ResizeObserver | null = null;
@@ -38,6 +41,12 @@
   const armed = computed(() =>
     snapshot.value?.destinations.find((destination) => destination.id === armedId.value)
   );
+
+  const enterLabel = computed(() => {
+    const item = selected.value >= 0 ? items.value[selected.value] : undefined;
+    if (item?.kind === 'app') return `Open ${item.label}`;
+    return armed.value?.name ?? 'search';
+  });
 
   const shortcutLabel = computed(() =>
     snapshot.value
@@ -97,12 +106,14 @@
 
   watch(query, () => {
     selected.value = -1;
+    userMoved = false;
     notice.value = null;
     scheduleSuggest();
   });
 
   watch(armedId, () => {
     selected.value = -1;
+    userMoved = false;
     scheduleSuggest();
   });
 
@@ -125,25 +136,31 @@
     void setBarHeight(height).catch(() => undefined);
   }
 
+  // Local results (apps, history) land on the keystroke; remote suggestions follow after a
+  // pause and only append, so the row Enter would take never shifts under the user.
   function scheduleSuggest() {
     window.clearTimeout(suggestTimer);
+    const current = ++generation;
+    remoteApplied = false;
+    void loadSuggestions(current, false);
     suggestTimer = window.setTimeout(() => {
-      void loadSuggestions();
+      void loadSuggestions(current, true);
     }, 120);
   }
 
-  async function loadSuggestions() {
-    const seq = ++requestSeq;
+  async function loadSuggestions(current: number, includeRemote: boolean) {
     try {
-      const response = await suggest(query.value, armedId.value);
-      if (seq !== requestSeq) return;
+      const response = await suggest(query.value, armedId.value, includeRemote);
+      if (current !== generation || (!includeRemote && remoteApplied)) return;
+      if (includeRemote) remoteApplied = true;
       items.value = response.items;
       mode.value = response.mode;
       notice.value = response.notice;
+      if (!userMoved) selected.value = response.preselect ?? -1;
       await nextTick();
       syncHeight();
     } catch (error) {
-      if (seq !== requestSeq) return;
+      if (current !== generation) return;
       notice.value = errorMessage(error);
     }
   }
@@ -204,8 +221,15 @@
     armedId.value = destinations[next].id;
   }
 
+  function hover(index: number) {
+    if (selected.value === index) return;
+    userMoved = true;
+    selected.value = index;
+  }
+
   function moveSelection(delta: number) {
     if (items.value.length === 0) return;
+    userMoved = true;
     if (selected.value < 0) {
       selected.value = delta > 0 ? 0 : items.value.length - 1;
       return;
@@ -237,6 +261,10 @@
 
     const item = selected.value >= 0 ? items.value[selected.value] : undefined;
     if (item) {
+      if (item.kind === 'app' && item.appId) {
+        await launch(item.appId);
+        return;
+      }
       if (item.kind === 'destination') {
         armedId.value = item.destinationId;
         query.value = '';
@@ -250,6 +278,10 @@
   }
 
   function choose(item: Suggestion) {
+    if (item.kind === 'app' && item.appId) {
+      void launch(item.appId);
+      return;
+    }
     if (item.kind === 'destination') {
       armedId.value = item.destinationId;
       query.value = '';
@@ -259,10 +291,21 @@
     void run(item.query, item.destinationId, false);
   }
 
+  async function launch(appId: string) {
+    try {
+      await launchApp(appId);
+      query.value = '';
+      selected.value = -1;
+      notice.value = null;
+    } catch (error) {
+      notice.value = errorMessage(error);
+    }
+  }
+
   async function run(text: string, destinationId: string, interpret: boolean) {
     try {
       const outcome = await dispatch(text, destinationId, interpret);
-      if (outcome.kind === 'opened') {
+      if (outcome.kind === 'opened' || outcome.kind === 'launched') {
         query.value = '';
         selected.value = -1;
         notice.value = null;
@@ -302,7 +345,7 @@
         aria-controls="results"
         :aria-expanded="items.length > 0"
         :aria-activedescendant="selected >= 0 ? `result-${selected}` : undefined"
-        placeholder="Search, or ! for a destination"
+        placeholder="Search, open an app, or ! for a destination"
         spellcheck="false"
         autocomplete="off"
         autocapitalize="off"
@@ -340,7 +383,7 @@
         :class="{ selected: index === selected }"
         @mousedown.prevent
         @click="choose(item)"
-        @mousemove="selected = index"
+        @mousemove="hover(index)"
       >
         <span class="label">{{ item.label }}</span>
         <span class="hint">{{ item.hint }}</span>
@@ -352,7 +395,7 @@
     </p>
 
     <footer class="footer">
-      <span>Enter {{ armed?.name ?? 'search' }}</span>
+      <span>Enter {{ enterLabel }}</span>
       <span>{{ shortcutLabel }}</span>
     </footer>
   </div>
