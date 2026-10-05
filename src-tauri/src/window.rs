@@ -82,8 +82,7 @@ pub fn open_settings(app: &AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("settings") {
         let _ = window.show();
         let _ = window.unminimize();
-        force_foreground(&window);
-        let _ = window.set_focus();
+        focus_on_main_thread(app, window);
         return Ok(());
     }
 
@@ -100,9 +99,20 @@ pub fn open_settings(app: &AppHandle) -> Result<(), String> {
     .focused(true)
     .build()
     .map_err(|err| err.to_string())?;
-    force_foreground(&window);
-    let _ = window.set_focus();
+    focus_on_main_thread(app, window);
     Ok(())
+}
+
+// open_settings can be called from an async command's worker thread; the Win32 foreground
+// dance attaches the calling thread's input queue, so it has to run on the UI thread.
+fn focus_on_main_thread(app: &AppHandle, window: tauri::WebviewWindow) {
+    let result = app.run_on_main_thread(move || {
+        force_foreground(&window);
+        let _ = window.set_focus();
+    });
+    if let Err(err) = result {
+        log::error!("couldn't focus settings: {err}");
+    }
 }
 
 fn place_bar(window: &tauri::WebviewWindow) -> Result<(), String> {
