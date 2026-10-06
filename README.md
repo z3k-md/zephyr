@@ -10,6 +10,12 @@ Typing the start of an app's name (`chr`, `excel`, or initials like `vsc`) selec
 
 **Ask AI** answers in the bar. Press Tab to arm it, or type `!ai` before a question; the answer streams in and Enter copies it. Pick the provider in Settings > AI: a local Ollama or LM Studio server (found automatically), or your own Anthropic, OpenAI, OpenRouter or custom key. Keys are kept in the system keychain, and requests go straight from Zephyr to the provider.
 
+Math, unit conversions and time zones answer in the top row as you type (`12 * 7`, `5 km to miles`, `time in tokyo`, `3pm pst to cet`); Enter copies the answer. Ctrl+K (⌘K on a Mac) lists more actions for the selected row: send the text to another destination, copy the link, text or path, or show a file in its folder.
+
+A destination's template can be a URL, an app link such as `obsidian://`, or a file path. Besides `{query}` it can use `{clipboard}`, `{date offset=+1d format=%Y-%m-%d}` and `{argument name="lang" default="en"}`, with pipes like `{query | trim | lowercase}` or `| raw` to skip URL encoding. A template without the query opens as soon as you type its bang. Any destination can show autocomplete from a URL that returns JSON: give the URL with `{query}` and the path to the suggestions (`1` for OpenSearch-style lists, or something like `items.*.title`). Settings > Destinations copies all destinations as JSON and imports them back.
+
+Other apps and scripts can drive Zephyr with links: `zephyr://open?q=text` shows the bar with text typed in, `zephyr://dispatch?d=pubmed&q=crispr` sends it to a destination, and `zephyr://ask?q=...` asks AI. On macOS the link scheme comes from the installed app.
+
 `!f` (or `!file`, `!files`) searches file and folder names under your home folder (`!f budget`, `!f taxes 2025 return`). Enter opens the top match with its default app, `Ctrl+Enter` shows it in Explorer or Finder, and `Ctrl+Shift+C` copies its path. Hidden folders, `.gitignore`d files, `node_modules` and build caches are skipped; Settings > Files picks other folders or leaves some out. Without `!f`, only files you've opened from Zephyr before can appear, sharing the same two rows as settings.
 
 ## Install

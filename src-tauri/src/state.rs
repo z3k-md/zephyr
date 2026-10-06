@@ -160,6 +160,8 @@ impl Persisted {
             existing.triggers = incoming.triggers;
             existing.url_template = incoming.url_template;
             existing.suggest = incoming.suggest;
+            existing.suggest_url = incoming.suggest_url.trim().to_string();
+            existing.suggest_path = incoming.suggest_path.trim().to_string();
             existing.pinned = incoming.pinned;
             existing.disabled = incoming.disabled;
             existing.builtin = builtin;
@@ -172,11 +174,67 @@ impl Persisted {
             }
             incoming.builtin = false;
             incoming.kind = destination::DestinationKind::Web;
+            incoming.suggest_url = incoming.suggest_url.trim().to_string();
+            incoming.suggest_path = incoming.suggest_path.trim().to_string();
             next.destinations.push(incoming);
         }
         next.ensure_invariants()?;
         *self = next;
         Ok(())
+    }
+
+    /// Adds or updates every destination in an exported list, all or nothing. Entries whose id
+    /// matches update that destination; the rest are added as custom ones.
+    pub fn import(&mut self, incoming: Vec<ImportedDestination>) -> Result<usize, String> {
+        if incoming.is_empty() {
+            return Err("There are no destinations in that JSON".into());
+        }
+        let mut next = self.clone();
+        let mut count = 0;
+        for (index, item) in incoming.into_iter().enumerate() {
+            let existing = item
+                .id
+                .as_deref()
+                .and_then(|id| {
+                    next.destinations
+                        .iter()
+                        .find(|destination| destination.id == id)
+                })
+                .cloned();
+            let destination = match existing {
+                Some(existing) if existing.is_ai() => continue,
+                Some(existing) => Destination {
+                    name: item.name,
+                    triggers: item.triggers,
+                    url_template: item.url_template,
+                    suggest: item.suggest,
+                    suggest_url: item.suggest_url,
+                    suggest_path: item.suggest_path,
+                    pinned: item.pinned.unwrap_or(existing.pinned),
+                    disabled: item.disabled.unwrap_or(existing.disabled),
+                    ..existing
+                },
+                None => Destination {
+                    id: format!("custom-import-{}-{index}", now_millis()),
+                    name: item.name,
+                    triggers: item.triggers,
+                    url_template: item.url_template,
+                    suggest: item.suggest,
+                    suggest_url: item.suggest_url,
+                    suggest_path: item.suggest_path,
+                    pinned: item.pinned.unwrap_or(true),
+                    builtin: false,
+                    disabled: item.disabled.unwrap_or(false),
+                    kind: destination::DestinationKind::Web,
+                },
+            };
+            let name = destination.name.clone();
+            next.upsert(destination)
+                .map_err(|err| format!("{name}: {err}"))?;
+            count += 1;
+        }
+        *self = next;
+        Ok(count)
     }
 
     pub fn remove(&mut self, id: &str) -> Result<(), String> {
@@ -251,7 +309,15 @@ impl Persisted {
                 return Err(format!("{} needs a trigger", destination.name));
             }
             if !destination.is_ai() {
-                destination::build_url(&destination.url_template, "probe")?;
+                crate::template::validate(&destination.url_template)
+                    .map_err(|err| format!("{}: {err}", destination.name))?;
+            }
+            if destination.suggest == destination::SuggestKind::Custom {
+                destination::validate_suggest_source(
+                    &destination.suggest_url,
+                    &destination.suggest_path,
+                )
+                .map_err(|err| format!("{}: {err}", destination.name))?;
             }
             if destination.disabled {
                 continue;
@@ -313,6 +379,38 @@ impl Persisted {
             }
         }
     }
+}
+
+/// One destination as exported; only the name, triggers and template are required.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportedDestination {
+    #[serde(default)]
+    pub id: Option<String>,
+    pub name: String,
+    pub triggers: Vec<String>,
+    pub url_template: String,
+    #[serde(default = "no_suggestions")]
+    pub suggest: destination::SuggestKind,
+    #[serde(default)]
+    pub suggest_url: String,
+    #[serde(default)]
+    pub suggest_path: String,
+    #[serde(default)]
+    pub pinned: Option<bool>,
+    #[serde(default)]
+    pub disabled: Option<bool>,
+}
+
+fn no_suggestions() -> destination::SuggestKind {
+    destination::SuggestKind::None
+}
+
+fn now_millis() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0)
 }
 
 fn normalize_triggers(triggers: &[String]) -> Result<Vec<String>, String> {
@@ -394,6 +492,8 @@ mod tests {
             triggers: vec![trigger.into()],
             url_template: "https://example.com/?q={query}".into(),
             suggest: SuggestKind::None,
+            suggest_url: String::new(),
+            suggest_path: String::new(),
             pinned: true,
             builtin: false,
             disabled: false,
@@ -493,5 +593,37 @@ mod tests {
                 .iter()
                 .any(|destination| destination.id == "youtube")
         );
+    }
+
+    #[test]
+    fn imports_new_and_existing_destinations_all_or_nothing() {
+        let mut state = Persisted::fresh();
+        let json = r#"[
+            {"id": "google", "name": "Google", "triggers": ["g"], "urlTemplate": "https://www.google.com/search?q={query}", "suggest": "google", "pinned": false},
+            {"name": "Arxiv", "triggers": ["arxiv"], "urlTemplate": "https://arxiv.org/a/{query}"}
+        ]"#;
+        let incoming: Vec<ImportedDestination> = serde_json::from_str(json).unwrap();
+        assert_eq!(state.import(incoming).unwrap(), 2);
+        let google = state
+            .destinations
+            .iter()
+            .find(|d| d.id == "google")
+            .unwrap();
+        assert_eq!(google.triggers, vec!["g"]);
+        assert!(!google.pinned && google.builtin);
+        assert!(
+            state
+                .destinations
+                .iter()
+                .any(|d| d.name == "Arxiv" && d.id.starts_with("custom-"))
+        );
+
+        let clash: Vec<ImportedDestination> = serde_json::from_str(
+            r#"[{"name": "Again", "triggers": ["arxiv"], "urlTemplate": "https://x.dev/{query}"}]"#,
+        )
+        .unwrap();
+        let before = state.destinations.len();
+        assert!(state.import(clash).is_err());
+        assert_eq!(state.destinations.len(), before);
     }
 }

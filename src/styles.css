@@ -232,6 +232,12 @@ section > button {
   background: var(--select);
 }
 
+.item.answer .label {
+  font-size: 17px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
 .label {
   min-width: 0;
   overflow: hidden;
@@ -386,6 +392,15 @@ section > button {
   padding: 18px 20px;
 }
 
+.lede code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--chip);
+  color: var(--fg);
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
 .settings section > .lede {
   margin-bottom: 8px;
 }
@@ -432,6 +447,23 @@ section > button {
   background: rgba(255, 255, 255, 0.03);
   font-size: 13px;
   text-align: left;
+}
+
+.import-box {
+  width: 100%;
+  min-height: 120px;
+  padding: 8px 10px;
+  border: 1px solid var(--stroke-strong);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--fg);
+  font:
+    12px/1.5 ui-monospace,
+    'SF Mono',
+    Menlo,
+    Consolas,
+    monospace;
+  resize: vertical;
 }
 
 .field input:focus,

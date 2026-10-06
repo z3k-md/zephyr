@@ -13,6 +13,7 @@
     openFile,
     openSetting,
     openSettings,
+    resolveUrl,
     revealFile,
     setBarHeight,
     suggest,
@@ -38,6 +39,15 @@
     error: string | null;
     source: string | null;
   }
+
+  interface Action {
+    label: string;
+    hint?: string;
+    run: () => unknown;
+  }
+
+  const actionsOpen = ref(false);
+  const actionIndex = ref(0);
 
   const answer = ref<Answer | null>(null);
   const answerEl = ref<HTMLElement | null>(null);
@@ -72,6 +82,7 @@
   const enterLabel = computed(() => {
     if (answerReady.value) return 'copy answer';
     const item = selectedItem.value;
+    if (item?.kind === 'answer') return `copy ${item.label}`;
     if (item?.kind === 'app' || item?.kind === 'setting' || item?.kind === 'file') {
       return `Open ${item.label}`;
     }
@@ -79,6 +90,55 @@
   });
 
   const isMac = navigator.userAgent.includes('Mac');
+  const actionKey = isMac ? '⌘K' : 'Ctrl+K';
+
+  // Ctrl+K (⌘K on a Mac) lists what else the selected row, or the typed text, can do.
+  const actions = computed<Action[]>(() => {
+    const item = selectedItem.value;
+    const list: Action[] = [];
+    if (answerReady.value) {
+      list.push({ label: 'Copy answer', run: () => copyAnswer() });
+    }
+    if (item?.kind === 'answer') {
+      list.push({ label: 'Copy answer', run: () => copyText(item.label) });
+    } else if (item?.kind === 'app' && item.appId) {
+      const appId = item.appId;
+      list.push({ label: `Open ${item.label}`, run: () => launch(appId) });
+      list.push({ label: 'Copy name', run: () => copyText(item.label) });
+    } else if (item?.kind === 'file' && item.path) {
+      const path = item.path;
+      list.push({ label: `Open ${item.label}`, run: () => openPath(path) });
+      list.push({ label: `Show in ${isMac ? 'Finder' : 'Explorer'}`, run: () => reveal(path) });
+      list.push({ label: 'Copy path', run: () => copyText(path) });
+    } else if (item?.kind === 'setting' && item.settingId) {
+      const settingId = item.settingId;
+      list.push({ label: `Open ${item.label}`, run: () => openPage(settingId) });
+    } else if (item?.kind === 'destination') {
+      const destinationId = item.destinationId;
+      list.push({ label: `Use ${item.label}`, run: () => armById(destinationId) });
+      list.push({ label: 'Edit destinations', run: () => openPage('zephyr.destinations') });
+    } else {
+      const text = item ? item.query : query.value.trim();
+      const target = item ? item.destinationId : armedId.value;
+      if (!text) return list;
+      for (const destination of sendTargets(target)) {
+        list.push({
+          label:
+            destination.id === target
+              ? `Search ${destination.name}`
+              : `Send to ${destination.name}`,
+          hint: destination.triggers[0] ? `!${destination.triggers[0]}` : undefined,
+          run: () => run(text, destination.id, false),
+        });
+      }
+      const current = snapshot.value?.destinations.find((destination) => destination.id === target);
+      if (current && current.kind !== 'ai') {
+        list.push({ label: 'Copy link', run: () => copyLink(text, target) });
+      }
+      list.push({ label: 'Copy text', run: () => copyText(text) });
+    }
+    return list;
+  });
 
   const shortcutLabel = computed(() =>
     snapshot.value
@@ -99,6 +159,28 @@
         resetForSummon();
         void focusInput();
       })
+    );
+    // A zephyr:// link: text to type in, and optionally where to send it right away.
+    unlistens.push(
+      await listen<{ query: string; destination: string | null; run: boolean }>(
+        'bar-input',
+        (event) => {
+          const { query: text, destination, run: send } = event.payload;
+          const target = snapshot.value?.destinations.find(
+            (item) =>
+              !item.disabled &&
+              (item.id === destination || item.triggers.includes(destination ?? ''))
+          );
+          if (target) armedId.value = target.id;
+          query.value = text;
+          if (send && text) {
+            void run(text, target?.id ?? armedId.value, !target);
+          } else if (destination && !target) {
+            notice.value = `No destination ${destination}`;
+          }
+          void focusInput();
+        }
+      )
     );
     unlistens.push(
       await listen('bar-focus', () => {
@@ -136,7 +218,12 @@
     for (const unlisten of unlistens) unlisten();
   });
 
+  watch(selected, () => {
+    actionsOpen.value = false;
+  });
+
   watch(query, () => {
+    actionsOpen.value = false;
     if (answer.value && query.value !== answer.value.input) clearAnswer();
     selected.value = -1;
     userMoved = false;
@@ -202,6 +289,40 @@
   function onKey(event: KeyboardEvent) {
     if (event.isComposing) return;
 
+    const modifier = event.ctrlKey || event.metaKey;
+    if (modifier && !event.altKey && !event.shiftKey && event.code === 'KeyK') {
+      event.preventDefault();
+      if (actionsOpen.value) {
+        actionsOpen.value = false;
+      } else if (actions.value.length > 0) {
+        actionIndex.value = 0;
+        actionsOpen.value = true;
+      }
+      return;
+    }
+
+    if (actionsOpen.value) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        actionsOpen.value = false;
+        return;
+      }
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault();
+        const count = actions.value.length;
+        actionIndex.value =
+          (actionIndex.value + (event.key === 'ArrowDown' ? 1 : -1) + count) % count;
+        return;
+      }
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        if (!event.repeat) runAction(actions.value[actionIndex.value]);
+        return;
+      }
+      // Anything else goes back to typing.
+      actionsOpen.value = false;
+    }
+
     if (event.key === 'Escape') {
       event.preventDefault();
       void hideBar();
@@ -238,7 +359,6 @@
 
     // File actions: Ctrl+Enter shows the file in its folder, Ctrl+Shift+C copies its path.
     const file = selectedItem.value?.kind === 'file' ? selectedItem.value.path : undefined;
-    const modifier = event.ctrlKey || event.metaKey;
     if (file && modifier && !event.altKey && event.key === 'Enter') {
       event.preventDefault();
       if (event.repeat) return;
@@ -259,6 +379,32 @@
         return;
       }
       void accept();
+    }
+  }
+
+  function runAction(action: Action | undefined) {
+    if (!action) return;
+    actionsOpen.value = false;
+    void action.run();
+  }
+
+  function sendTargets(firstId: string): Destination[] {
+    const all = (snapshot.value?.destinations ?? []).filter((destination) => !destination.disabled);
+    const first = all.filter((destination) => destination.id === firstId);
+    return [...first, ...all.filter((destination) => destination.id !== firstId)].slice(0, 9);
+  }
+
+  function armById(destinationId: string) {
+    armedId.value = destinationId;
+    query.value = '';
+    inputEl.value?.focus();
+  }
+
+  async function copyLink(text: string, destinationId: string) {
+    try {
+      await copyText(await resolveUrl(text, destinationId));
+    } catch (error) {
+      notice.value = errorMessage(error);
     }
   }
 
@@ -319,12 +465,16 @@
 
   async function copyAnswer() {
     const text = answer.value?.text.trim();
-    if (!text) return;
+    if (text) await copyText(text);
+  }
+
+  async function copyText(text: string) {
     try {
       await navigator.clipboard.writeText(text);
+      query.value = '';
       await hideBar();
     } catch {
-      notice.value = "Couldn't copy the answer";
+      notice.value = "Couldn't copy it";
     }
   }
 
@@ -380,6 +530,10 @@
 
     const item = selected.value >= 0 ? items.value[selected.value] : undefined;
     if (item) {
+      if (item.kind === 'answer') {
+        await copyText(item.label);
+        return;
+      }
       if (item.kind === 'app' && item.appId) {
         await launch(item.appId);
         return;
@@ -405,6 +559,10 @@
   }
 
   function choose(item: Suggestion) {
+    if (item.kind === 'answer') {
+      void copyText(item.label);
+      return;
+    }
     if (item.kind === 'app' && item.appId) {
       void launch(item.appId);
       return;
@@ -558,7 +716,24 @@
 
     <p v-if="loadError || notice" class="notice">{{ loadError || notice }}</p>
 
-    <section v-if="answer" class="answer" aria-live="polite">
+    <ul v-if="actionsOpen" class="results actions" role="listbox" aria-label="Actions">
+      <li
+        v-for="(action, index) in actions"
+        :key="action.label"
+        role="option"
+        :aria-selected="index === actionIndex"
+        class="item"
+        :class="{ selected: index === actionIndex }"
+        @mousedown.prevent
+        @click="runAction(action)"
+        @mousemove="actionIndex = index"
+      >
+        <span class="label">{{ action.label }}</span>
+        <span v-if="action.hint" class="hint">{{ action.hint }}</span>
+      </li>
+    </ul>
+
+    <section v-else-if="answer" class="answer" aria-live="polite">
       <div ref="answerEl" class="answer-body">
         <p v-if="answer.status === 'waiting'" class="answer-wait">Thinking…</p>
         <!-- prettier-ignore -->
@@ -576,7 +751,7 @@
         role="option"
         :aria-selected="index === selected"
         class="item"
-        :class="{ selected: index === selected }"
+        :class="{ selected: index === selected, answer: item.kind === 'answer' }"
         @mousedown.prevent
         @click="choose(item)"
         @mousemove="hover(index)"
@@ -596,6 +771,8 @@
         <template v-if="selectedItem?.kind === 'file'">
           · Ctrl+Enter show in {{ isMac ? 'Finder' : 'Explorer' }} · Ctrl+Shift+C copy path
         </template>
+        <template v-if="actions.length && !actionsOpen"> · {{ actionKey }} actions</template>
+        <template v-if="actionsOpen"> · Esc back</template>
       </span>
       <span>{{ shortcutLabel }}</span>
     </footer>

@@ -8,6 +8,13 @@ pub struct Destination {
     pub triggers: Vec<String>,
     pub url_template: String,
     pub suggest: SuggestKind,
+    /// For `SuggestKind::Custom`: a URL with `{query}` that returns JSON suggestions.
+    #[serde(default)]
+    pub suggest_url: String,
+    /// For `SuggestKind::Custom`: where the suggestions are in that JSON, e.g. `1` or
+    /// `items.*.title`.
+    #[serde(default)]
+    pub suggest_path: String,
     pub pinned: bool,
     pub builtin: bool,
     pub disabled: bool,
@@ -38,6 +45,47 @@ pub enum SuggestKind {
     Youtube,
     Wikipedia,
     Pubmed,
+    Custom,
+}
+
+impl Destination {
+    /// The suggestion URL template and JSON path this destination uses, if any.
+    pub fn suggest_source(&self) -> Option<(&str, &str)> {
+        Some(match self.suggest {
+            SuggestKind::None => return None,
+            SuggestKind::Google => (
+                "https://suggestqueries.google.com/complete/search?client=firefox&q={query}",
+                "1",
+            ),
+            SuggestKind::Youtube => (
+                "https://suggestqueries.google.com/complete/search?client=firefox&ds=yt&q={query}",
+                "1",
+            ),
+            SuggestKind::Wikipedia => (
+                "https://en.wikipedia.org/w/api.php?action=opensearch&search={query}&limit=6&namespace=0&format=json",
+                "1",
+            ),
+            SuggestKind::Pubmed => (
+                "https://pubmed.ncbi.nlm.nih.gov/suggestions/?term={query}",
+                "suggestions",
+            ),
+            SuggestKind::Custom => (self.suggest_url.as_str(), self.suggest_path.as_str()),
+        })
+    }
+}
+
+/// Checks a custom suggestion source before it is saved.
+pub fn validate_suggest_source(url: &str, path: &str) -> Result<(), String> {
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return Err("The suggestion URL must start with https://".into());
+    }
+    if !url.contains("{query}") {
+        return Err("The suggestion URL must include {query}".into());
+    }
+    if path.split('.').any(str::is_empty) && !path.is_empty() {
+        return Err("The JSON path can't have empty parts, e.g. items.*.title".into());
+    }
+    Ok(())
 }
 
 pub fn builtins() -> Vec<Destination> {
@@ -121,6 +169,8 @@ fn dest(
             .collect(),
         url_template: url_template.to_string(),
         suggest,
+        suggest_url: String::new(),
+        suggest_path: String::new(),
         pinned: true,
         builtin: true,
         disabled: false,
@@ -128,15 +178,21 @@ fn dest(
     }
 }
 
+/// Fills a destination's template for `query`, reading the clipboard only if it asks for it.
 pub fn build_url(template: &str, query: &str) -> Result<String, String> {
-    if !(template.starts_with("https://") || template.starts_with("http://")) {
-        return Err("URL template must start with http:// or https://".into());
-    }
-    if !template.contains("{query}") {
-        return Err("URL template must include {query}".into());
-    }
-    let encoded = urlencoding::encode(query);
-    Ok(template.replace("{query}", encoded.as_ref()))
+    let clipboard = || {
+        arboard::Clipboard::new()
+            .and_then(|mut clipboard| clipboard.get_text())
+            .ok()
+    };
+    crate::template::render(
+        template,
+        &crate::template::Context {
+            query,
+            now: chrono::Local::now(),
+            clipboard: &clipboard,
+        },
+    )
 }
 
 pub fn normalize_trigger(raw: &str) -> Option<String> {
@@ -213,9 +269,9 @@ mod tests {
     }
 
     #[test]
-    fn rejects_templates_that_cannot_carry_a_query() {
-        assert!(build_url("https://example.com", "q").is_err());
-        assert!(build_url("ftp://example.com/?q={query}", "q").is_err());
+    fn rejects_templates_without_a_target() {
+        assert!(build_url("example.com/?q={query}", "q").is_err());
+        assert!(build_url("https://example.com/?q={query", "q").is_err());
     }
 
     #[test]

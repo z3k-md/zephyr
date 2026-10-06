@@ -1,6 +1,8 @@
 mod ai;
+mod answer;
 mod apps;
 mod commands;
+mod deeplink;
 mod destination;
 mod files;
 mod history;
@@ -10,6 +12,7 @@ mod settings;
 mod shortcut;
 mod state;
 mod suggest;
+mod template;
 mod tray;
 mod updater;
 mod window;
@@ -46,6 +49,7 @@ pub fn run() {
             None,
         ))
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             // A tray utility should not put an icon in the Dock or take over the menu bar.
@@ -91,6 +95,8 @@ pub fn run() {
                 let _ = main_window.hide();
             }
 
+            register_links(app);
+
             log::info!("Zephyr is running");
 
             apps::AppIndex::refresh_if_stale(apps::index());
@@ -105,6 +111,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_snapshot,
             commands::ai_ask,
+            commands::resolve_url,
+            commands::export_destinations,
+            commands::import_destinations,
             commands::ai_cancel,
             commands::save_ai_settings,
             commands::ai_presets,
@@ -134,4 +143,26 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running Zephyr");
+}
+
+/// Routes `zephyr://` links to the bar, including the one that launched Zephyr.
+fn register_links(app: &tauri::App) {
+    use tauri_plugin_deep_link::DeepLinkExt;
+
+    // macOS reads the scheme from the installed bundle; Windows and Linux register at runtime.
+    #[cfg(any(windows, target_os = "linux"))]
+    if let Err(err) = app.deep_link().register_all() {
+        log::error!("couldn't register zephyr:// links: {err}");
+    }
+    let handle = app.handle().clone();
+    app.deep_link().on_open_url(move |event| {
+        for url in event.urls() {
+            deeplink::handle(&handle, &url);
+        }
+    });
+    if let Ok(Some(urls)) = app.deep_link().get_current() {
+        for url in urls {
+            deeplink::handle(app.handle(), &url);
+        }
+    }
 }

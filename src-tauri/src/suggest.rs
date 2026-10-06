@@ -4,8 +4,9 @@ use std::time::Duration;
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::answer;
 use crate::apps::{self, App, Catalog};
-use crate::destination::{self, Destination, SuggestKind};
+use crate::destination::{self, Destination};
 use crate::files::{self, Hit};
 use crate::history::{self, HistoryEntry};
 use crate::query::{self, Parsed};
@@ -165,9 +166,27 @@ pub async fn gather(
         Vec::new()
     };
 
+    // A calculation or time question answers in the top row, unless an app already claims
+    // Enter for this text.
+    let answer = (offer_apps && preferred.is_none())
+        .then(|| answer::inline(&parsed.query, chrono::Utc::now()))
+        .flatten();
+
     let mut items = Vec::new();
     if let Some(app) = preferred {
         items.push(app_item(app));
+    }
+    if let Some(answer) = &answer {
+        items.push(Suggestion {
+            label: answer.value.clone(),
+            query: answer.value.clone(),
+            destination_id: String::new(),
+            kind: "answer".into(),
+            hint: answer.hint.into(),
+            app_id: None,
+            setting_id: None,
+            path: None,
+        });
     }
     items.extend(history_items(history, &parsed.query, destinations, now, 4));
     items.extend(other_apps);
@@ -179,7 +198,7 @@ pub async fn gather(
         && let Some(destination) = destination
         && !parsed.query.is_empty()
     {
-        let remote = fetch_remote(destination.suggest, &parsed.query).await;
+        let remote = fetch_remote(destination, &parsed.query).await;
         merge_remote(&mut items, remote, destination);
     }
     items.truncate(8);
@@ -187,7 +206,7 @@ pub async fn gather(
         mode: "search".into(),
         items,
         notice: None,
-        preselect: preferred.map(|_| 0),
+        preselect: (preferred.is_some() || answer.is_some()).then_some(0),
     }
 }
 
@@ -341,10 +360,11 @@ fn destination_name(destinations: &[Destination], id: &str) -> String {
         .unwrap_or_else(|| id.to_string())
 }
 
-async fn fetch_remote(kind: SuggestKind, query: &str) -> Vec<String> {
-    let Some(url) = suggest_url(kind, query) else {
+async fn fetch_remote(destination: &Destination, query: &str) -> Vec<String> {
+    let Some((template, path)) = destination.suggest_source() else {
         return Vec::new();
     };
+    let url = template.replace("{query}", &urlencoding::encode(query));
     let Some(client) = http_client() else {
         return Vec::new();
     };
@@ -366,32 +386,40 @@ async fn fetch_remote(kind: SuggestKind, query: &str) -> Vec<String> {
             return Vec::new();
         }
     };
-    match kind {
-        SuggestKind::Google | SuggestKind::Youtube => parse_google(&body, query),
-        SuggestKind::Wikipedia => parse_wikipedia(&body, query),
-        SuggestKind::Pubmed => parse_pubmed(&body, query),
-        SuggestKind::None => Vec::new(),
-    }
+    let Ok(value) = serde_json::from_str::<Value>(&body) else {
+        return Vec::new();
+    };
+    string_list(Some(&Value::Array(select(&value, path))), query)
 }
 
-fn suggest_url(kind: SuggestKind, query: &str) -> Option<String> {
-    let encoded = urlencoding::encode(query);
-    let url = match kind {
-        SuggestKind::Google => {
-            format!("https://suggestqueries.google.com/complete/search?client=firefox&q={encoded}")
-        }
-        SuggestKind::Youtube => format!(
-            "https://suggestqueries.google.com/complete/search?client=firefox&ds=yt&q={encoded}"
-        ),
-        SuggestKind::Wikipedia => format!(
-            "https://en.wikipedia.org/w/api.php?action=opensearch&search={encoded}&limit=6&namespace=0&format=json"
-        ),
-        SuggestKind::Pubmed => {
-            format!("https://pubmed.ncbi.nlm.nih.gov/suggestions/?term={encoded}")
-        }
-        SuggestKind::None => return None,
-    };
-    Some(url)
+/// Follows a dotted JSON path. A number indexes an array, `*` fans out over one, and an
+/// empty path is the whole document; whatever is reached is flattened into strings.
+fn select(value: &Value, path: &str) -> Vec<Value> {
+    let mut current = vec![value.clone()];
+    for step in path.split('.').filter(|step| !step.is_empty()) {
+        current = current
+            .iter()
+            .flat_map(|value| match (step, value) {
+                ("*", Value::Array(items)) => items.clone(),
+                ("*", Value::Object(map)) => map.values().cloned().collect(),
+                (_, Value::Array(items)) => step
+                    .parse::<usize>()
+                    .ok()
+                    .and_then(|index| items.get(index).cloned())
+                    .into_iter()
+                    .collect(),
+                (_, Value::Object(map)) => map.get(step).cloned().into_iter().collect(),
+                _ => Vec::new(),
+            })
+            .collect();
+    }
+    current
+        .into_iter()
+        .flat_map(|value| match value {
+            Value::Array(items) => items,
+            other => vec![other],
+        })
+        .collect()
 }
 
 fn http_client() -> Option<&'static reqwest::Client> {
@@ -406,27 +434,6 @@ fn http_client() -> Option<&'static reqwest::Client> {
                 .ok()
         })
         .as_ref()
-}
-
-fn parse_google(body: &str, query: &str) -> Vec<String> {
-    let Ok(value) = serde_json::from_str::<Value>(body) else {
-        return Vec::new();
-    };
-    string_list(value.get(1), query)
-}
-
-fn parse_wikipedia(body: &str, query: &str) -> Vec<String> {
-    let Ok(value) = serde_json::from_str::<Value>(body) else {
-        return Vec::new();
-    };
-    string_list(value.get(1), query)
-}
-
-fn parse_pubmed(body: &str, query: &str) -> Vec<String> {
-    let Ok(value) = serde_json::from_str::<Value>(body) else {
-        return Vec::new();
-    };
-    string_list(value.get("suggestions"), query)
 }
 
 fn string_list(value: Option<&Value>, query: &str) -> Vec<String> {
@@ -580,15 +587,30 @@ mod tests {
         assert_eq!(none.notice.as_deref(), Some("No setting matches wallpaper"));
     }
 
+    fn pick(body: &str, path: &str, query: &str) -> Vec<String> {
+        let value: Value = serde_json::from_str(body).unwrap();
+        string_list(Some(&Value::Array(select(&value, path))), query)
+    }
+
     #[test]
     fn parses_live_suggestion_shapes() {
         let google = r#"["crispr",["crispr","crispr cas9"],[],{}]"#;
-        assert_eq!(parse_google(google, "crispr"), vec!["crispr cas9"]);
+        assert_eq!(pick(google, "1", "crispr"), vec!["crispr cas9"]);
 
         let wiki = r#"["crispr",["CRISPR","CRISPR gene editing"],[""],[""]]"#;
-        assert_eq!(parse_wikipedia(wiki, "crispr"), vec!["CRISPR gene editing"]);
+        assert_eq!(pick(wiki, "1", "crispr"), vec!["CRISPR gene editing"]);
 
         let pubmed = r#"{"code":0,"suggestions":["crispr","crispr cas9"]}"#;
-        assert_eq!(parse_pubmed(pubmed, "crispr"), vec!["crispr cas9"]);
+        assert_eq!(pick(pubmed, "suggestions", "crispr"), vec!["crispr cas9"]);
+    }
+
+    #[test]
+    fn follows_custom_json_paths() {
+        let body = r#"{"items":[{"title":"rust book"},{"title":"rust by example"},{"id":3}]}"#;
+        assert_eq!(
+            pick(body, "items.*.title", "rust"),
+            vec!["rust book", "rust by example"]
+        );
+        assert!(pick(body, "nope.*", "rust").is_empty());
     }
 }

@@ -2,7 +2,7 @@ use serde::Serialize;
 
 use crate::apps::{self, Catalog};
 use crate::destination::{self, Destination};
-use crate::{files, settings};
+use crate::{files, settings, template};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Parsed {
@@ -120,6 +120,12 @@ pub fn decide(
             return Decision::Empty;
         }
         return match destination::exact_trigger(destinations, &prefix) {
+            // A fixed link (no {query}) has nothing to wait for, so its bang opens it.
+            Some(destination)
+                if !destination.is_ai() && !template::uses_input(&destination.url_template) =>
+            {
+                open_search(destination, "")
+            }
             Some(destination) => Decision::Arm {
                 destination_id: destination.id.clone(),
             },
@@ -236,7 +242,8 @@ fn decide_explicit(input: &str, explicit_id: &str, destinations: &[Destination])
 }
 
 fn open_search(destination: &Destination, query: &str) -> Decision {
-    if query.is_empty() {
+    let fixed_link = !destination.is_ai() && !template::uses_input(&destination.url_template);
+    if query.is_empty() && !fixed_link {
         return Decision::Arm {
             destination_id: destination.id.clone(),
         };
