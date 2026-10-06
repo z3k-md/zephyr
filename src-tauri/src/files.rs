@@ -1211,7 +1211,7 @@ mod tests {
             "Documents/.hidden",
         ]
         .iter()
-        .map(|rel| dir.join(rel))
+        .map(|rel| dir.join(sep(rel)))
         .collect();
         assert!(index.apply(&changed));
         let found = rels(&index.contents.read().unwrap().entries);
