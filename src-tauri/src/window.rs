@@ -79,8 +79,12 @@ pub fn set_bar_height(app: &AppHandle, height: f64) -> Result<(), String> {
     Ok(())
 }
 
-pub fn open_settings(app: &AppHandle) -> Result<(), String> {
+/// Opens or focuses the settings window, scrolled to `section` when one is given.
+pub fn open_settings(app: &AppHandle, section: Option<&str>) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("settings") {
+        if let Some(section) = section {
+            let _ = window.emit("settings-section", section);
+        }
         let _ = window.show();
         let _ = window.unminimize();
         focus_on_main_thread(app, window);
@@ -90,7 +94,10 @@ pub fn open_settings(app: &AppHandle) -> Result<(), String> {
     let window = WebviewWindowBuilder::new(
         app,
         "settings",
-        WebviewUrl::App("index.html?view=settings".into()),
+        WebviewUrl::App(match section {
+            Some(section) => format!("index.html?view=settings&section={section}").into(),
+            None => "index.html?view=settings".into(),
+        }),
     )
     .title("Zephyr Settings")
     .inner_size(760.0, 720.0)

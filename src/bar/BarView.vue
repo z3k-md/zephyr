@@ -8,6 +8,7 @@
     getSnapshot,
     hideBar,
     launchApp,
+    openSetting,
     openSettings,
     setBarHeight,
     suggest,
@@ -44,7 +45,7 @@
 
   const enterLabel = computed(() => {
     const item = selected.value >= 0 ? items.value[selected.value] : undefined;
-    if (item?.kind === 'app') return `Open ${item.label}`;
+    if (item?.kind === 'app' || item?.kind === 'setting') return `Open ${item.label}`;
     return armed.value?.name ?? 'search';
   });
 
@@ -265,6 +266,10 @@
         await launch(item.appId);
         return;
       }
+      if (item.kind === 'setting' && item.settingId) {
+        await openPage(item.settingId);
+        return;
+      }
       if (item.kind === 'destination') {
         armedId.value = item.destinationId;
         query.value = '';
@@ -280,6 +285,10 @@
   function choose(item: Suggestion) {
     if (item.kind === 'app' && item.appId) {
       void launch(item.appId);
+      return;
+    }
+    if (item.kind === 'setting' && item.settingId) {
+      void openPage(item.settingId);
       return;
     }
     if (item.kind === 'destination') {
@@ -302,10 +311,25 @@
     }
   }
 
+  async function openPage(settingId: string) {
+    try {
+      await openSetting(settingId);
+      query.value = '';
+      selected.value = -1;
+      notice.value = null;
+    } catch (error) {
+      notice.value = errorMessage(error);
+    }
+  }
+
   async function run(text: string, destinationId: string, interpret: boolean) {
     try {
       const outcome = await dispatch(text, destinationId, interpret);
-      if (outcome.kind === 'opened' || outcome.kind === 'launched') {
+      if (
+        outcome.kind === 'opened' ||
+        outcome.kind === 'launched' ||
+        outcome.kind === 'settingOpened'
+      ) {
         query.value = '';
         selected.value = -1;
         notice.value = null;

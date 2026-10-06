@@ -7,6 +7,7 @@ use tauri_plugin_opener::OpenerExt;
 use crate::apps::{self, Catalog};
 use crate::destination::Destination;
 use crate::query::{self, Decision, DispatchOutcome};
+use crate::settings::{self, Target};
 use crate::shortcut;
 use crate::state::{AppState, Persisted};
 use crate::suggest::{self, SuggestResponse};
@@ -53,6 +54,7 @@ pub async fn suggest(
 fn catalog<'a>(installed: &'a [apps::App], snapshot: &'a Persisted) -> Catalog<'a> {
     Catalog {
         apps: installed,
+        settings: settings::catalog(),
         launches: &snapshot.launches,
         overrides: &snapshot.app_overrides,
         now: now_secs(),
@@ -85,6 +87,31 @@ fn launch(app: &AppHandle, state: &AppState, app_id: &str) -> Result<DispatchOut
     window::hide_bar(app);
     log::info!("launched {}", target.name);
     Ok(DispatchOutcome::Launched { app_id: target.id })
+}
+
+// Async for the same reason as open_settings: a Zephyr setting may build the settings webview.
+#[tauri::command]
+pub async fn open_setting(app: AppHandle, setting_id: String) -> Result<DispatchOutcome, String> {
+    open_setting_page(&app, &setting_id)
+}
+
+fn open_setting_page(app: &AppHandle, setting_id: &str) -> Result<DispatchOutcome, String> {
+    let setting = settings::find(setting_id)
+        .ok_or_else(|| "That setting isn't available here.".to_string())?;
+    match setting.target {
+        Target::Zephyr(section) => window::open_settings(app, Some(section))?,
+        target => settings::open_system(target, |uri| {
+            app.opener()
+                .open_url(uri, None::<&str>)
+                .map_err(|err| err.to_string())
+        })
+        .map_err(|err| format!("Couldn't open {}: {err}", setting.title))?,
+    }
+    window::hide_bar(app);
+    log::info!("opened setting {}", setting.id);
+    Ok(DispatchOutcome::SettingOpened {
+        setting_id: setting.id.to_string(),
+    })
 }
 
 #[tauri::command]
@@ -138,6 +165,7 @@ pub async fn dispatch(
             Ok(DispatchOutcome::Opened { destination_id })
         }
         Decision::Launch { app_id } => launch(&app, &state, &app_id),
+        Decision::OpenSetting { setting_id } => open_setting_page(&app, &setting_id),
         Decision::Arm { destination_id } => Ok(DispatchOutcome::Armed { destination_id }),
         Decision::Palette => Ok(DispatchOutcome::Palette),
         Decision::UnknownBang { trigger } => Ok(DispatchOutcome::UnknownBang { trigger }),
@@ -250,7 +278,7 @@ pub fn show_bar(app: AppHandle) {
 // the message loop that the callback is blocking.
 #[tauri::command]
 pub async fn open_settings(app: AppHandle) -> Result<(), String> {
-    window::open_settings(&app)
+    window::open_settings(&app, None)
 }
 
 #[tauri::command]
