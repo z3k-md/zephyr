@@ -90,7 +90,8 @@ pub fn set_bar_height(app: &AppHandle, height: f64) -> Result<(), String> {
         1.0
     };
     let width = (BAR_WIDTH * scale).round().clamp(1.0, 4000.0) as u32;
-    let height = (height * scale).round().clamp(48.0, 720.0) as u32;
+    // The limits are in CSS pixels; clamping after scaling cut a Retina bar off at half height.
+    let height = (height.clamp(48.0, 720.0) * scale).round() as u32;
     window
         .set_size(PhysicalSize::new(width, height))
         .map_err(|err| err.to_string())?;
