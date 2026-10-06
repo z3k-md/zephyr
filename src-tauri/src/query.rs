@@ -1,5 +1,6 @@
 use serde::Serialize;
 
+use crate::apps::{self, Catalog};
 use crate::destination::{self, Destination};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,6 +19,9 @@ pub enum Decision {
     },
     Arm {
         destination_id: String,
+    },
+    Launch {
+        app_id: String,
     },
     Palette,
     UnknownBang {
@@ -38,6 +42,7 @@ pub enum Decision {
 pub enum DispatchOutcome {
     Opened { destination_id: String },
     Armed { destination_id: String },
+    Launched { app_id: String },
     Palette,
     UnknownBang { trigger: String },
     Empty,
@@ -85,6 +90,7 @@ pub fn decide(
     explicit_id: &str,
     interpret: bool,
     destinations: &[Destination],
+    catalog: Catalog<'_>,
 ) -> Decision {
     if !interpret {
         return decide_explicit(input, explicit_id, destinations);
@@ -96,11 +102,27 @@ pub fn decide(
         if prefix.is_empty() {
             return Decision::Palette;
         }
+        if apps::is_scope(&prefix) {
+            return Decision::Empty;
+        }
         return match destination::exact_trigger(destinations, &prefix) {
             Some(destination) => Decision::Arm {
                 destination_id: destination.id.clone(),
             },
             None => Decision::Palette,
+        };
+    }
+
+    if let Some(trigger) = parsed.bang.as_deref()
+        && apps::is_scope(trigger)
+    {
+        return match catalog.ranked(&parsed.query, 1).first() {
+            Some((app, _)) => Decision::Launch {
+                app_id: app.id.clone(),
+            },
+            None => Decision::Rejected {
+                message: format!("No app matches {}", parsed.query),
+            },
         };
     }
 
@@ -120,6 +142,12 @@ pub fn decide(
             destination_id: "url".into(),
             query: ensure_scheme(&parsed.query),
             url: ensure_scheme(&parsed.query),
+        };
+    }
+
+    if let Some(app) = catalog.preferred(&parsed.query) {
+        return Decision::Launch {
+            app_id: app.id.clone(),
         };
     }
 
@@ -239,7 +267,152 @@ fn ensure_scheme(url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::apps::{App, Catalog};
     use crate::destination::builtins;
+
+    fn none() -> Catalog<'static> {
+        Catalog {
+            apps: &[],
+            launches: &[],
+            overrides: &[],
+            now: 0,
+        }
+    }
+
+    fn installed<'a>(apps: &'a [App], overrides: &'a [String]) -> Catalog<'a> {
+        Catalog {
+            apps,
+            launches: &[],
+            overrides,
+            now: 0,
+        }
+    }
+
+    fn excel() -> Vec<App> {
+        vec![App {
+            id: "excel-id".into(),
+            name: "Excel".into(),
+        }]
+    }
+
+    #[test]
+    fn an_app_name_launches_and_free_text_still_searches() {
+        let apps = excel();
+        let destinations = builtins();
+        assert_eq!(
+            decide(
+                "exc",
+                "google",
+                "google",
+                true,
+                &destinations,
+                installed(&apps, &[])
+            ),
+            Decision::Launch {
+                app_id: "excel-id".into()
+            }
+        );
+        assert!(
+            open(&decide(
+                "excel pivot tables",
+                "google",
+                "google",
+                true,
+                &destinations,
+                installed(&apps, &[])
+            ))
+            .contains("google.com")
+        );
+    }
+
+    #[test]
+    fn explicit_keys_beat_an_app_match() {
+        let apps = excel();
+        let destinations = builtins();
+        assert!(
+            open(&decide(
+                "excel !g",
+                "google",
+                "google",
+                true,
+                &destinations,
+                installed(&apps, &[])
+            ))
+            .contains("google.com")
+        );
+        assert!(
+            open(&decide(
+                "excel",
+                "google",
+                "wikipedia",
+                false,
+                &destinations,
+                installed(&apps, &[])
+            ))
+            .contains("wikipedia.org")
+        );
+    }
+
+    #[test]
+    fn a_learned_override_keeps_the_text_on_the_web() {
+        static OVERRIDES: std::sync::LazyLock<Vec<String>> =
+            std::sync::LazyLock::new(|| vec!["excel".to_string()]);
+        let apps = excel();
+        assert!(
+            open(&decide(
+                "excel",
+                "google",
+                "google",
+                true,
+                &builtins(),
+                installed(&apps, &OVERRIDES)
+            ))
+            .contains("google.com")
+        );
+    }
+
+    #[test]
+    fn the_app_scope_launches_the_best_match_or_says_none() {
+        let apps = excel();
+        let destinations = builtins();
+        assert_eq!(
+            decide(
+                "!app xl",
+                "google",
+                "google",
+                true,
+                &destinations,
+                installed(&apps, &[])
+            ),
+            Decision::Rejected {
+                message: "No app matches xl".into()
+            }
+        );
+        assert_eq!(
+            decide(
+                "cel !app",
+                "google",
+                "google",
+                true,
+                &destinations,
+                installed(&apps, &[])
+            ),
+            Decision::Launch {
+                app_id: "excel-id".into()
+            }
+        );
+        assert_eq!(
+            decide(
+                "!app",
+                "google",
+                "google",
+                true,
+                &destinations,
+                installed(&apps, &[])
+            ),
+            Decision::Empty
+        );
+    }
 
     fn open(decision: &Decision) -> &str {
         match decision {
@@ -250,7 +423,7 @@ mod tests {
 
     #[test]
     fn enter_uses_the_armed_destination() {
-        let decision = decide("crispr", "pubmed", "pubmed", true, &builtins());
+        let decision = decide("crispr", "pubmed", "pubmed", true, &builtins(), none());
         assert!(open(&decision).contains("pubmed.ncbi.nlm.nih.gov"));
         assert!(open(&decision).contains("crispr"));
     }
@@ -264,7 +437,8 @@ mod tests {
                 "google",
                 "google",
                 true,
-                &destinations
+                &destinations,
+                none()
             ))
             .contains("pubmed")
         );
@@ -274,7 +448,8 @@ mod tests {
                 "google",
                 "google",
                 true,
-                &destinations
+                &destinations,
+                none()
             ))
             .contains("wikipedia.org")
         );
@@ -284,7 +459,8 @@ mod tests {
                 "google",
                 "google",
                 true,
-                &destinations
+                &destinations,
+                none()
             ))
             .contains("youtube.com")
         );
@@ -292,7 +468,7 @@ mod tests {
 
     #[test]
     fn an_exact_bang_with_no_query_arms_that_destination() {
-        let decision = decide("!wiki", "google", "google", true, &builtins());
+        let decision = decide("!wiki", "google", "google", true, &builtins(), none());
         assert_eq!(
             decision,
             Decision::Arm {
@@ -304,11 +480,11 @@ mod tests {
     #[test]
     fn a_partial_bang_opens_the_palette() {
         assert_eq!(
-            decide("!you", "google", "google", true, &builtins()),
+            decide("!you", "google", "google", true, &builtins(), none()),
             Decision::Palette
         );
         assert_eq!(
-            decide("!", "google", "google", true, &builtins()),
+            decide("!", "google", "google", true, &builtins(), none()),
             Decision::Palette
         );
     }
@@ -316,7 +492,14 @@ mod tests {
     #[test]
     fn unknown_bangs_do_not_fall_through_to_google() {
         assert_eq!(
-            decide("crispr !nope", "google", "google", true, &builtins()),
+            decide(
+                "crispr !nope",
+                "google",
+                "google",
+                true,
+                &builtins(),
+                none()
+            ),
             Decision::UnknownBang {
                 trigger: "nope".into()
             }
@@ -332,7 +515,8 @@ mod tests {
                 "google",
                 "google",
                 true,
-                &destinations
+                &destinations,
+                none()
             )),
             "https://example.com/docs"
         );
@@ -342,7 +526,8 @@ mod tests {
                 "google",
                 "google",
                 true,
-                &destinations
+                &destinations,
+                none()
             )),
             "https://example.com"
         );
@@ -352,7 +537,8 @@ mod tests {
                 "google",
                 "google",
                 true,
-                &destinations
+                &destinations,
+                none()
             ))
             .starts_with("https://localhost:1420")
         );
@@ -361,12 +547,26 @@ mod tests {
     #[test]
     fn ordinary_words_and_punctuation_stay_searches() {
         let destinations = builtins();
-        let decision = decide("C++ templates", "google", "google", true, &destinations);
+        let decision = decide(
+            "C++ templates",
+            "google",
+            "google",
+            true,
+            &destinations,
+            none(),
+        );
         let url = open(&decision);
         assert!(url.contains("google.com"));
         assert!(!looks_like_url("3.14"));
         assert!(!looks_like_url("hello!world"));
-        let decision = decide("hello!world", "google", "google", true, &destinations);
+        let decision = decide(
+            "hello!world",
+            "google",
+            "google",
+            true,
+            &destinations,
+            none(),
+        );
         let searched = open(&decision);
         assert!(searched.contains("google.com"));
         assert!(searched.contains("hello%21world"));
@@ -374,13 +574,20 @@ mod tests {
 
     #[test]
     fn a_chosen_suggestion_uses_that_destination() {
-        let decision = decide("crispr", "google", "pubmed", false, &builtins());
+        let decision = decide("crispr", "google", "pubmed", false, &builtins(), none());
         assert!(open(&decision).contains("pubmed"));
     }
 
     #[test]
     fn a_dispatch_key_strips_a_bang_and_keeps_the_chosen_destination() {
-        let decision = decide("crispr !wiki", "wikipedia", "pubmed", false, &builtins());
+        let decision = decide(
+            "crispr !wiki",
+            "wikipedia",
+            "pubmed",
+            false,
+            &builtins(),
+            none(),
+        );
         let url = open(&decision);
         assert!(url.contains("pubmed"));
         assert!(url.contains("crispr"));

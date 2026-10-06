@@ -25,25 +25,36 @@ export interface Snapshot {
   defaultDestinationId: string;
   destinations: Destination[];
   history: HistoryEntry[];
+  launches: LaunchEntry[];
+  appOverrides: string[];
+}
+
+export interface LaunchEntry {
+  appId: string;
+  uses: number;
+  lastUsed: number;
 }
 
 export interface Suggestion {
   label: string;
   query: string;
   destinationId: string;
-  kind: 'history' | 'remote' | 'destination';
+  kind: 'history' | 'remote' | 'destination' | 'app';
   hint: string;
+  appId?: string;
 }
 
 export interface SuggestResponse {
   mode: 'search' | 'destinations' | 'recent';
   items: Suggestion[];
   notice: string | null;
+  preselect: number | null;
 }
 
 export type DispatchOutcome =
   | { kind: 'opened'; destinationId: string }
   | { kind: 'armed'; destinationId: string }
+  | { kind: 'launched'; appId: string }
   | { kind: 'palette' }
   | { kind: 'unknownBang'; trigger: string }
   | { kind: 'empty' };

@@ -4,6 +4,7 @@ use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_opener::OpenerExt;
 
+use crate::apps::{self, Catalog};
 use crate::destination::Destination;
 use crate::query::{self, Decision, DispatchOutcome};
 use crate::shortcut;
@@ -33,16 +34,57 @@ pub async fn suggest(
     state: State<'_, AppState>,
     query: String,
     destination_id: String,
+    include_remote: bool,
 ) -> Result<SuggestResponse, String> {
     let snapshot = state.snapshot()?;
+    let installed = apps::index().snapshot();
+    let catalog = catalog(&installed, &snapshot);
     Ok(suggest::gather(
         &query,
         &destination_id,
         &snapshot.destinations,
         &snapshot.history,
-        now_secs(),
+        catalog,
+        include_remote,
     )
     .await)
+}
+
+fn catalog<'a>(installed: &'a [apps::App], snapshot: &'a Persisted) -> Catalog<'a> {
+    Catalog {
+        apps: installed,
+        launches: &snapshot.launches,
+        overrides: &snapshot.app_overrides,
+        now: now_secs(),
+    }
+}
+
+#[tauri::command]
+pub fn launch_app(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    app_id: String,
+) -> Result<DispatchOutcome, String> {
+    launch(&app, &state, &app_id)
+}
+
+fn launch(app: &AppHandle, state: &AppState, app_id: &str) -> Result<DispatchOutcome, String> {
+    let target = apps::index()
+        .find(app_id)
+        .ok_or_else(|| "That app is no longer installed.".to_string())?;
+    apps::launch(&target)?;
+    match state.update(|persisted| {
+        persisted.record_launch(&target.id, now_secs());
+        Ok(())
+    }) {
+        Ok(recorded) => {
+            let _ = publish(app, recorded);
+        }
+        Err(err) => log::error!("couldn't record the launch: {err}"),
+    }
+    window::hide_bar(app);
+    log::info!("launched {}", target.name);
+    Ok(DispatchOutcome::Launched { app_id: target.id })
 }
 
 #[tauri::command]
@@ -54,13 +96,20 @@ pub async fn dispatch(
     interpret: bool,
 ) -> Result<DispatchOutcome, String> {
     let snapshot = state.snapshot()?;
+    let installed = apps::index().snapshot();
+    let catalog = catalog(&installed, &snapshot);
     let decision = query::decide(
         &query,
         &destination_id,
         &destination_id,
         interpret,
         &snapshot.destinations,
+        catalog,
     );
+    // Text that would have launched an app but went to the web by an explicit key was meant
+    // for the web; remember it so plain Enter stops launching the app for it.
+    let typed = query::parse_input(&query).query;
+    let overrode_app = catalog.would_launch(&typed);
 
     match decision {
         Decision::Open {
@@ -74,6 +123,9 @@ pub async fn dispatch(
             // The browser already has the search, so a failed history write is not the user's error.
             match state.update(|persisted| {
                 persisted.record(&query, &destination_id, now_secs());
+                if overrode_app && destination_id != "url" {
+                    persisted.record_app_override(&typed);
+                }
                 Ok(())
             }) {
                 Ok(recorded) => {
@@ -85,6 +137,7 @@ pub async fn dispatch(
             log::info!("opened {destination_id}");
             Ok(DispatchOutcome::Opened { destination_id })
         }
+        Decision::Launch { app_id } => launch(&app, &state, &app_id),
         Decision::Arm { destination_id } => Ok(DispatchOutcome::Armed { destination_id }),
         Decision::Palette => Ok(DispatchOutcome::Palette),
         Decision::UnknownBang { trigger } => Ok(DispatchOutcome::UnknownBang { trigger }),

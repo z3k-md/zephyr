@@ -5,8 +5,16 @@ export function getSnapshot(): Promise<Snapshot> {
   return invoke<Snapshot>('get_snapshot');
 }
 
-export function suggest(query: string, destinationId: string): Promise<SuggestResponse> {
-  return invoke<SuggestResponse>('suggest', { query, destinationId });
+export function suggest(
+  query: string,
+  destinationId: string,
+  includeRemote: boolean
+): Promise<SuggestResponse> {
+  return invoke<SuggestResponse>('suggest', { query, destinationId, includeRemote });
+}
+
+export function launchApp(appId: string): Promise<DispatchOutcome> {
+  return invoke<DispatchOutcome>('launch_app', { appId });
 }
 
 export function dispatch(

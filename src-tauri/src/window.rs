@@ -15,6 +15,7 @@ pub fn suppressing_blur() -> bool {
 }
 
 pub fn show_bar(app: &AppHandle) {
+    crate::apps::AppIndex::refresh_if_stale(crate::apps::index());
     let Some(window) = app.get_webview_window("main") else {
         log::error!("main window is missing");
         return;
