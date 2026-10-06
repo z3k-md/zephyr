@@ -27,6 +27,15 @@ export interface Snapshot {
   history: HistoryEntry[];
   launches: LaunchEntry[];
   appOverrides: string[];
+  fileRoots: string[] | null;
+  fileExcludes: string[];
+  fileOpens: LaunchEntry[];
+}
+
+export interface FileIndexStatus {
+  roots: string[];
+  entries: number;
+  scanning: boolean;
 }
 
 export interface LaunchEntry {
@@ -39,10 +48,11 @@ export interface Suggestion {
   label: string;
   query: string;
   destinationId: string;
-  kind: 'history' | 'remote' | 'destination' | 'app' | 'setting';
+  kind: 'history' | 'remote' | 'destination' | 'app' | 'setting' | 'file';
   hint: string;
   appId?: string;
   settingId?: string;
+  path?: string;
 }
 
 export interface SuggestResponse {
@@ -57,6 +67,7 @@ export type DispatchOutcome =
   | { kind: 'armed'; destinationId: string }
   | { kind: 'launched'; appId: string }
   | { kind: 'settingOpened'; settingId: string }
+  | { kind: 'fileOpened'; path: string }
   | { kind: 'palette' }
   | { kind: 'unknownBang'; trigger: string }
   | { kind: 'empty' };

@@ -28,6 +28,8 @@ reqwest = { version = "0.13", default-features = false, features = ["gzip", "cha
 urlencoding = "2.1"
 log = "0.4"
 flexi_logger = "0.31"
+ignore = "0.4"
+notify = "8"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [

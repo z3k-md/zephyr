@@ -6,6 +6,7 @@ use serde_json::Value;
 
 use crate::apps::{self, App, Catalog};
 use crate::destination::{self, Destination, SuggestKind};
+use crate::files::{self, Hit};
 use crate::history::{self, HistoryEntry};
 use crate::query::{self, Parsed};
 use crate::settings::{self, Setting, Target};
@@ -22,6 +23,8 @@ pub struct Suggestion {
     pub app_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub setting_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -48,7 +51,8 @@ pub async fn gather(
     let parsed = query::parse_input(input);
     let scoped = parsed.bang.as_deref().is_some_and(apps::is_scope);
     let settings_scoped = parsed.bang.as_deref().is_some_and(settings::is_scope);
-    if parsed.only_bang && !scoped && !settings_scoped {
+    let files_scoped = parsed.bang.as_deref().is_some_and(files::is_scope);
+    if parsed.only_bang && !scoped && !settings_scoped && !files_scoped {
         return palette(destinations, parsed.bang.as_deref().unwrap_or(""));
     }
     if input.trim().is_empty() {
@@ -91,6 +95,29 @@ pub async fn gather(
             notice,
         };
     }
+    if files_scoped {
+        let items: Vec<Suggestion> = if parsed.query.is_empty() {
+            files::recent(catalog.file_opens, now, 8)
+        } else {
+            catalog.files(&parsed.query, 8)
+        }
+        .iter()
+        .map(file_item)
+        .collect();
+        let notice = if items.is_empty() && !parsed.query.is_empty() {
+            Some(format!("No file matches {}", parsed.query))
+        } else if items.is_empty() {
+            Some("Type a file or folder name".into())
+        } else {
+            None
+        };
+        return SuggestResponse {
+            mode: "search".into(),
+            preselect: (!items.is_empty() && !parsed.query.is_empty()).then_some(0),
+            items,
+            notice,
+        };
+    }
     if let Some(trigger) = &parsed.bang
         && destination::exact_trigger(destinations, trigger).is_none()
     {
@@ -122,12 +149,18 @@ pub async fn gather(
         Vec::new()
     };
 
-    // Settings never take Enter unscoped: at most two rows, below everything else local.
-    let matched_settings: Vec<Suggestion> = if offer_apps {
-        settings::incidental(catalog.settings, &parsed.query, 2)
-            .into_iter()
-            .map(setting_item)
-            .collect()
+    // Files and settings never take Enter unscoped: at most two rows between them, below
+    // everything else local. Files only come from ones opened before, so this never waits on
+    // the index.
+    let incidental: Vec<Suggestion> = if offer_apps {
+        let opened = files::incidental(catalog.file_opens, &parsed.query, now, 2);
+        let mut rows: Vec<Suggestion> = opened.iter().map(file_item).collect();
+        rows.extend(
+            settings::incidental(catalog.settings, &parsed.query, 2 - rows.len())
+                .into_iter()
+                .map(setting_item),
+        );
+        rows
     } else {
         Vec::new()
     };
@@ -138,8 +171,8 @@ pub async fn gather(
     }
     items.extend(history_items(history, &parsed.query, destinations, now, 4));
     items.extend(other_apps);
-    items.truncate(8 - matched_settings.len());
-    items.extend(matched_settings);
+    items.truncate(8 - incidental.len());
+    items.extend(incidental);
 
     let destination = resolve_destination(&parsed, armed_id, destinations);
     if include_remote
@@ -167,6 +200,7 @@ fn app_item(app: &App) -> Suggestion {
         hint: "App".into(),
         app_id: Some(app.id.clone()),
         setting_id: None,
+        path: None,
     }
 }
 
@@ -179,6 +213,20 @@ fn setting_item(setting: &Setting) -> Suggestion {
         hint: setting.hint().into(),
         app_id: None,
         setting_id: Some(setting.id.to_string()),
+        path: None,
+    }
+}
+
+fn file_item(hit: &Hit) -> Suggestion {
+    Suggestion {
+        label: hit.name.clone(),
+        query: String::new(),
+        destination_id: String::new(),
+        kind: "file".into(),
+        hint: hit.location(),
+        app_id: None,
+        setting_id: None,
+        path: Some(hit.path.clone()),
     }
 }
 
@@ -204,6 +252,7 @@ fn palette(destinations: &[Destination], prefix: &str) -> SuggestResponse {
             kind: "destination".into(),
             app_id: None,
             setting_id: None,
+            path: None,
             hint: destination
                 .triggers
                 .iter()
@@ -246,6 +295,7 @@ fn history_items(
             hint: destination_name(destinations, &entry.destination_id),
             app_id: None,
             setting_id: None,
+            path: None,
         })
         .collect()
 }
@@ -264,6 +314,7 @@ fn merge_remote(items: &mut Vec<Suggestion>, remote: Vec<String>, destination: &
             hint: destination.name.clone(),
             app_id: None,
             setting_id: None,
+            path: None,
         });
     }
 }
@@ -408,6 +459,7 @@ fn string_list(value: Option<&Value>, query: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::apps::LaunchEntry;
 
     const SETTINGS: &[Setting] = &[
         Setting {
@@ -437,10 +489,18 @@ mod tests {
     ];
 
     fn local(input: &str, apps: &[App]) -> SuggestResponse {
+        local_with(input, apps, &[])
+    }
+
+    fn local_with(input: &str, apps: &[App], file_opens: &[LaunchEntry]) -> SuggestResponse {
+        static NO_FILES: std::sync::LazyLock<crate::files::FileIndex> =
+            std::sync::LazyLock::new(crate::files::FileIndex::default);
         let catalog = Catalog {
             apps,
             settings: SETTINGS,
+            files: &NO_FILES,
             launches: &[],
+            file_opens,
             overrides: &[],
             now: 0,
         };
@@ -475,6 +535,34 @@ mod tests {
         assert_eq!(response.preselect, None);
 
         assert!(local("display !g", &[]).items.is_empty());
+    }
+
+    #[test]
+    fn opened_files_share_the_two_unscoped_rows_and_the_empty_file_scope_lists_them() {
+        let dir = std::env::temp_dir().join(format!("zephyr-suggest-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("Display calibration.pdf");
+        std::fs::write(&file, b"").unwrap();
+        let opens = vec![LaunchEntry {
+            app_id: file.to_string_lossy().into_owned(),
+            uses: 1,
+            last_used: 0,
+        }];
+
+        let response = local_with("display", &[], &opens);
+        assert_eq!(response.preselect, None);
+        let kinds: Vec<&str> = response
+            .items
+            .iter()
+            .map(|item| item.kind.as_str())
+            .collect();
+        assert_eq!(kinds, ["file", "setting"]);
+        assert_eq!(response.items[0].path.as_deref(), file.to_str());
+
+        let scoped = local_with("!f", &[], &opens);
+        assert_eq!(scoped.preselect, None);
+        assert_eq!(scoped.items[0].label, "Display calibration.pdf");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
