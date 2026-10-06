@@ -329,6 +329,26 @@ section > button {
   margin-bottom: 8px;
 }
 
+/* Briefly marks the section the bar's !set jumped to. */
+.settings section.revealed {
+  animation: reveal 1.4s ease-out;
+}
+
+@keyframes reveal {
+  from {
+    border-color: var(--focus);
+  }
+  to {
+    border-color: var(--stroke);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings section.revealed {
+    animation: none;
+  }
+}
+
 .field {
   flex-direction: column;
   align-items: flex-start;

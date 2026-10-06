@@ -32,10 +32,12 @@ pub fn is_scope(trigger: &str) -> bool {
     SCOPE_TRIGGERS.contains(&trigger)
 }
 
-/// What app matching needs to know, borrowed from the index and saved state.
+/// What local matching needs to know, borrowed from the app index, the settings catalog and
+/// saved state.
 #[derive(Clone, Copy)]
 pub struct Catalog<'a> {
     pub apps: &'a [App],
+    pub settings: &'a [crate::settings::Setting],
     pub launches: &'a [LaunchEntry],
     pub overrides: &'a [String],
     pub now: i64,

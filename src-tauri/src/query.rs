@@ -2,6 +2,7 @@ use serde::Serialize;
 
 use crate::apps::{self, Catalog};
 use crate::destination::{self, Destination};
+use crate::settings;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Parsed {
@@ -23,6 +24,9 @@ pub enum Decision {
     Launch {
         app_id: String,
     },
+    OpenSetting {
+        setting_id: String,
+    },
     Palette,
     UnknownBang {
         trigger: String,
@@ -43,6 +47,7 @@ pub enum DispatchOutcome {
     Opened { destination_id: String },
     Armed { destination_id: String },
     Launched { app_id: String },
+    SettingOpened { setting_id: String },
     Palette,
     UnknownBang { trigger: String },
     Empty,
@@ -102,7 +107,7 @@ pub fn decide(
         if prefix.is_empty() {
             return Decision::Palette;
         }
-        if apps::is_scope(&prefix) {
+        if apps::is_scope(&prefix) || settings::is_scope(&prefix) {
             return Decision::Empty;
         }
         return match destination::exact_trigger(destinations, &prefix) {
@@ -122,6 +127,19 @@ pub fn decide(
             },
             None => Decision::Rejected {
                 message: format!("No app matches {}", parsed.query),
+            },
+        };
+    }
+
+    if let Some(trigger) = parsed.bang.as_deref()
+        && settings::is_scope(trigger)
+    {
+        return match settings::ranked(catalog.settings, &parsed.query, 1).first() {
+            Some(setting) => Decision::OpenSetting {
+                setting_id: setting.id.to_string(),
+            },
+            None => Decision::Rejected {
+                message: format!("No setting matches {}", parsed.query),
             },
         };
     }
@@ -269,10 +287,27 @@ mod tests {
     use super::*;
     use crate::apps::{App, Catalog};
     use crate::destination::builtins;
+    use crate::settings::{Setting, Target};
+
+    const SETTINGS: &[Setting] = &[
+        Setting {
+            id: "win.display",
+            title: "Display",
+            keywords: &["screen", "resolution"],
+            target: Target::Uri("ms-settings:display"),
+        },
+        Setting {
+            id: "win.colors",
+            title: "Colors",
+            keywords: &["dark mode"],
+            target: Target::Uri("ms-settings:colors"),
+        },
+    ];
 
     fn none() -> Catalog<'static> {
         Catalog {
             apps: &[],
+            settings: SETTINGS,
             launches: &[],
             overrides: &[],
             now: 0,
@@ -282,6 +317,7 @@ mod tests {
     fn installed<'a>(apps: &'a [App], overrides: &'a [String]) -> Catalog<'a> {
         Catalog {
             apps,
+            settings: SETTINGS,
             launches: &[],
             overrides,
             now: 0,
@@ -412,6 +448,35 @@ mod tests {
             ),
             Decision::Empty
         );
+    }
+
+    #[test]
+    fn the_settings_scope_opens_the_best_match_and_free_text_never_does() {
+        let destinations = builtins();
+        let decide_text =
+            |text: &str| decide(text, "google", "google", true, &destinations, none());
+        assert_eq!(
+            decide_text("!set dark mode"),
+            Decision::OpenSetting {
+                setting_id: "win.colors".into()
+            }
+        );
+        assert_eq!(
+            decide_text("display !settings"),
+            Decision::OpenSetting {
+                setting_id: "win.display".into()
+            }
+        );
+        assert_eq!(
+            decide_text("!set wallpaper"),
+            Decision::Rejected {
+                message: "No setting matches wallpaper".into()
+            }
+        );
+        assert_eq!(decide_text("!set"), Decision::Empty);
+        // Unscoped, Enter keeps searching even when the text names a setting exactly.
+        assert!(open(&decide_text("display")).contains("google.com"));
+        assert!(open(&decide_text("dark mode")).contains("google.com"));
     }
 
     fn open(decision: &Decision) -> &str {

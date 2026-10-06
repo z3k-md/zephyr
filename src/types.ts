@@ -39,9 +39,10 @@ export interface Suggestion {
   label: string;
   query: string;
   destinationId: string;
-  kind: 'history' | 'remote' | 'destination' | 'app';
+  kind: 'history' | 'remote' | 'destination' | 'app' | 'setting';
   hint: string;
   appId?: string;
+  settingId?: string;
 }
 
 export interface SuggestResponse {
@@ -55,6 +56,7 @@ export type DispatchOutcome =
   | { kind: 'opened'; destinationId: string }
   | { kind: 'armed'; destinationId: string }
   | { kind: 'launched'; appId: string }
+  | { kind: 'settingOpened'; settingId: string }
   | { kind: 'palette' }
   | { kind: 'unknownBang'; trigger: string }
   | { kind: 'empty' };

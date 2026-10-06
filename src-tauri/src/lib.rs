@@ -4,6 +4,7 @@ mod destination;
 mod history;
 mod logger;
 mod query;
+mod settings;
 mod shortcut;
 mod state;
 mod suggest;
@@ -92,6 +93,7 @@ pub fn run() {
             commands::suggest,
             commands::dispatch,
             commands::launch_app,
+            commands::open_setting,
             commands::save_settings,
             commands::save_destination,
             commands::remove_destination,

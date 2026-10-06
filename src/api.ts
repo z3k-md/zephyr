@@ -17,6 +17,10 @@ export function launchApp(appId: string): Promise<DispatchOutcome> {
   return invoke<DispatchOutcome>('launch_app', { appId });
 }
 
+export function openSetting(settingId: string): Promise<DispatchOutcome> {
+  return invoke<DispatchOutcome>('open_setting', { settingId });
+}
+
 export function dispatch(
   query: string,
   destinationId: string,

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-  import { computed, onMounted, onUnmounted, ref } from 'vue';
+  import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import {
     checkForUpdates,
@@ -48,6 +48,15 @@
         if (isSnapshot(event.payload)) snapshot.value = event.payload;
       })
     );
+    // The bar's !set opens a specific section: by URL when it creates this window, by event
+    // when the window already exists.
+    unlistens.push(
+      await listen<string>('settings-section', (event) => {
+        void revealSection(event.payload);
+      })
+    );
+    const section = new URLSearchParams(window.location.search).get('section');
+    if (section) void revealSection(section);
     window.addEventListener('keydown', onShortcutKey, true);
   });
 
@@ -55,6 +64,17 @@
     window.removeEventListener('keydown', onShortcutKey, true);
     for (const unlisten of unlistens) unlisten();
   });
+
+  async function revealSection(section: string) {
+    await nextTick();
+    const target = document.getElementById(`section-${section}`);
+    if (!target) return;
+    const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    target.scrollIntoView({ block: 'start', behavior: still ? 'auto' : 'smooth' });
+    target.classList.remove('revealed');
+    void target.offsetWidth;
+    target.classList.add('revealed');
+  }
 
   async function refresh() {
     try {
@@ -296,7 +316,7 @@
     <p v-if="formError" class="notice">{{ formError }}</p>
     <p v-else-if="status" class="status">{{ status }}</p>
 
-    <section v-if="snapshot">
+    <section v-if="snapshot" id="section-general">
       <h2>General</h2>
       <div class="field">
         <span>Summon shortcut</span>
@@ -331,7 +351,7 @@
       </div>
     </section>
 
-    <section v-if="snapshot">
+    <section v-if="snapshot" id="section-destinations">
       <h2>Destinations</h2>
       <p class="lede">
         The first eight pinned destinations get Ctrl+1 through Ctrl+8. A trigger is what you type
@@ -449,7 +469,7 @@
       </form>
     </section>
 
-    <section v-if="snapshot">
+    <section v-if="snapshot" id="section-history">
       <h2>History</h2>
       <ul v-if="historyPreview.length" class="history">
         <li v-for="entry in historyPreview" :key="`${entry.destinationId}-${entry.query}`">
