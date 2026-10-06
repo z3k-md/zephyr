@@ -8,6 +8,7 @@ use crate::apps::{self, App, Catalog};
 use crate::destination::{self, Destination, SuggestKind};
 use crate::history::{self, HistoryEntry};
 use crate::query::{self, Parsed};
+use crate::settings::{self, Setting, Target};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -19,6 +20,8 @@ pub struct Suggestion {
     pub hint: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub app_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub setting_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -44,7 +47,8 @@ pub async fn gather(
     let now = catalog.now;
     let parsed = query::parse_input(input);
     let scoped = parsed.bang.as_deref().is_some_and(apps::is_scope);
-    if parsed.only_bang && !scoped {
+    let settings_scoped = parsed.bang.as_deref().is_some_and(settings::is_scope);
+    if parsed.only_bang && !scoped && !settings_scoped {
         return palette(destinations, parsed.bang.as_deref().unwrap_or(""));
     }
     if input.trim().is_empty() {
@@ -62,6 +66,24 @@ pub async fn gather(
         };
         let notice = (items.is_empty() && !parsed.query.is_empty())
             .then(|| format!("No app matches {}", parsed.query));
+        return SuggestResponse {
+            mode: "search".into(),
+            preselect: (!items.is_empty() && !parsed.query.is_empty()).then_some(0),
+            items,
+            notice,
+        };
+    }
+    if settings_scoped {
+        let items: Vec<Suggestion> = if parsed.query.is_empty() {
+            starters(catalog.settings, 8)
+        } else {
+            settings::ranked(catalog.settings, &parsed.query, 8)
+        }
+        .into_iter()
+        .map(setting_item)
+        .collect();
+        let notice = (items.is_empty() && !parsed.query.is_empty())
+            .then(|| format!("No setting matches {}", parsed.query));
         return SuggestResponse {
             mode: "search".into(),
             preselect: (!items.is_empty() && !parsed.query.is_empty()).then_some(0),
@@ -100,13 +122,24 @@ pub async fn gather(
         Vec::new()
     };
 
+    // Settings never take Enter unscoped: at most two rows, below everything else local.
+    let matched_settings: Vec<Suggestion> = if offer_apps {
+        settings::incidental(catalog.settings, &parsed.query, 2)
+            .into_iter()
+            .map(setting_item)
+            .collect()
+    } else {
+        Vec::new()
+    };
+
     let mut items = Vec::new();
     if let Some(app) = preferred {
         items.push(app_item(app));
     }
     items.extend(history_items(history, &parsed.query, destinations, now, 4));
     items.extend(other_apps);
-    items.truncate(8);
+    items.truncate(8 - matched_settings.len());
+    items.extend(matched_settings);
 
     let destination = resolve_destination(&parsed, armed_id, destinations);
     if include_remote
@@ -133,7 +166,29 @@ fn app_item(app: &App) -> Suggestion {
         kind: "app".into(),
         hint: "App".into(),
         app_id: Some(app.id.clone()),
+        setting_id: None,
     }
+}
+
+fn setting_item(setting: &Setting) -> Suggestion {
+    Suggestion {
+        label: setting.title.to_string(),
+        query: String::new(),
+        destination_id: String::new(),
+        kind: "setting".into(),
+        hint: setting.hint().into(),
+        app_id: None,
+        setting_id: Some(setting.id.to_string()),
+    }
+}
+
+/// What an empty `!set` lists: Zephyr's own settings window, then the most-used OS pages.
+fn starters(all: &[Setting], limit: usize) -> Vec<&Setting> {
+    let own = all.iter().find(|setting| setting.id == "zephyr.settings");
+    let system = all
+        .iter()
+        .filter(|setting| !matches!(setting.target, Target::Zephyr(_)));
+    own.into_iter().chain(system).take(limit).collect()
 }
 
 fn palette(destinations: &[Destination], prefix: &str) -> SuggestResponse {
@@ -148,6 +203,7 @@ fn palette(destinations: &[Destination], prefix: &str) -> SuggestResponse {
             destination_id: destination.id.clone(),
             kind: "destination".into(),
             app_id: None,
+            setting_id: None,
             hint: destination
                 .triggers
                 .iter()
@@ -189,6 +245,7 @@ fn history_items(
             kind: "history".into(),
             hint: destination_name(destinations, &entry.destination_id),
             app_id: None,
+            setting_id: None,
         })
         .collect()
 }
@@ -206,6 +263,7 @@ fn merge_remote(items: &mut Vec<Suggestion>, remote: Vec<String>, destination: &
             kind: "remote".into(),
             hint: destination.name.clone(),
             app_id: None,
+            setting_id: None,
         });
     }
 }
@@ -350,6 +408,89 @@ fn string_list(value: Option<&Value>, query: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const SETTINGS: &[Setting] = &[
+        Setting {
+            id: "win.display",
+            title: "Display",
+            keywords: &["screen"],
+            target: Target::Uri("ms-settings:display"),
+        },
+        Setting {
+            id: "win.colors",
+            title: "Colors",
+            keywords: &["dark mode"],
+            target: Target::Uri("ms-settings:colors"),
+        },
+        Setting {
+            id: "win.nightlight",
+            title: "Night Light",
+            keywords: &["display warmth"],
+            target: Target::Uri("ms-settings:nightlight"),
+        },
+        Setting {
+            id: "win.textsize",
+            title: "Text Size",
+            keywords: &["display text"],
+            target: Target::Uri("ms-settings:easeofaccess-display"),
+        },
+    ];
+
+    fn local(input: &str, apps: &[App]) -> SuggestResponse {
+        let catalog = Catalog {
+            apps,
+            settings: SETTINGS,
+            launches: &[],
+            overrides: &[],
+            now: 0,
+        };
+        tauri::async_runtime::block_on(gather(
+            input,
+            "google",
+            &crate::destination::builtins(),
+            &[],
+            catalog,
+            false,
+        ))
+    }
+
+    #[test]
+    fn unscoped_settings_are_at_most_two_rows_below_and_never_preselected() {
+        let apps = [App {
+            id: "displayfusion".into(),
+            name: "DisplayFusion".into(),
+        }];
+        let response = local("display", &apps);
+        let kinds: Vec<_> = response
+            .items
+            .iter()
+            .map(|item| item.kind.as_str())
+            .collect();
+        assert_eq!(kinds, ["app", "setting", "setting"]);
+        assert_eq!(response.items[1].label, "Display");
+        assert_eq!(response.preselect, Some(0));
+
+        let response = local("dark mode", &[]);
+        assert_eq!(response.items[0].setting_id.as_deref(), Some("win.colors"));
+        assert_eq!(response.preselect, None);
+
+        assert!(local("display !g", &[]).items.is_empty());
+    }
+
+    #[test]
+    fn the_settings_scope_preselects_its_best_match() {
+        let response = local("!set dark", &[]);
+        assert_eq!(response.items[0].label, "Colors");
+        assert_eq!(response.preselect, Some(0));
+
+        let empty = local("!set", &[]);
+        assert_eq!(empty.items.len(), SETTINGS.len());
+        assert_eq!(empty.preselect, None);
+
+        let none = local("!set wallpaper", &[]);
+        assert!(none.items.is_empty());
+        assert_eq!(none.notice.as_deref(), Some("No setting matches wallpaper"));
+    }
 
     #[test]
     fn parses_live_suggestion_shapes() {

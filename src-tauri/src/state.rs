@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::apps::{self, LaunchEntry};
 use crate::destination::{self, Destination};
 use crate::history::{self, HistoryEntry};
+use crate::settings;
 use crate::shortcut::{DEFAULT_SHORTCUT, LEGACY_DEFAULT_SHORTCUT};
 
 /// A field missing from the file falls back to its default instead of discarding every setting.
@@ -277,6 +278,9 @@ fn normalize_triggers(triggers: &[String]) -> Result<Vec<String>, String> {
         };
         if apps::is_scope(&trigger) {
             return Err(format!("!{trigger} is reserved for finding apps"));
+        }
+        if settings::is_scope(&trigger) {
+            return Err(format!("!{trigger} is reserved for finding settings"));
         }
         if !normalized.contains(&trigger) {
             normalized.push(trigger);

@@ -6,6 +6,8 @@ A dispatch bar for Windows and macOS. Summon it over any app, type once, and sen
 
 Typing the start of an app's name (`chr`, `excel`, or initials like `vsc`) selects that app, and Enter opens it; longer free text still goes to the armed destination. A bang or `Ctrl+1`–`Ctrl+8` always sends the text to the web, and Zephyr remembers that choice for the same text next time. `!app` searches only apps.
 
+`!set` searches settings: Windows Settings pages and Control Panel tools, macOS System Settings panes, and Zephyr's own settings (`!set dark mode`, `!set bluetooth`, `display !set`, `!set zephyr shortcut`). Enter opens the top match. Without `!set`, a clear match shows as at most two rows under the other results, and Enter never picks one unless you arrow to it.
+
 ## Install
 
 Download the latest installer from [Releases](https://github.com/z3k-md/zephyr/releases/latest): the `-setup.exe` for Windows, or the `.dmg` for macOS. Installed copies check for updates at launch and every six hours, and install them automatically. Settings and the tray menu also have **Check for updates**.
