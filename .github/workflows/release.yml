@@ -1,8 +1,6 @@
 name: Release
+# Releases are cut on demand (Actions > Release > Run workflow), not on every push to main.
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
     inputs:
       tag:
