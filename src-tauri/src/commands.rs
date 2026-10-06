@@ -6,6 +6,7 @@ use tauri_plugin_opener::OpenerExt;
 
 use crate::apps::{self, Catalog};
 use crate::destination::Destination;
+use crate::files;
 use crate::query::{self, Decision, DispatchOutcome};
 use crate::settings::{self, Target};
 use crate::shortcut;
@@ -55,7 +56,9 @@ fn catalog<'a>(installed: &'a [apps::App], snapshot: &'a Persisted) -> Catalog<'
     Catalog {
         apps: installed,
         settings: settings::catalog(),
+        files: files::index(),
         launches: &snapshot.launches,
+        file_opens: &snapshot.file_opens,
         overrides: &snapshot.app_overrides,
         now: now_secs(),
     }
@@ -115,6 +118,96 @@ fn open_setting_page(app: &AppHandle, setting_id: &str) -> Result<DispatchOutcom
 }
 
 #[tauri::command]
+pub fn open_file(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<DispatchOutcome, String> {
+    open_file_path(&app, &state, &path)
+}
+
+/// Only paths the bar could have shown are opened: indexed ones and ones opened before.
+fn known_file(state: &AppState, path: &str) -> Result<(), String> {
+    let opened_before = state
+        .snapshot()?
+        .file_opens
+        .iter()
+        .any(|open| open.app_id == path);
+    if opened_before || files::index().contains(path) {
+        Ok(())
+    } else {
+        Err("That file isn't in Zephyr's file index.".into())
+    }
+}
+
+fn open_file_path(
+    app: &AppHandle,
+    state: &AppState,
+    path: &str,
+) -> Result<DispatchOutcome, String> {
+    known_file(state, path)?;
+    if !std::path::Path::new(path).exists() {
+        return Err("That file was moved or deleted.".into());
+    }
+    app.opener()
+        .open_path(path, None::<&str>)
+        .map_err(|err| format!("Couldn't open it: {err}"))?;
+    match state.update(|persisted| {
+        persisted.record_file_open(path, now_secs());
+        Ok(())
+    }) {
+        Ok(recorded) => {
+            let _ = publish(app, recorded);
+        }
+        Err(err) => log::error!("couldn't record the open: {err}"),
+    }
+    window::hide_bar(app);
+    Ok(DispatchOutcome::FileOpened {
+        path: path.to_string(),
+    })
+}
+
+#[tauri::command]
+pub fn reveal_file(app: AppHandle, state: State<'_, AppState>, path: String) -> Result<(), String> {
+    known_file(&state, &path)?;
+    app.opener()
+        .reveal_item_in_dir(&path)
+        .map_err(|err| format!("Couldn't show it: {err}"))?;
+    window::hide_bar(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn file_index_status() -> files::Status {
+    files::index().status()
+}
+
+#[tauri::command]
+pub fn rebuild_file_index() {
+    files::index().rescan();
+}
+
+#[tauri::command]
+pub fn save_file_folders(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    roots: Option<Vec<String>>,
+    excludes: Vec<String>,
+) -> Result<Persisted, String> {
+    let snapshot = state.update(|persisted| persisted.set_file_folders(roots, excludes))?;
+    files::index().configure(snapshot.file_config(), file_cache_path(&app));
+    publish(&app, snapshot)
+}
+
+pub fn file_cache_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+    use tauri::Manager;
+    app.path()
+        .app_cache_dir()
+        .ok()
+        .map(|dir| dir.join("files.idx"))
+}
+
+#[tauri::command]
 pub async fn dispatch(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -166,6 +259,7 @@ pub async fn dispatch(
         }
         Decision::Launch { app_id } => launch(&app, &state, &app_id),
         Decision::OpenSetting { setting_id } => open_setting_page(&app, &setting_id),
+        Decision::OpenFile { path } => open_file_path(&app, &state, &path),
         Decision::Arm { destination_id } => Ok(DispatchOutcome::Armed { destination_id }),
         Decision::Palette => Ok(DispatchOutcome::Palette),
         Decision::UnknownBang { trigger } => Ok(DispatchOutcome::UnknownBang { trigger }),

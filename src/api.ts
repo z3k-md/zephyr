@@ -1,5 +1,11 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { Destination, DispatchOutcome, Snapshot, SuggestResponse } from './types';
+import type {
+  Destination,
+  DispatchOutcome,
+  FileIndexStatus,
+  Snapshot,
+  SuggestResponse,
+} from './types';
 
 export function getSnapshot(): Promise<Snapshot> {
   return invoke<Snapshot>('get_snapshot');
@@ -19,6 +25,26 @@ export function launchApp(appId: string): Promise<DispatchOutcome> {
 
 export function openSetting(settingId: string): Promise<DispatchOutcome> {
   return invoke<DispatchOutcome>('open_setting', { settingId });
+}
+
+export function openFile(path: string): Promise<DispatchOutcome> {
+  return invoke<DispatchOutcome>('open_file', { path });
+}
+
+export function revealFile(path: string): Promise<void> {
+  return invoke('reveal_file', { path });
+}
+
+export function fileIndexStatus(): Promise<FileIndexStatus> {
+  return invoke<FileIndexStatus>('file_index_status');
+}
+
+export function rebuildFileIndex(): Promise<void> {
+  return invoke('rebuild_file_index');
+}
+
+export function saveFileFolders(roots: string[] | null, excludes: string[]): Promise<Snapshot> {
+  return invoke<Snapshot>('save_file_folders', { roots, excludes });
 }
 
 export function dispatch(

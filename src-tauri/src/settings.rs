@@ -237,6 +237,17 @@ const ZEPHYR: &[Setting] = &[
         "history",
         &["clear history", "recent searches"],
     ),
+    zephyr(
+        "zephyr.files",
+        "Zephyr File Search",
+        "files",
+        &[
+            "file search folders",
+            "indexed folders",
+            "exclude folders",
+            "file index",
+        ],
+    ),
 ];
 
 #[rustfmt::skip]
@@ -404,7 +415,7 @@ mod tests {
         for setting in ZEPHYR {
             assert!(matches!(
                 setting.target,
-                Target::Zephyr("general" | "destinations" | "history")
+                Target::Zephyr("general" | "destinations" | "files" | "history")
             ));
         }
         for setting in WINDOWS {
