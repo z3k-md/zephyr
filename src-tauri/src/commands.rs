@@ -804,3 +804,20 @@ pub fn save_resume_seconds(
     })?;
     publish(&app, snapshot)
 }
+
+/// Shows the system folder picker; `None` when cancelled.
+#[tauri::command]
+pub async fn pick_folder(app: AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .set_title("Choose a folder")
+            .blocking_pick_folder()
+    })
+    .await
+    .map_err(|err| err.to_string())?;
+    Ok(picked
+        .and_then(|path| path.into_path().ok())
+        .map(|path| path.to_string_lossy().into_owned()))
+}

@@ -16,6 +16,7 @@
     clipStats,
     openNotes,
     pageReady,
+    pickFolder,
     revealNotes,
     saveClipboardSettings,
     saveResumeSeconds,
@@ -609,6 +610,19 @@
     }
   }
 
+  async function chooseProjectFolder() {
+    const folder = await pickFolder().catch(() => null);
+    if (!folder) return;
+    newProjectFolder.value = folder;
+    await addProject();
+  }
+
+  async function chooseRoot() {
+    const folder = await pickFolder().catch(() => null);
+    if (!folder || !snapshot.value) return;
+    await saveFolders([...fileRoots.value, folder], snapshot.value.fileExcludes);
+  }
+
   function updateProject(id: string, partial: Partial<ClaudeProject>) {
     if (!snapshot.value) return;
     const claude = snapshot.value.claude;
@@ -1163,6 +1177,7 @@
           placeholder="Project folder, e.g. ~/code/zephyr"
         />
         <button type="submit" :disabled="busy || !newProjectFolder.trim()">Add project</button>
+        <button type="button" :disabled="busy" @click="chooseProjectFolder">Choose folder…</button>
       </form>
       <p class="lede">
         Claude never commits or pushes without your approval, and it's never allowed to reset,
@@ -1420,6 +1435,7 @@
           placeholder="Folder path, e.g. D:\Projects or ~/Work"
         />
         <button type="submit" :disabled="busy || !newRoot.trim()">Add folder</button>
+        <button type="button" :disabled="busy" @click="chooseRoot">Choose folder…</button>
         <button
           v-if="snapshot.fileRoots !== null"
           type="button"

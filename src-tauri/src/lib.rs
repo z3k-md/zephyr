@@ -67,6 +67,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             // A tray utility should not put an icon in the Dock or take over the menu bar.
@@ -157,6 +158,7 @@ pub fn run() {
             commands::page_ready,
             commands::save_typing_result,
             commands::save_resume_seconds,
+            commands::pick_folder,
             commands::claude_jobs,
             commands::claude_approvals,
             commands::claude_submit,

@@ -107,15 +107,12 @@ impl ClaudeSettings {
         let mut seen_aliases = Vec::<String>::new();
         let mut seen_folders = Vec::<String>::new();
         for project in &mut self.projects {
-            project.folder = project.folder.trim().to_string();
-            if let Some(rest) = project.folder.strip_prefix("~/")
-                && let Ok(home) = std::env::var("HOME")
-            {
-                project.folder = format!("{home}/{rest}");
-            }
-            if !Path::new(&project.folder).is_dir() {
-                return Err(format!("{} isn't a folder", project.folder));
-            }
+            // Same rules as file search folders: ~ is the home folder on every OS (HOME or
+            // USERPROFILE), and the path must be an existing absolute folder.
+            project.folder =
+                crate::files::normalize_folders(std::slice::from_ref(&project.folder))?
+                    .pop()
+                    .ok_or("Choose a folder for the project")?;
             if seen_folders.contains(&project.folder) {
                 return Err(format!("{} is already a project", project.folder));
             }

@@ -306,6 +306,11 @@ export function saveResumeSeconds(seconds: number): Promise<Snapshot> {
   return invoke<Snapshot>('save_resume_seconds', { seconds });
 }
 
+/** The system folder picker; null when cancelled. */
+export function pickFolder(): Promise<string | null> {
+  return invoke<string | null>('pick_folder');
+}
+
 export function errorMessage(error: unknown): string {
   if (typeof error === 'string') return error;
   if (error instanceof Error) return error.message;
