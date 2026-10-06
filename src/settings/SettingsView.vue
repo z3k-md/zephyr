@@ -2,6 +2,11 @@
   import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import {
+    aiDetectLocal,
+    aiHasKey,
+    aiModels,
+    aiPresets,
+    aiSetKey,
     checkForUpdates,
     clearHistory,
     errorMessage,
@@ -12,14 +17,18 @@
     rebuildFileIndex,
     removeDestination,
     saveDestination,
+    saveAiSettings,
     saveFileFolders,
     saveSettings,
     showBar,
   } from '../api';
   import {
     isSnapshot,
+    type AiPreset,
+    type AiSettings,
     type Destination,
     type FileIndexStatus,
+    type LocalServer,
     type Snapshot,
     type SuggestKind,
   } from '../types';
@@ -50,8 +59,45 @@
   const newRoot = ref('');
   const newExclude = ref('');
 
+  const presets = ref<AiPreset[]>([]);
+  const aiDraft = ref<AiSettings>({ provider: 'auto', model: '', baseUrl: '', api: 'openai' });
+  const aiKey = ref('');
+  const aiKeySaved = ref(false);
+  const aiModelList = ref<string[]>([]);
+  const aiLocal = ref<LocalServer[] | null>(null);
+  const aiMessage = ref<string | null>(null);
+
   let unlistens: UnlistenFn[] = [];
   let statusTimer = 0;
+
+  const aiPreset = computed(() =>
+    presets.value.find((preset) => preset.id === aiDraft.value.provider)
+  );
+  const aiNeedsKey = computed(
+    () => aiDraft.value.provider === 'custom' || Boolean(aiPreset.value?.needsKey)
+  );
+  const aiProviderName = computed(() => aiPreset.value?.name ?? 'Server');
+  const aiShowsLocal = computed(
+    () => aiDraft.value.provider === 'auto' || Boolean(aiPreset.value?.local)
+  );
+
+  const localSummary = computed(() => {
+    const servers = aiLocal.value;
+    if (servers === null) return 'Looking for Ollama and LM Studio…';
+    if (servers.length === 0) {
+      return 'No local model server is running. Start Ollama or LM Studio, or pick a provider and add your key.';
+    }
+    return servers
+      .map((server) => `${server.name} is running with ${server.models.length} models`)
+      .join('. ');
+  });
+
+  const modelPlaceholder = computed(() => {
+    const preset = aiPreset.value;
+    if (preset?.defaultModel) return `Default: ${preset.defaultModel}`;
+    if (preset?.local) return 'Default: the first loaded model';
+    return 'Model id, or use Load models';
+  });
 
   // Saved roots, or the default (home) the index reports when none are saved.
   const fileRoots = computed(() => snapshot.value?.fileRoots ?? fileStatus.value?.roots ?? []);
@@ -68,6 +114,7 @@
 
   onMounted(async () => {
     await refresh();
+    void loadAi();
     unlistens.push(
       await listen<unknown>('state-changed', (event) => {
         if (isSnapshot(event.payload)) snapshot.value = event.payload;
@@ -397,6 +444,93 @@
     window.setTimeout(() => void pollFileStatus(), 300);
   }
 
+  async function loadAi() {
+    if (snapshot.value) aiDraft.value = { ...snapshot.value.ai };
+    try {
+      presets.value = await aiPresets();
+    } catch (error) {
+      formError.value = errorMessage(error);
+    }
+    void refreshKeyState();
+    void detectLocal();
+  }
+
+  async function detectLocal() {
+    aiLocal.value = null;
+    try {
+      aiLocal.value = await aiDetectLocal();
+    } catch {
+      aiLocal.value = [];
+    }
+  }
+
+  async function refreshKeyState() {
+    aiKeySaved.value = aiNeedsKey.value ? await aiHasKey(aiDraft.value.provider) : false;
+  }
+
+  async function saveAi() {
+    busy.value = true;
+    try {
+      apply(await saveAiSettings(aiDraft.value));
+      aiDraft.value = { ...(snapshot.value?.ai ?? aiDraft.value) };
+      aiMessage.value = 'Saved.';
+    } catch (error) {
+      formError.value = errorMessage(error);
+    } finally {
+      busy.value = false;
+    }
+  }
+
+  async function changeProvider(event: Event) {
+    const provider = (event.target as HTMLSelectElement).value;
+    aiDraft.value = { ...aiDraft.value, provider, model: '' };
+    aiModelList.value = [];
+    aiKey.value = '';
+    aiMessage.value = null;
+    // A custom server needs its URL before it can be saved.
+    if (provider !== 'custom' || aiDraft.value.baseUrl) await saveAi();
+    await refreshKeyState();
+  }
+
+  async function saveKey() {
+    busy.value = true;
+    try {
+      await aiSetKey(aiDraft.value.provider, aiKey.value);
+      aiKey.value = '';
+      aiKeySaved.value = true;
+      aiMessage.value = 'Key saved in your keychain.';
+    } catch (error) {
+      formError.value = errorMessage(error);
+    } finally {
+      busy.value = false;
+    }
+  }
+
+  async function removeKey() {
+    busy.value = true;
+    try {
+      await aiSetKey(aiDraft.value.provider, null);
+      aiKeySaved.value = false;
+      aiMessage.value = 'Key removed.';
+    } catch (error) {
+      formError.value = errorMessage(error);
+    } finally {
+      busy.value = false;
+    }
+  }
+
+  async function loadModels() {
+    aiMessage.value = 'Loading models…';
+    try {
+      aiModelList.value = await aiModels(aiDraft.value);
+      aiMessage.value = aiModelList.value.length
+        ? `${aiModelList.value.length} models. Pick one in the model box.`
+        : 'No models found.';
+    } catch (error) {
+      aiMessage.value = errorMessage(error);
+    }
+  }
+
   function destinationName(id: string): string {
     if (id === 'url') return 'Link';
     return snapshot.value?.destinations.find((destination) => destination.id === id)?.name ?? id;
@@ -449,6 +583,79 @@
         <button type="button" @click="updates">Check for updates</button>
         <span v-if="updateMessage" class="hint-text">{{ updateMessage }}</span>
       </div>
+    </section>
+
+    <section v-if="snapshot" id="section-ai">
+      <h2>AI</h2>
+      <p class="lede">
+        Press Tab to arm Ask AI, or type !ai, and the answer streams into the bar. Enter copies it.
+        Requests go straight from Zephyr to the provider you pick.
+      </p>
+      <label class="field">
+        <span>Provider</span>
+        <select :value="aiDraft.provider" :disabled="busy" @change="changeProvider">
+          <option value="auto">Automatic: a local model if one is running</option>
+          <option v-for="preset in presets" :key="preset.id" :value="preset.id">
+            {{ preset.name }}{{ preset.local ? ' (local)' : '' }}
+          </option>
+          <option value="custom">Custom server</option>
+        </select>
+      </label>
+      <div v-if="aiShowsLocal" class="field inline">
+        <span class="hint-text">{{ localSummary }}</span>
+        <button type="button" @click="detectLocal">Check again</button>
+      </div>
+      <template v-if="aiDraft.provider === 'custom'">
+        <label class="field">
+          <span>Base URL</span>
+          <input
+            v-model="aiDraft.baseUrl"
+            type="url"
+            placeholder="http://localhost:8080/v1"
+            @change="saveAi"
+          />
+        </label>
+        <label class="field">
+          <span>API format</span>
+          <select v-model="aiDraft.api" @change="saveAi">
+            <option value="openai">OpenAI-compatible</option>
+            <option value="anthropic">Anthropic</option>
+          </select>
+        </label>
+      </template>
+      <template v-if="aiNeedsKey">
+        <h3>API key</h3>
+        <form class="field inline" @submit.prevent="saveKey">
+          <input
+            v-model="aiKey"
+            type="password"
+            autocomplete="off"
+            :placeholder="aiKeySaved ? 'Saved in your keychain' : `${aiProviderName} API key`"
+          />
+          <button type="submit" :disabled="busy || !aiKey.trim()">Save key</button>
+          <button v-if="aiKeySaved" type="button" :disabled="busy" @click="removeKey">
+            Remove key
+          </button>
+        </form>
+      </template>
+      <template v-if="aiDraft.provider !== 'auto'">
+        <h3>Model</h3>
+        <form class="field inline" @submit.prevent="saveAi">
+          <input
+            v-model="aiDraft.model"
+            type="text"
+            list="ai-models"
+            spellcheck="false"
+            :placeholder="modelPlaceholder"
+          />
+          <datalist id="ai-models">
+            <option v-for="model in aiModelList" :key="model" :value="model" />
+          </datalist>
+          <button type="button" :disabled="busy" @click="loadModels">Load models</button>
+          <button type="submit" :disabled="busy">Save model</button>
+        </form>
+      </template>
+      <p v-if="aiMessage" class="hint-text">{{ aiMessage }}</p>
     </section>
 
     <section v-if="snapshot" id="section-destinations">
@@ -520,11 +727,11 @@
             <span>Triggers</span>
             <input v-model="draft.triggersText" type="text" placeholder="wiki, w" required />
           </label>
-          <label class="field">
+          <label v-if="destination.kind !== 'ai'" class="field">
             <span>URL template</span>
             <input v-model="draft.urlTemplate" type="url" required />
           </label>
-          <label class="field">
+          <label v-if="destination.kind !== 'ai'" class="field">
             <span>Suggestions</span>
             <select v-model="draft.suggest">
               <option value="none">None</option>

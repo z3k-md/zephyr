@@ -11,6 +11,23 @@ pub struct Destination {
     pub pinned: bool,
     pub builtin: bool,
     pub disabled: bool,
+    /// Web destinations open a URL; the AI destination answers in the bar.
+    #[serde(default)]
+    pub kind: DestinationKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DestinationKind {
+    #[default]
+    Web,
+    Ai,
+}
+
+impl Destination {
+    pub fn is_ai(&self) -> bool {
+        self.kind == DestinationKind::Ai
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,6 +49,10 @@ pub fn builtins() -> Vec<Destination> {
             "https://www.google.com/search?q={query}",
             SuggestKind::Google,
         ),
+        Destination {
+            kind: DestinationKind::Ai,
+            ..dest("ai", "Ask AI", &["ai"], "", SuggestKind::None)
+        },
         dest(
             "chatgpt",
             "ChatGPT",
@@ -103,6 +124,7 @@ fn dest(
         pinned: true,
         builtin: true,
         disabled: false,
+        kind: DestinationKind::Web,
     }
 }
 

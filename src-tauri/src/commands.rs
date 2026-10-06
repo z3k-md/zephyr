@@ -1,9 +1,11 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_opener::OpenerExt;
 
+use crate::ai::{self, AiEvent, AiSettings};
 use crate::apps::{self, Catalog};
 use crate::destination::Destination;
 use crate::files;
@@ -260,6 +262,21 @@ pub async fn dispatch(
         Decision::Launch { app_id } => launch(&app, &state, &app_id),
         Decision::OpenSetting { setting_id } => open_setting_page(&app, &setting_id),
         Decision::OpenFile { path } => open_file_path(&app, &state, &path),
+        Decision::Ask {
+            destination_id,
+            query,
+        } => {
+            match state.update(|persisted| {
+                persisted.record(&query, &destination_id, now_secs());
+                Ok(())
+            }) {
+                Ok(recorded) => {
+                    let _ = publish(&app, recorded);
+                }
+                Err(err) => log::error!("couldn't record history: {err}"),
+            }
+            Ok(DispatchOutcome::Ask { query })
+        }
         Decision::Arm { destination_id } => Ok(DispatchOutcome::Armed { destination_id }),
         Decision::Palette => Ok(DispatchOutcome::Palette),
         Decision::UnknownBang { trigger } => Ok(DispatchOutcome::UnknownBang { trigger }),
@@ -395,4 +412,60 @@ pub fn apply_autostart(app: &AppHandle, enabled: bool) -> Result<(), String> {
             .map_err(|err| format!("Couldn't turn off startup: {err}"))?;
     }
     Ok(())
+}
+
+/// Streams an answer into the bar. Resolves when the answer ends; a newer ask or hiding the
+/// bar stops it early.
+#[tauri::command]
+pub async fn ai_ask(
+    state: State<'_, AppState>,
+    question: String,
+    on_event: Channel<AiEvent>,
+) -> Result<(), String> {
+    let settings = state.snapshot()?.ai;
+    ai::ask(&settings, &question, |event| {
+        let _ = on_event.send(event);
+    })
+    .await;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn ai_cancel() {
+    ai::cancel();
+}
+
+#[tauri::command]
+pub fn save_ai_settings(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    settings: AiSettings,
+) -> Result<Persisted, String> {
+    let snapshot = state.update(|persisted| persisted.set_ai(settings))?;
+    publish(&app, snapshot)
+}
+
+#[tauri::command]
+pub fn ai_presets() -> &'static [ai::Preset] {
+    ai::PRESETS
+}
+
+#[tauri::command]
+pub fn ai_set_key(provider: String, key: Option<String>) -> Result<(), String> {
+    ai::set_key(&provider, key.as_deref())
+}
+
+#[tauri::command]
+pub fn ai_has_key(provider: String) -> bool {
+    ai::has_key(&provider)
+}
+
+#[tauri::command]
+pub async fn ai_models(settings: AiSettings) -> Result<Vec<String>, String> {
+    ai::models_for(&settings).await
+}
+
+#[tauri::command]
+pub async fn ai_detect_local() -> Vec<ai::LocalServer> {
+    ai::detect_local().await
 }

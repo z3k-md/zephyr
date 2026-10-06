@@ -8,6 +8,8 @@ Typing the start of an app's name (`chr`, `excel`, or initials like `vsc`) selec
 
 `!set` searches settings: Windows Settings pages and Control Panel tools, macOS System Settings panes, and Zephyr's own settings (`!set dark mode`, `!set bluetooth`, `display !set`, `!set zephyr shortcut`). Enter opens the top match. Without `!set`, a clear match shows as at most two rows under the other results, and Enter never picks one unless you arrow to it.
 
+**Ask AI** answers in the bar. Press Tab to arm it, or type `!ai` before a question; the answer streams in and Enter copies it. Pick the provider in Settings > AI: a local Ollama or LM Studio server (found automatically), or your own Anthropic, OpenAI, OpenRouter or custom key. Keys are kept in the system keychain, and requests go straight from Zephyr to the provider.
+
 `!f` (or `!file`, `!files`) searches file and folder names under your home folder (`!f budget`, `!f taxes 2025 return`). Enter opens the top match with its default app, `Ctrl+Enter` shows it in Explorer or Finder, and `Ctrl+Shift+C` copies its path. Hidden folders, `.gitignore`d files, `node_modules` and build caches are skipped; Settings > Files picks other folders or leaves some out. Without `!f`, only files you've opened from Zephyr before can appear, sharing the same two rows as settings.
 
 ## Install
@@ -28,7 +30,7 @@ bun dev
 
 ## Release
 
-Every push to `main` runs the checks on Windows and macOS. If [semantic-release](https://semantic-release.gitbook.io/) finds a `feat:` or `fix:` commit since the last tag, it bumps the version, tags it, and creates a draft GitHub release. Windows and macOS (universal) installers are then built, signed for the updater, and uploaded. A final job writes `latest.json` and publishes the release, and installed copies pick it up from there.
+Releases are cut on demand: run the **Release** workflow from the Actions tab. It runs the checks on Windows and macOS, and if [semantic-release](https://semantic-release.gitbook.io/) finds a `feat:` or `fix:` commit since the last tag, it bumps the version, tags it, and creates a draft GitHub release. Windows and macOS (universal) installers are then built, signed for the updater, and uploaded. A final job writes `latest.json` and publishes the release, and installed copies pick it up from there.
 
 Repository secrets:
 

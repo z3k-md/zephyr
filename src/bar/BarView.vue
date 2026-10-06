@@ -2,6 +2,8 @@
   import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import {
+    aiAsk,
+    aiCancel,
     dispatch,
     errorMessage,
     formatShortcut,
@@ -28,6 +30,19 @@
   const selected = ref(-1);
   const loadError = ref<string | null>(null);
 
+  interface Answer {
+    question: string;
+    input: string;
+    text: string;
+    status: 'waiting' | 'streaming' | 'done' | 'error';
+    error: string | null;
+    source: string | null;
+  }
+
+  const answer = ref<Answer | null>(null);
+  const answerEl = ref<HTMLElement | null>(null);
+  let answerGeneration = 0;
+
   let generation = 0;
   let remoteApplied = false;
   let userMoved = false;
@@ -49,7 +64,13 @@
     selected.value >= 0 ? items.value[selected.value] : undefined
   );
 
+  // The answer stays up until the text changes; Enter then copies it instead of asking again.
+  const answerReady = computed(
+    () => answer.value?.status === 'done' && query.value === answer.value.input
+  );
+
   const enterLabel = computed(() => {
+    if (answerReady.value) return 'copy answer';
     const item = selectedItem.value;
     if (item?.kind === 'app' || item?.kind === 'setting' || item?.kind === 'file') {
       return `Open ${item.label}`;
@@ -116,6 +137,7 @@
   });
 
   watch(query, () => {
+    if (answer.value && query.value !== answer.value.input) clearAnswer();
     selected.value = -1;
     userMoved = false;
     notice.value = null;
@@ -129,6 +151,7 @@
   });
 
   function resetForSummon() {
+    clearAnswer();
     query.value = '';
     selected.value = -1;
     notice.value = null;
@@ -231,7 +254,77 @@
     if (event.key === 'Enter') {
       event.preventDefault();
       if (event.repeat) return;
+      if (answer.value && query.value === answer.value.input) {
+        if (answerReady.value) void copyAnswer();
+        return;
+      }
       void accept();
+    }
+  }
+
+  function clearAnswer() {
+    if (!answer.value) return;
+    answerGeneration++;
+    answer.value = null;
+    void aiCancel().catch(() => undefined);
+  }
+
+  async function startAnswer(question: string) {
+    const generation = ++answerGeneration;
+    if (!query.value.trim()) query.value = question;
+    answer.value = {
+      question,
+      input: query.value,
+      text: '',
+      status: 'waiting',
+      error: null,
+      source: null,
+    };
+    selected.value = -1;
+    notice.value = null;
+    const current = () => (generation === answerGeneration ? answer.value : null);
+    try {
+      await aiAsk(question, (event) => {
+        const target = current();
+        if (!target) return;
+        if (event.kind === 'started') {
+          target.source = `${event.model} · ${event.provider}`;
+        } else if (event.kind === 'delta') {
+          target.text += event.text;
+          target.status = 'streaming';
+          void followAnswer();
+        } else if (event.kind === 'done') {
+          target.status = 'done';
+        } else {
+          target.status = 'error';
+          target.error = event.message;
+        }
+      });
+    } catch (error) {
+      const target = current();
+      if (target) {
+        target.status = 'error';
+        target.error = errorMessage(error);
+      }
+    }
+  }
+
+  // Keep the newest text in view unless the user scrolled up to read.
+  async function followAnswer() {
+    const el = answerEl.value;
+    const pinned = !el || el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+    await nextTick();
+    if (pinned && answerEl.value) answerEl.value.scrollTop = answerEl.value.scrollHeight;
+  }
+
+  async function copyAnswer() {
+    const text = answer.value?.text.trim();
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      await hideBar();
+    } catch {
+      notice.value = "Couldn't copy the answer";
     }
   }
 
@@ -400,6 +493,10 @@
         notice.value = null;
         return;
       }
+      if (outcome.kind === 'ask') {
+        void startAnswer(outcome.query);
+        return;
+      }
       if (outcome.kind === 'armed') {
         armedId.value = outcome.destinationId;
         query.value = '';
@@ -461,7 +558,17 @@
 
     <p v-if="loadError || notice" class="notice">{{ loadError || notice }}</p>
 
-    <ul v-if="items.length" id="results" class="results" role="listbox">
+    <section v-if="answer" class="answer" aria-live="polite">
+      <div ref="answerEl" class="answer-body">
+        <p v-if="answer.status === 'waiting'" class="answer-wait">Thinking…</p>
+        <!-- prettier-ignore -->
+        <div v-else-if="answer.text" class="answer-text">{{ answer.text }}<span v-if="answer.status === 'streaming'" class="caret" /></div>
+        <p v-if="answer.error" class="answer-error">{{ answer.error }}</p>
+      </div>
+      <p v-if="answer.source" class="answer-source">{{ answer.source }}</p>
+    </section>
+
+    <ul v-else-if="items.length" id="results" class="results" role="listbox">
       <li
         v-for="(item, index) in items"
         :id="`result-${index}`"

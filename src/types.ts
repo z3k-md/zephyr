@@ -9,7 +9,39 @@ export interface Destination {
   pinned: boolean;
   builtin: boolean;
   disabled: boolean;
+  kind?: 'web' | 'ai';
 }
+
+export type AiApi = 'openai' | 'anthropic';
+
+export interface AiSettings {
+  provider: string;
+  model: string;
+  baseUrl: string;
+  api: AiApi;
+}
+
+export interface AiPreset {
+  id: string;
+  name: string;
+  api: AiApi;
+  baseUrl: string;
+  needsKey: boolean;
+  local: boolean;
+  defaultModel: string;
+}
+
+export interface LocalServer {
+  provider: string;
+  name: string;
+  models: string[];
+}
+
+export type AiEvent =
+  | { kind: 'started'; provider: string; model: string }
+  | { kind: 'delta'; text: string }
+  | { kind: 'done' }
+  | { kind: 'error'; message: string };
 
 export interface HistoryEntry {
   query: string;
@@ -30,6 +62,7 @@ export interface Snapshot {
   fileRoots: string[] | null;
   fileExcludes: string[];
   fileOpens: LaunchEntry[];
+  ai: AiSettings;
 }
 
 export interface FileIndexStatus {
@@ -68,6 +101,7 @@ export type DispatchOutcome =
   | { kind: 'launched'; appId: string }
   | { kind: 'settingOpened'; settingId: string }
   | { kind: 'fileOpened'; path: string }
+  | { kind: 'ask'; query: string }
   | { kind: 'palette' }
   | { kind: 'unknownBang'; trigger: string }
   | { kind: 'empty' };
