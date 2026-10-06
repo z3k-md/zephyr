@@ -460,6 +460,52 @@ section > button {
   font-size: 13px;
 }
 
+.field.inline {
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.field.inline input {
+  flex: 1;
+  min-width: 220px;
+}
+
+.folders {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 8px;
+}
+
+.folders li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--stroke);
+  font-size: 13px;
+}
+
+.folders .path {
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, 'SF Mono', 'Cascadia Mono', Consolas, monospace;
+  font-size: 12px;
+}
+
+.folders button {
+  border: 1px solid var(--stroke);
+  background: var(--chip);
+  border-radius: 6px;
+  padding: 3px 9px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.folders button:hover {
+  background: var(--chip-hover);
+}
+
 .status {
   margin: 12px 0 0;
   font-size: 13px;
