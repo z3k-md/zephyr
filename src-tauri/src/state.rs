@@ -5,6 +5,7 @@ use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
+use crate::ai::AiSettings;
 use crate::apps::{self, LaunchEntry};
 use crate::destination::{self, Destination};
 use crate::history::{self, HistoryEntry};
@@ -31,6 +32,8 @@ pub struct Persisted {
     pub file_excludes: Vec<String>,
     /// Files opened from the bar, keyed by full path, for ranking and the empty `!f` list.
     pub file_opens: Vec<LaunchEntry>,
+    /// The provider and model behind the Ask AI destination; keys are in the keychain.
+    pub ai: AiSettings,
 }
 
 const SCHEMA_VERSION: u32 = 2;
@@ -64,11 +67,14 @@ impl Persisted {
             file_roots: None,
             file_excludes: Vec::new(),
             file_opens: Vec::new(),
+            ai: AiSettings::default(),
         }
     }
 
+    /// Adds built-ins a newer version introduced, at their built-in position, so a new
+    /// primary destination lands in the pinned strip rather than after every custom one.
     pub fn merge_builtins(&mut self) {
-        for builtin in destination::builtins() {
+        for (position, builtin) in destination::builtins().into_iter().enumerate() {
             if self
                 .destinations
                 .iter()
@@ -76,8 +82,14 @@ impl Persisted {
             {
                 continue;
             }
-            self.destinations.push(builtin);
+            let at = position.min(self.destinations.len());
+            self.destinations.insert(at, builtin);
         }
+    }
+
+    pub fn set_ai(&mut self, settings: AiSettings) -> Result<(), String> {
+        self.ai = settings.normalized()?;
+        Ok(())
     }
 
     pub fn record(&mut self, query: &str, destination_id: &str, now: i64) {
@@ -151,11 +163,15 @@ impl Persisted {
             existing.pinned = incoming.pinned;
             existing.disabled = incoming.disabled;
             existing.builtin = builtin;
+            if existing.is_ai() {
+                existing.url_template.clear();
+            }
         } else {
             if incoming.builtin || !incoming.id.starts_with("custom-") {
                 return Err("New destinations need a custom id".into());
             }
             incoming.builtin = false;
+            incoming.kind = destination::DestinationKind::Web;
             next.destinations.push(incoming);
         }
         next.ensure_invariants()?;
@@ -234,7 +250,9 @@ impl Persisted {
             if destination.triggers.is_empty() {
                 return Err(format!("{} needs a trigger", destination.name));
             }
-            destination::build_url(&destination.url_template, "probe")?;
+            if !destination.is_ai() {
+                destination::build_url(&destination.url_template, "probe")?;
+            }
             if destination.disabled {
                 continue;
             }
@@ -379,6 +397,7 @@ mod tests {
             pinned: true,
             builtin: false,
             disabled: false,
+            kind: Default::default(),
         }
     }
 

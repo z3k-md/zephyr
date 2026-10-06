@@ -66,6 +66,7 @@ pub fn show_bar(app: &AppHandle) {
 }
 
 pub fn hide_bar(app: &AppHandle) {
+    crate::ai::cancel();
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.hide();
     }

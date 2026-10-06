@@ -30,6 +30,7 @@ log = "0.4"
 flexi_logger = "0.31"
 ignore = "0.4"
 notify = "8"
+keyring = { version = "3", features = ["apple-native", "windows-native"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

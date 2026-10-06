@@ -1,8 +1,12 @@
-import { invoke } from '@tauri-apps/api/core';
+import { Channel, invoke } from '@tauri-apps/api/core';
 import type {
+  AiEvent,
+  AiPreset,
+  AiSettings,
   Destination,
   DispatchOutcome,
   FileIndexStatus,
+  LocalServer,
   Snapshot,
   SuggestResponse,
 } from './types';
@@ -101,6 +105,40 @@ export function openSettings(): Promise<void> {
 
 export function checkForUpdates(): Promise<string> {
   return invoke<string>('check_for_updates');
+}
+
+export function aiAsk(question: string, onEvent: (event: AiEvent) => void): Promise<void> {
+  const channel = new Channel<AiEvent>();
+  channel.onmessage = onEvent;
+  return invoke('ai_ask', { question, onEvent: channel });
+}
+
+export function aiCancel(): Promise<void> {
+  return invoke('ai_cancel');
+}
+
+export function saveAiSettings(settings: AiSettings): Promise<Snapshot> {
+  return invoke<Snapshot>('save_ai_settings', { settings });
+}
+
+export function aiPresets(): Promise<AiPreset[]> {
+  return invoke<AiPreset[]>('ai_presets');
+}
+
+export function aiSetKey(provider: string, key: string | null): Promise<void> {
+  return invoke('ai_set_key', { provider, key });
+}
+
+export function aiHasKey(provider: string): Promise<boolean> {
+  return invoke<boolean>('ai_has_key', { provider });
+}
+
+export function aiModels(settings: AiSettings): Promise<string[]> {
+  return invoke<string[]>('ai_models', { settings });
+}
+
+export function aiDetectLocal(): Promise<LocalServer[]> {
+  return invoke<LocalServer[]>('ai_detect_local');
 }
 
 export function errorMessage(error: unknown): string {

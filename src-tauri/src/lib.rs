@@ -1,3 +1,4 @@
+mod ai;
 mod apps;
 mod commands;
 mod destination;
@@ -103,6 +104,14 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_snapshot,
+            commands::ai_ask,
+            commands::ai_cancel,
+            commands::save_ai_settings,
+            commands::ai_presets,
+            commands::ai_set_key,
+            commands::ai_has_key,
+            commands::ai_models,
+            commands::ai_detect_local,
             commands::suggest,
             commands::dispatch,
             commands::launch_app,

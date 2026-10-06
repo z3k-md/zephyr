@@ -30,6 +30,10 @@ pub enum Decision {
     OpenFile {
         path: String,
     },
+    Ask {
+        destination_id: String,
+        query: String,
+    },
     Palette,
     UnknownBang {
         trigger: String,
@@ -52,6 +56,7 @@ pub enum DispatchOutcome {
     Launched { app_id: String },
     SettingOpened { setting_id: String },
     FileOpened { path: String },
+    Ask { query: String },
     Palette,
     UnknownBang { trigger: String },
     Empty,
@@ -234,6 +239,12 @@ fn open_search(destination: &Destination, query: &str) -> Decision {
     if query.is_empty() {
         return Decision::Arm {
             destination_id: destination.id.clone(),
+        };
+    }
+    if destination.is_ai() {
+        return Decision::Ask {
+            destination_id: destination.id.clone(),
+            query: query.to_string(),
         };
     }
     match destination::build_url(&destination.url_template, query) {

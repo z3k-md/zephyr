@@ -232,6 +232,20 @@ const ZEPHYR: &[Setting] = &[
         ],
     ),
     zephyr(
+        "zephyr.ai",
+        "Zephyr AI",
+        "ai",
+        &[
+            "ai provider",
+            "api key",
+            "ollama",
+            "lm studio",
+            "anthropic",
+            "openai",
+            "model",
+        ],
+    ),
+    zephyr(
         "zephyr.history",
         "Zephyr Search History",
         "history",
@@ -415,7 +429,7 @@ mod tests {
         for setting in ZEPHYR {
             assert!(matches!(
                 setting.target,
-                Target::Zephyr("general" | "destinations" | "files" | "history")
+                Target::Zephyr("general" | "ai" | "destinations" | "files" | "history")
             ));
         }
         for setting in WINDOWS {
