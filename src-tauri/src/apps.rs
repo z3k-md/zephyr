@@ -32,13 +32,16 @@ pub fn is_scope(trigger: &str) -> bool {
     SCOPE_TRIGGERS.contains(&trigger)
 }
 
-/// What local matching needs to know, borrowed from the app index, the settings catalog and
-/// saved state.
+/// What local matching needs to know, borrowed from the app index, the settings catalog, the
+/// file index and saved state.
 #[derive(Clone, Copy)]
 pub struct Catalog<'a> {
     pub apps: &'a [App],
     pub settings: &'a [crate::settings::Setting],
+    pub files: &'a crate::files::FileIndex,
     pub launches: &'a [LaunchEntry],
+    /// Files opened through Zephyr, keyed by full path.
+    pub file_opens: &'a [LaunchEntry],
     pub overrides: &'a [String],
     pub now: i64,
 }
@@ -59,6 +62,10 @@ impl<'a> Catalog<'a> {
 
     pub fn recent(&self, limit: usize) -> Vec<&'a App> {
         recent(self.apps, self.launches, self.now, limit)
+    }
+
+    pub fn files(&self, query: &str, limit: usize) -> Vec<crate::files::Hit> {
+        self.files.search(query, self.file_opens, self.now, limit)
     }
 }
 
@@ -124,7 +131,7 @@ fn is_subsequence(needle: &str, haystack: &str) -> bool {
         .all(|ch| rest.any(|candidate| candidate == ch))
 }
 
-fn frecency(launches: &[LaunchEntry], app_id: &str, now: i64) -> f64 {
+pub(crate) fn frecency(launches: &[LaunchEntry], app_id: &str, now: i64) -> f64 {
     launches
         .iter()
         .find(|entry| entry.app_id == app_id)

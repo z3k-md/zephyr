@@ -8,8 +8,10 @@
     getSnapshot,
     hideBar,
     launchApp,
+    openFile,
     openSetting,
     openSettings,
+    revealFile,
     setBarHeight,
     suggest,
   } from '../api';
@@ -43,16 +45,24 @@
     snapshot.value?.destinations.find((destination) => destination.id === armedId.value)
   );
 
+  const selectedItem = computed(() =>
+    selected.value >= 0 ? items.value[selected.value] : undefined
+  );
+
   const enterLabel = computed(() => {
-    const item = selected.value >= 0 ? items.value[selected.value] : undefined;
-    if (item?.kind === 'app' || item?.kind === 'setting') return `Open ${item.label}`;
+    const item = selectedItem.value;
+    if (item?.kind === 'app' || item?.kind === 'setting' || item?.kind === 'file') {
+      return `Open ${item.label}`;
+    }
     return armed.value?.name ?? 'search';
   });
+
+  const isMac = navigator.userAgent.includes('Mac');
 
   const shortcutLabel = computed(() =>
     snapshot.value
       ? formatShortcut(snapshot.value.summonShortcut)
-      : formatShortcut(navigator.userAgent.includes('Mac') ? 'command+space' : 'alt+space')
+      : formatShortcut(isMac ? 'command+space' : 'alt+space')
   );
 
   onMounted(async () => {
@@ -203,6 +213,21 @@
       return;
     }
 
+    // File actions: Ctrl+Enter shows the file in its folder, Ctrl+Shift+C copies its path.
+    const file = selectedItem.value?.kind === 'file' ? selectedItem.value.path : undefined;
+    const modifier = event.ctrlKey || event.metaKey;
+    if (file && modifier && !event.altKey && event.key === 'Enter') {
+      event.preventDefault();
+      if (event.repeat) return;
+      void reveal(file);
+      return;
+    }
+    if (file && modifier && event.shiftKey && !event.altKey && event.code === 'KeyC') {
+      event.preventDefault();
+      void copyPath(file);
+      return;
+    }
+
     if (event.key === 'Enter') {
       event.preventDefault();
       if (event.repeat) return;
@@ -270,6 +295,10 @@
         await openPage(item.settingId);
         return;
       }
+      if (item.kind === 'file' && item.path) {
+        await openPath(item.path);
+        return;
+      }
       if (item.kind === 'destination') {
         armedId.value = item.destinationId;
         query.value = '';
@@ -289,6 +318,10 @@
     }
     if (item.kind === 'setting' && item.settingId) {
       void openPage(item.settingId);
+      return;
+    }
+    if (item.kind === 'file' && item.path) {
+      void openPath(item.path);
       return;
     }
     if (item.kind === 'destination') {
@@ -322,13 +355,45 @@
     }
   }
 
+  async function openPath(path: string) {
+    try {
+      await openFile(path);
+      query.value = '';
+      selected.value = -1;
+      notice.value = null;
+    } catch (error) {
+      notice.value = errorMessage(error);
+    }
+  }
+
+  async function reveal(path: string) {
+    try {
+      await revealFile(path);
+      query.value = '';
+      selected.value = -1;
+      notice.value = null;
+    } catch (error) {
+      notice.value = errorMessage(error);
+    }
+  }
+
+  async function copyPath(path: string) {
+    try {
+      await navigator.clipboard.writeText(path);
+      notice.value = 'Copied the path';
+    } catch {
+      notice.value = "Couldn't copy the path";
+    }
+  }
+
   async function run(text: string, destinationId: string, interpret: boolean) {
     try {
       const outcome = await dispatch(text, destinationId, interpret);
       if (
         outcome.kind === 'opened' ||
         outcome.kind === 'launched' ||
-        outcome.kind === 'settingOpened'
+        outcome.kind === 'settingOpened' ||
+        outcome.kind === 'fileOpened'
       ) {
         query.value = '';
         selected.value = -1;
@@ -400,7 +465,7 @@
       <li
         v-for="(item, index) in items"
         :id="`result-${index}`"
-        :key="`${item.kind}-${item.destinationId}-${item.label}`"
+        :key="`${item.kind}-${item.destinationId}-${item.path ?? item.label}`"
         role="option"
         :aria-selected="index === selected"
         class="item"
@@ -419,7 +484,12 @@
     </p>
 
     <footer class="footer">
-      <span>Enter {{ enterLabel }}</span>
+      <span>
+        Enter {{ enterLabel }}
+        <template v-if="selectedItem?.kind === 'file'">
+          · Ctrl+Enter show in {{ isMac ? 'Finder' : 'Explorer' }} · Ctrl+Shift+C copy path
+        </template>
+      </span>
       <span>{{ shortcutLabel }}</span>
     </footer>
   </div>
