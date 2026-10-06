@@ -1,6 +1,7 @@
 mod apps;
 mod commands;
 mod destination;
+mod files;
 mod history;
 mod logger;
 mod query;
@@ -89,6 +90,10 @@ pub fn run() {
             log::info!("Zephyr is running");
 
             apps::AppIndex::refresh_if_stale(apps::index());
+            files::index().configure(
+                snapshot.file_config(),
+                commands::file_cache_path(app.handle()),
+            );
             updater::spawn_background_checks(app.handle().clone());
 
             Ok(())
@@ -99,6 +104,11 @@ pub fn run() {
             commands::dispatch,
             commands::launch_app,
             commands::open_setting,
+            commands::open_file,
+            commands::reveal_file,
+            commands::file_index_status,
+            commands::rebuild_file_index,
+            commands::save_file_folders,
             commands::save_settings,
             commands::save_destination,
             commands::remove_destination,

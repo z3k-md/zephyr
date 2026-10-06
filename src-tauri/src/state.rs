@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 use crate::apps::{self, LaunchEntry};
 use crate::destination::{self, Destination};
 use crate::history::{self, HistoryEntry};
-use crate::settings;
 use crate::shortcut::{DEFAULT_SHORTCUT, LEGACY_DEFAULT_SHORTCUT};
+use crate::{files, settings};
 
 /// A field missing from the file falls back to its default instead of discarding every setting.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,6 +25,12 @@ pub struct Persisted {
     pub launches: Vec<LaunchEntry>,
     /// Lowercased texts the user sent to the web even though they matched an app.
     pub app_overrides: Vec<String>,
+    /// Folders file search indexes; none saved means the home folder.
+    pub file_roots: Option<Vec<String>>,
+    /// Folders left out of file search.
+    pub file_excludes: Vec<String>,
+    /// Files opened from the bar, keyed by full path, for ranking and the empty `!f` list.
+    pub file_opens: Vec<LaunchEntry>,
 }
 
 const SCHEMA_VERSION: u32 = 2;
@@ -55,6 +61,9 @@ impl Persisted {
             history: Vec::new(),
             launches: Vec::new(),
             app_overrides: Vec::new(),
+            file_roots: None,
+            file_excludes: Vec::new(),
+            file_opens: Vec::new(),
         }
     }
 
@@ -77,6 +86,27 @@ impl Persisted {
 
     pub fn record_launch(&mut self, app_id: &str, now: i64) {
         apps::record_launch(&mut self.launches, app_id, now);
+    }
+
+    pub fn record_file_open(&mut self, path: &str, now: i64) {
+        apps::record_launch(&mut self.file_opens, path, now);
+    }
+
+    pub fn file_config(&self) -> files::Config {
+        files::Config::resolve(self.file_roots.as_deref(), &self.file_excludes)
+    }
+
+    /// Saves file search folders; `None` roots go back to the home folder.
+    pub fn set_file_folders(
+        &mut self,
+        roots: Option<Vec<String>>,
+        excludes: Vec<String>,
+    ) -> Result<(), String> {
+        self.file_roots = roots
+            .map(|roots| files::normalize_folders(&roots))
+            .transpose()?;
+        self.file_excludes = files::normalize_folders(&excludes)?;
+        Ok(())
     }
 
     pub fn record_app_override(&mut self, query: &str) {
@@ -281,6 +311,9 @@ fn normalize_triggers(triggers: &[String]) -> Result<Vec<String>, String> {
         }
         if settings::is_scope(&trigger) {
             return Err(format!("!{trigger} is reserved for finding settings"));
+        }
+        if files::is_scope(&trigger) {
+            return Err(format!("!{trigger} is reserved for finding files"));
         }
         if !normalized.contains(&trigger) {
             normalized.push(trigger);
