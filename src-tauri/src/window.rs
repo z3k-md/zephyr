@@ -123,6 +123,27 @@ fn focus_on_main_thread(app: &AppHandle, window: tauri::WebviewWindow) {
     }
 }
 
+/// A normal macOS window stays on the Space it was first shown on, and a full-screen Space
+/// only admits windows marked as auxiliary to it, so the bar never appeared over a
+/// full-screen app. Joining every Space as a full-screen auxiliary, above the menu bar,
+/// lets it open over whatever is in front without switching Spaces.
+#[cfg(target_os = "macos")]
+pub fn float_over_full_screen(window: &tauri::WebviewWindow) -> Result<(), String> {
+    use objc2_app_kit::{NSStatusWindowLevel, NSWindow, NSWindowCollectionBehavior};
+
+    let ns_window = window.ns_window().map_err(|err| err.to_string())?;
+    // SAFETY: tauri hands back the live NSWindow behind this webview window, and setup
+    // runs on the main thread.
+    let ns_window = unsafe { &*ns_window.cast::<NSWindow>() };
+    ns_window.setCollectionBehavior(
+        NSWindowCollectionBehavior::CanJoinAllSpaces
+            | NSWindowCollectionBehavior::FullScreenAuxiliary
+            | NSWindowCollectionBehavior::IgnoresCycle,
+    );
+    ns_window.setLevel(NSStatusWindowLevel);
+    Ok(())
+}
+
 fn place_bar(window: &tauri::WebviewWindow) -> Result<(), String> {
     let cursor = window.cursor_position().map_err(|err| err.to_string())?;
     let monitors = window.available_monitors().map_err(|err| err.to_string())?;

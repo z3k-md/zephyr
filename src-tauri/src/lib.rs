@@ -67,6 +67,11 @@ pub fn run() {
             }
 
             if let Some(main_window) = app.get_webview_window("main") {
+                #[cfg(target_os = "macos")]
+                if let Err(err) = window::float_over_full_screen(&main_window) {
+                    log::error!("couldn't let the bar float over full-screen apps: {err}");
+                }
+
                 let watched = main_window.clone();
                 main_window.on_window_event(move |event| match event {
                     WindowEvent::CloseRequested { api, .. } => {
