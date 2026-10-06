@@ -1,4 +1,4 @@
-export type SuggestKind = 'none' | 'google' | 'youtube' | 'wikipedia' | 'pubmed';
+export type SuggestKind = 'none' | 'google' | 'youtube' | 'wikipedia' | 'pubmed' | 'custom';
 
 export interface Destination {
   id: string;
@@ -6,6 +6,8 @@ export interface Destination {
   triggers: string[];
   urlTemplate: string;
   suggest: SuggestKind;
+  suggestUrl?: string;
+  suggestPath?: string;
   pinned: boolean;
   builtin: boolean;
   disabled: boolean;
@@ -81,7 +83,7 @@ export interface Suggestion {
   label: string;
   query: string;
   destinationId: string;
-  kind: 'history' | 'remote' | 'destination' | 'app' | 'setting' | 'file';
+  kind: 'history' | 'remote' | 'destination' | 'app' | 'setting' | 'file' | 'answer';
   hint: string;
   appId?: string;
   settingId?: string;

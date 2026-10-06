@@ -239,9 +239,15 @@ pub async fn dispatch(
             query,
             url,
         } => {
-            app.opener()
-                .open_url(&url, None::<&str>)
-                .map_err(|err| format!("Couldn't open the browser: {err}"))?;
+            if crate::template::is_path(&url) {
+                app.opener()
+                    .open_path(&url, None::<&str>)
+                    .map_err(|err| format!("Couldn't open {url}: {err}"))?;
+            } else {
+                app.opener()
+                    .open_url(&url, None::<&str>)
+                    .map_err(|err| format!("Couldn't open it: {err}"))?;
+            }
             // The browser already has the search, so a failed history write is not the user's error.
             match state.update(|persisted| {
                 persisted.record(&query, &destination_id, now_secs());
@@ -468,4 +474,46 @@ pub async fn ai_models(settings: AiSettings) -> Result<Vec<String>, String> {
 #[tauri::command]
 pub async fn ai_detect_local() -> Vec<ai::LocalServer> {
     ai::detect_local().await
+}
+
+/// The link a search would open, for the action panel's Copy link.
+#[tauri::command]
+pub fn resolve_url(
+    state: State<'_, AppState>,
+    query: String,
+    destination_id: String,
+) -> Result<String, String> {
+    let snapshot = state.snapshot()?;
+    let destination = crate::destination::enabled(&snapshot.destinations, &destination_id)
+        .filter(|destination| !destination.is_ai())
+        .ok_or("That destination has no link")?;
+    crate::destination::build_url(&destination.url_template, &query::parse_input(&query).query)
+}
+
+/// Every web destination as JSON, for backup or sharing.
+#[tauri::command]
+pub fn export_destinations(state: State<'_, AppState>) -> Result<String, String> {
+    let snapshot = state.snapshot()?;
+    let web: Vec<&Destination> = snapshot
+        .destinations
+        .iter()
+        .filter(|destination| !destination.is_ai())
+        .collect();
+    serde_json::to_string_pretty(&web).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn import_destinations(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    json: String,
+) -> Result<Persisted, String> {
+    let value: serde_json::Value =
+        serde_json::from_str(json.trim()).map_err(|err| format!("That isn't valid JSON: {err}"))?;
+    // Accept a bare list, or an object with a destinations list such as a state file.
+    let list = value.get("destinations").cloned().unwrap_or(value);
+    let incoming: Vec<crate::state::ImportedDestination> = serde_json::from_value(list)
+        .map_err(|err| format!("That JSON isn't a list of destinations: {err}"))?;
+    let snapshot = state.update(|persisted| persisted.import(incoming).map(|_| ()))?;
+    publish(&app, snapshot)
 }

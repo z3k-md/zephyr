@@ -10,7 +10,9 @@
     checkForUpdates,
     clearHistory,
     errorMessage,
+    exportDestinations,
     fileIndexStatus,
+    importDestinations,
     formatShortcut,
     getSnapshot,
     moveDestination,
@@ -46,6 +48,8 @@
     triggersText: '',
     urlTemplate: '',
     suggest: 'none' as SuggestKind,
+    suggestUrl: '',
+    suggestPath: '',
   });
 
   const added = ref({
@@ -53,7 +57,12 @@
     triggersText: '',
     urlTemplate: 'https://example.com/search?q={query}',
     suggest: 'none' as SuggestKind,
+    suggestUrl: '',
+    suggestPath: '',
   });
+
+  const importText = ref('');
+  const importOpen = ref(false);
 
   const fileStatus = ref<FileIndexStatus | null>(null);
   const newRoot = ref('');
@@ -257,6 +266,8 @@
       triggersText: destination.triggers.join(', '),
       urlTemplate: destination.urlTemplate,
       suggest: destination.suggest,
+      suggestUrl: destination.suggestUrl ?? '',
+      suggestPath: destination.suggestPath ?? '',
     };
     formError.value = null;
   }
@@ -271,6 +282,8 @@
           triggers: splitTriggers(draft.value.triggersText),
           urlTemplate: draft.value.urlTemplate,
           suggest: draft.value.suggest,
+          suggestUrl: draft.value.suggestUrl,
+          suggestPath: draft.value.suggestPath,
         })
       );
       editingId.value = null;
@@ -324,6 +337,8 @@
           triggers: splitTriggers(added.value.triggersText),
           urlTemplate: added.value.urlTemplate,
           suggest: added.value.suggest,
+          suggestUrl: added.value.suggestUrl,
+          suggestPath: added.value.suggestPath,
           pinned: true,
           builtin: false,
           disabled: false,
@@ -334,8 +349,35 @@
         triggersText: '',
         urlTemplate: 'https://example.com/search?q={query}',
         suggest: 'none',
+        suggestUrl: '',
+        suggestPath: '',
       };
       status.value = 'Destination added.';
+    } catch (error) {
+      formError.value = errorMessage(error);
+    } finally {
+      busy.value = false;
+    }
+  }
+
+  async function copyDestinations() {
+    try {
+      await navigator.clipboard.writeText(await exportDestinations());
+      status.value = 'Copied your destinations as JSON.';
+    } catch (error) {
+      formError.value = errorMessage(error);
+    }
+  }
+
+  async function runImport() {
+    busy.value = true;
+    try {
+      const before = snapshot.value?.destinations.length ?? 0;
+      apply(await importDestinations(importText.value));
+      const added = (snapshot.value?.destinations.length ?? 0) - before;
+      status.value = added > 0 ? `Imported. ${added} new destinations.` : 'Imported.';
+      importText.value = '';
+      importOpen.value = false;
     } catch (error) {
       formError.value = errorMessage(error);
     } finally {
@@ -664,6 +706,15 @@
         The first eight pinned destinations get Ctrl+1 through Ctrl+8. A trigger is what you type
         after !.
       </p>
+      <p class="lede">
+        A template is a URL, an app link like obsidian://, or a file path. Placeholders:
+        <code>{query}</code> for what you type, <code>{clipboard}</code>,
+        <code>{date offset=+1d format=%Y-%m-%d}</code>, and
+        <code>{argument name="lang" default="en"}</code>, which falls back to its default when you
+        type nothing. Add pipes such as <code>{query | trim | lowercase}</code>, or
+        <code>| raw</code> to skip URL encoding. A template with no query opens as soon as you type
+        its bang.
+      </p>
       <article
         v-for="(destination, index) in snapshot.destinations"
         :key="destination.id"
@@ -728,8 +779,8 @@
             <input v-model="draft.triggersText" type="text" placeholder="wiki, w" required />
           </label>
           <label v-if="destination.kind !== 'ai'" class="field">
-            <span>URL template</span>
-            <input v-model="draft.urlTemplate" type="url" required />
+            <span>Template</span>
+            <input v-model="draft.urlTemplate" type="text" spellcheck="false" required />
           </label>
           <label v-if="destination.kind !== 'ai'" class="field">
             <span>Suggestions</span>
@@ -739,8 +790,30 @@
               <option value="youtube">YouTube</option>
               <option value="wikipedia">Wikipedia</option>
               <option value="pubmed">PubMed</option>
+              <option value="custom">Custom…</option>
             </select>
           </label>
+          <template v-if="draft.suggest === 'custom'">
+            <label class="field">
+              <span>Suggestion URL</span>
+              <input
+                v-model="draft.suggestUrl"
+                type="text"
+                spellcheck="false"
+                placeholder="https://example.com/complete?q={query}"
+                required
+              />
+            </label>
+            <label class="field">
+              <span>JSON path</span>
+              <input
+                v-model="draft.suggestPath"
+                type="text"
+                spellcheck="false"
+                placeholder="1, or items.*.title"
+              />
+            </label>
+          </template>
           <div class="row-actions">
             <button class="primary" type="submit" :disabled="busy">Save</button>
             <button type="button" @click="editingId = null">Cancel</button>
@@ -759,8 +832,8 @@
           <input v-model="added.triggersText" type="text" placeholder="arxiv" required />
         </label>
         <label class="field">
-          <span>URL template</span>
-          <input v-model="added.urlTemplate" type="url" required />
+          <span>Template</span>
+          <input v-model="added.urlTemplate" type="text" spellcheck="false" required />
         </label>
         <label class="field">
           <span>Suggestions</span>
@@ -770,9 +843,54 @@
             <option value="youtube">YouTube</option>
             <option value="wikipedia">Wikipedia</option>
             <option value="pubmed">PubMed</option>
+            <option value="custom">Custom…</option>
           </select>
         </label>
+        <template v-if="added.suggest === 'custom'">
+          <label class="field">
+            <span>Suggestion URL</span>
+            <input
+              v-model="added.suggestUrl"
+              type="text"
+              spellcheck="false"
+              placeholder="https://example.com/complete?q={query}"
+              required
+            />
+          </label>
+          <label class="field">
+            <span>JSON path</span>
+            <input
+              v-model="added.suggestPath"
+              type="text"
+              spellcheck="false"
+              placeholder="1, or items.*.title"
+            />
+          </label>
+        </template>
         <button class="primary" type="submit" :disabled="busy">Add destination</button>
+      </form>
+
+      <div class="field inline">
+        <button type="button" @click="copyDestinations">Copy all as JSON</button>
+        <button type="button" @click="importOpen = !importOpen">Import JSON…</button>
+      </div>
+      <form v-if="importOpen" class="editor" @submit.prevent="runImport">
+        <label class="field">
+          <span>Paste exported destinations</span>
+          <textarea
+            v-model="importText"
+            class="import-box"
+            rows="6"
+            spellcheck="false"
+            placeholder='[{"name": "Arxiv", "triggers": ["arxiv"], "urlTemplate": "https://arxiv.org/a/{query}"}]'
+          />
+        </label>
+        <div class="row-actions">
+          <button class="primary" type="submit" :disabled="busy || !importText.trim()">
+            Import
+          </button>
+          <button type="button" @click="importOpen = false">Cancel</button>
+        </div>
       </form>
     </section>
 

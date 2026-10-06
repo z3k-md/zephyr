@@ -141,6 +141,18 @@ export function aiDetectLocal(): Promise<LocalServer[]> {
   return invoke<LocalServer[]>('ai_detect_local');
 }
 
+export function resolveUrl(query: string, destinationId: string): Promise<string> {
+  return invoke<string>('resolve_url', { query, destinationId });
+}
+
+export function exportDestinations(): Promise<string> {
+  return invoke<string>('export_destinations');
+}
+
+export function importDestinations(json: string): Promise<Snapshot> {
+  return invoke<Snapshot>('import_destinations', { json });
+}
+
 export function errorMessage(error: unknown): string {
   if (typeof error === 'string') return error;
   if (error instanceof Error) return error.message;
