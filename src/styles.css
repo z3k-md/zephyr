@@ -1,35 +1,30 @@
 @import 'tailwindcss';
 
+/* One dark theme everywhere, in the spirit of Raycast: near-black surfaces, hairline
+   borders, monochrome emphasis, and color reserved for focus and warnings. */
 :root {
-  color-scheme: light dark;
-  --bg: rgba(255, 252, 247, 0.96);
-  --bg-solid: #f6f3ee;
-  --fg: #1d1a16;
-  --muted: #6d675f;
-  --stroke: rgba(29, 26, 22, 0.12);
-  --chip: rgba(29, 26, 22, 0.05);
-  --select: rgba(10, 99, 200, 0.12);
-  --accent: #0a63c8;
-  --accent-fg: #ffffff;
-  --notice: #8a3b12;
-  font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+  color-scheme: dark;
+  --bg: rgba(24, 24, 27, 0.97);
+  --bg-solid: #121214;
+  --panel: #1b1b1e;
+  --fg: #ececee;
+  --muted: #8d8d93;
+  --faint: #5f5f66;
+  --stroke: rgba(255, 255, 255, 0.08);
+  --stroke-strong: rgba(255, 255, 255, 0.14);
+  --highlight: rgba(255, 255, 255, 0.06);
+  --chip: rgba(255, 255, 255, 0.06);
+  --chip-hover: rgba(255, 255, 255, 0.1);
+  --select: rgba(255, 255, 255, 0.08);
+  --active: #ececee;
+  --active-fg: #141416;
+  --focus: #5e9eff;
+  --notice: #ff9b73;
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Text', 'Segoe UI', Inter, sans-serif;
   font-size: 14px;
   line-height: 1.4;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: rgba(28, 28, 30, 0.94);
-    --bg-solid: #1c1c1e;
-    --fg: #f4f1ea;
-    --muted: #b4aea4;
-    --stroke: rgba(255, 255, 255, 0.1);
-    --chip: rgba(255, 255, 255, 0.06);
-    --select: rgba(108, 182, 255, 0.16);
-    --accent: #8ebfff;
-    --accent-fg: #102033;
-    --notice: #ffb089;
-  }
+  -webkit-font-smoothing: antialiased;
 }
 
 * {
@@ -52,20 +47,28 @@ select {
   color: inherit;
 }
 
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+/* ---- Bar ---- */
+
 .bar {
   width: 680px;
   background: var(--bg);
   color: var(--fg);
-  border: 1px solid var(--stroke);
-  border-radius: 16px;
+  border: 1px solid var(--stroke-strong);
+  border-radius: 12px;
+  box-shadow: inset 0 1px 0 var(--highlight);
   overflow: hidden;
 }
 
 .input-row {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 14px 14px 8px 16px;
+  gap: 12px;
+  padding: 12px 12px 12px 18px;
 }
 
 .mark {
@@ -85,11 +88,16 @@ select {
   outline: none;
   background: transparent;
   font-size: 18px;
+  letter-spacing: -0.01em;
   padding: 4px 0;
 }
 
+.query:focus-visible {
+  outline: none;
+}
+
 .query::placeholder {
-  color: var(--muted);
+  color: var(--faint);
 }
 
 .text-button,
@@ -101,49 +109,90 @@ select {
 section > button {
   border: 1px solid var(--stroke);
   background: var(--chip);
-  border-radius: 8px;
-  padding: 6px 10px;
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 13px;
   cursor: pointer;
+  transition: background-color 80ms ease;
+}
+
+:is(.text-button, .row-actions button, .field > button, .history + button, section > button):hover {
+  background: var(--chip-hover);
+}
+
+:is(.row-actions button, .field > button, section > button):disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.text-button {
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.text-button:hover {
+  color: var(--fg);
 }
 
 .primary {
-  background: var(--accent);
-  color: var(--accent-fg);
+  background: var(--active);
+  color: var(--active-fg);
   border-color: transparent;
+  font-weight: 500;
+}
+
+.primary:hover {
+  background: #ffffff;
 }
 
 .strip {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  padding: 0 14px 10px 44px;
+  padding: 0 16px 12px 48px;
 }
 
 .chip {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  border: 1px solid transparent;
-  background: var(--chip);
-  border-radius: 999px;
-  padding: 4px 8px 4px 10px;
+  border: 1px solid var(--stroke);
+  background: transparent;
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 3px 7px 3px 9px;
+  font-size: 12px;
   cursor: pointer;
+  transition:
+    background-color 80ms ease,
+    color 80ms ease;
+}
+
+.chip:hover {
+  background: var(--chip);
+  color: var(--fg);
 }
 
 .chip.active {
-  background: var(--accent);
-  color: var(--accent-fg);
+  background: var(--active);
+  border-color: transparent;
+  color: var(--active-fg);
+  font-weight: 500;
 }
 
 .chip kbd {
   font-family: inherit;
   font-size: 11px;
-  opacity: 0.75;
+  font-weight: 400;
+  opacity: 0.6;
 }
 
 .notice {
-  margin: 0 16px 8px 44px;
+  margin: 0 16px 10px 48px;
   color: var(--notice);
+  font-size: 13px;
 }
 
 .empty,
@@ -155,20 +204,26 @@ section > button {
 }
 
 .empty {
-  margin: 0 16px 8px 44px;
+  margin: 0;
+  padding: 14px 16px 14px 48px;
+  border-top: 1px solid var(--stroke);
+  font-size: 13px;
 }
 
 .results {
   list-style: none;
   margin: 0;
-  padding: 0 8px 8px;
+  padding: 6px;
+  border-top: 1px solid var(--stroke);
 }
 
 .item {
   display: flex;
+  align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 8px 10px 8px 36px;
+  min-height: 38px;
+  padding: 8px 12px 8px 42px;
   border-radius: 8px;
   cursor: pointer;
 }
@@ -193,17 +248,21 @@ section > button {
 
 .footer {
   display: flex;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 8px 16px 12px 44px;
+  padding: 8px 16px 8px 48px;
   font-size: 12px;
+  background: rgba(255, 255, 255, 0.025);
   border-top: 1px solid var(--stroke);
 }
+
+/* ---- Settings ---- */
 
 .settings {
   min-height: 100vh;
   background: var(--bg-solid);
-  padding: 28px 32px 48px;
+  padding: 32px 32px 56px;
 }
 
 .settings-header,
@@ -221,69 +280,134 @@ section > button {
   align-items: center;
 }
 
+.settings-header {
+  max-width: 760px;
+}
+
 .settings h1,
 .settings h2,
 .settings h3 {
   font-weight: 600;
   margin: 0;
+  letter-spacing: -0.01em;
 }
 
 .settings h1 {
-  font-size: 28px;
+  font-size: 22px;
 }
 
 .settings h2 {
-  font-size: 18px;
-  margin-bottom: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin-bottom: 12px;
+}
+
+.settings h3 {
+  font-size: 14px;
 }
 
 .settings header p,
 .lede {
   margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .settings section {
-  margin-top: 28px;
+  margin-top: 20px;
   max-width: 760px;
+  background: var(--panel);
+  border: 1px solid var(--stroke);
+  border-radius: 12px;
+  padding: 18px 20px;
+}
+
+.settings section > .lede {
+  margin-bottom: 8px;
 }
 
 .field {
   flex-direction: column;
   align-items: flex-start;
-  margin: 12px 0;
+  gap: 6px;
+  margin: 14px 0;
+  font-size: 13px;
+}
+
+.field > span:first-child {
+  color: var(--muted);
 }
 
 .field input,
 .field select,
 .recorder {
   width: min(100%, 520px);
-  padding: 8px 10px;
-  border-radius: 8px;
+  padding: 7px 10px;
+  border-radius: 6px;
   border: 1px solid var(--stroke);
-  background: transparent;
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 13px;
+  text-align: left;
+}
+
+.field input:focus,
+.field select:focus {
+  border-color: var(--focus);
+  outline: none;
+}
+
+.field select option {
+  background: var(--panel);
 }
 
 .recorder.listening {
-  border-color: var(--accent);
+  border-color: var(--focus);
 }
 
 .check {
   align-items: center;
-  margin: 12px 0;
+  margin: 14px 0;
+  font-size: 13px;
+}
+
+.check input {
+  accent-color: var(--active);
 }
 
 .destination {
   border-top: 1px solid var(--stroke);
-  padding: 14px 0;
+  padding: 12px 0;
+}
+
+.destination:last-of-type {
+  padding-bottom: 4px;
 }
 
 .destination-row {
-  align-items: flex-start;
+  align-items: center;
+}
+
+.destination-row .hint-text {
+  margin-left: 8px;
+  font-family: ui-monospace, 'SF Mono', 'Cascadia Mono', Consolas, monospace;
+}
+
+.destination-row strong {
+  font-weight: 500;
 }
 
 .row-actions {
   flex-wrap: wrap;
   justify-content: flex-end;
+  gap: 6px;
+}
+
+.row-actions button {
+  padding: 3px 9px;
+  font-size: 12px;
 }
 
 .badge {
@@ -291,8 +415,8 @@ section > button {
   font-size: 11px;
   color: var(--muted);
   border: 1px solid var(--stroke);
-  border-radius: 999px;
-  padding: 1px 6px;
+  border-radius: 4px;
+  padding: 1px 5px;
 }
 
 .editor {
@@ -313,8 +437,14 @@ section > button {
   gap: 16px;
   padding: 8px 0;
   border-bottom: 1px solid var(--stroke);
+  font-size: 13px;
 }
 
 .status {
+  margin: 12px 0 0;
+  font-size: 13px;
+}
+
+.settings .notice {
   margin: 12px 0 0;
 }

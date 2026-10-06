@@ -245,8 +245,11 @@ pub fn show_bar(app: AppHandle) {
     window::show_bar(&app);
 }
 
+// Must stay async: a sync command runs inside the webview's IPC callback on the main thread,
+// and building a new webview there deadlocks on Windows (WebView2) because creation needs
+// the message loop that the callback is blocking.
 #[tauri::command]
-pub fn open_settings(app: AppHandle) -> Result<(), String> {
+pub async fn open_settings(app: AppHandle) -> Result<(), String> {
     window::open_settings(&app)
 }
 
