@@ -359,7 +359,7 @@ pub fn set_bar_height(app: AppHandle, height: f64) -> Result<(), String> {
 
 #[tauri::command]
 pub fn hide_bar(app: AppHandle) {
-    window::hide_bar(&app);
+    window::dismiss_bar(&app);
 }
 
 #[tauri::command]

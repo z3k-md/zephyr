@@ -26,8 +26,12 @@ pub fn show_bar(app: &AppHandle) {
     let generation = SHOW_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     SUPPRESS_BLUR.store(true, Ordering::SeqCst);
 
-    if !was_visible && let Err(err) = place_bar(&window) {
-        log::error!("couldn't place the bar: {err}");
+    if !was_visible {
+        #[cfg(target_os = "macos")]
+        previous_app::remember();
+        if let Err(err) = place_bar(&window) {
+            log::error!("couldn't place the bar: {err}");
+        }
     }
 
     if let Err(err) = window.show() {
@@ -60,6 +64,13 @@ pub fn hide_bar(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.hide();
     }
+}
+
+/// Hides the bar without acting on anything, giving focus back to whatever was in front.
+pub fn dismiss_bar(app: &AppHandle) {
+    hide_bar(app);
+    #[cfg(target_os = "macos")]
+    previous_app::restore();
 }
 
 pub fn set_bar_height(app: &AppHandle, height: f64) -> Result<(), String> {
@@ -143,6 +154,42 @@ pub fn float_over_full_screen(window: &tauri::WebviewWindow) -> Result<(), Strin
     );
     ns_window.setLevel(NSStatusWindowLevel);
     Ok(())
+}
+
+/// Showing the bar activates Zephyr, and macOS leaves an app with no visible window active,
+/// so after Esc keystrokes went nowhere until the user clicked back into their app.
+#[cfg(target_os = "macos")]
+mod previous_app {
+    use std::sync::Mutex;
+
+    use objc2::rc::Retained;
+    use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication, NSWorkspace};
+
+    static PREVIOUS: Mutex<Option<Retained<NSRunningApplication>>> = Mutex::new(None);
+
+    /// Remembers the app in front before the bar takes focus.
+    pub fn remember() {
+        let ours = NSRunningApplication::currentApplication().processIdentifier();
+        let front = NSWorkspace::sharedWorkspace()
+            .frontmostApplication()
+            .filter(|app| app.processIdentifier() != ours);
+        if let Ok(mut previous) = PREVIOUS.lock() {
+            *previous = front;
+        }
+    }
+
+    /// Reactivates the remembered app. Zephyr is still active here, so macOS honors it.
+    pub fn restore() {
+        let previous = PREVIOUS
+            .lock()
+            .ok()
+            .and_then(|mut previous| previous.take());
+        if let Some(app) = previous
+            && !app.isTerminated()
+        {
+            app.activateWithOptions(NSApplicationActivationOptions::empty());
+        }
+    }
 }
 
 fn place_bar(window: &tauri::WebviewWindow) -> Result<(), String> {
