@@ -65,10 +65,20 @@ pub fn show_bar(app: &AppHandle) {
     });
 }
 
+/// Opens the bar straight into clipboard history.
+pub fn show_clipboard(app: &AppHandle) {
+    show_bar(app);
+    if let Err(err) = app.emit("clipboard-shown", ()) {
+        log::error!("couldn't open clipboard history: {err}");
+    }
+}
+
 pub fn hide_bar(app: &AppHandle) {
     crate::ai::cancel();
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.hide();
+        // The bar remembers when it closed so reopening soon can return to the same view.
+        let _ = window.emit("bar-hidden", ());
     }
 }
 
@@ -79,7 +89,9 @@ pub fn dismiss_bar(app: &AppHandle) {
     previous_app::restore();
 }
 
-pub fn set_bar_height(app: &AppHandle, height: f64) -> Result<(), String> {
+/// Sizes the bar to its content. A width change (clipboard history is wider) keeps the bar
+/// centered where it is.
+pub fn set_bar_height(app: &AppHandle, height: f64, width: Option<f64>) -> Result<(), String> {
     let window = app
         .get_webview_window("main")
         .ok_or("Main window is missing")?;
@@ -89,13 +101,92 @@ pub fn set_bar_height(app: &AppHandle, height: f64) -> Result<(), String> {
     } else {
         1.0
     };
-    let width = (BAR_WIDTH * scale).round().clamp(1.0, 4000.0) as u32;
+    let css_width = width.unwrap_or(BAR_WIDTH).clamp(BAR_WIDTH, 1200.0);
+    let width = (css_width * scale).round() as u32;
     // The limits are in CSS pixels; clamping after scaling cut a Retina bar off at half height.
     let height = (height.clamp(48.0, 720.0) * scale).round() as u32;
+    let current = window.outer_size().map_err(|err| err.to_string())?;
+    if current.width != width
+        && let Ok(position) = window.outer_position()
+    {
+        let shift = (current.width as i32 - width as i32) / 2;
+        let _ = window.set_position(PhysicalPosition::new(position.x + shift, position.y));
+    }
     window
         .set_size(PhysicalSize::new(width, height))
         .map_err(|err| err.to_string())?;
     Ok(())
+}
+
+/// Opens or focuses the floating notes window, on note `id` when given.
+pub fn open_notes(app: &AppHandle, id: Option<&str>) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("notes") {
+        if let Some(id) = id {
+            let _ = window.emit("notes-open", id);
+        }
+        let _ = window.show();
+        let _ = window.unminimize();
+        focus_on_main_thread(app, window);
+        return Ok(());
+    }
+    let url = match id {
+        Some(id) => format!("index.html?view=notes&id={}", urlencoding::encode(id)),
+        None => "index.html?view=notes".into(),
+    };
+    // Painted dark and kept hidden until the page has drawn, so it never flashes white.
+    let window = WebviewWindowBuilder::new(app, "notes", WebviewUrl::App(url.into()))
+        .title("Notes")
+        .background_color(WINDOW_BACKGROUND)
+        .transparent(true)
+        .effects(glass())
+        .visible(false)
+        .inner_size(460.0, 560.0)
+        .min_inner_size(320.0, 240.0)
+        .center()
+        .resizable(true)
+        .always_on_top(true)
+        .visible_on_all_workspaces(true)
+        .focused(true)
+        .build()
+        .map_err(|err| err.to_string())?;
+    reveal_soon(app, window);
+    Ok(())
+}
+
+/// Settings and notes are see-through over a blurred, darkened copy of what is behind them;
+/// the page adds the purple tint. Until the page paints the window stays hidden.
+const WINDOW_BACKGROUND: tauri::window::Color = tauri::window::Color(0, 0, 0, 0);
+
+fn glass() -> tauri::utils::config::WindowEffectsConfig {
+    use tauri::window::{Effect, EffectState, EffectsBuilder};
+    EffectsBuilder::new()
+        .effect(Effect::HudWindow)
+        .effect(Effect::Acrylic)
+        .state(EffectState::Active)
+        .build()
+}
+
+/// Shows a window built hidden once its page says it has drawn, or after a moment if it
+/// never does.
+fn reveal_soon(app: &AppHandle, window: tauri::WebviewWindow) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(1500));
+        if !window.is_visible().unwrap_or(true) {
+            let _ = window.show();
+            focus_on_main_thread(&app, window);
+        }
+    });
+}
+
+/// Called by a settings or notes page after its first paint.
+pub fn page_ready(app: &AppHandle, label: &str) {
+    if let Some(window) = app.get_webview_window(label)
+        && !window.is_visible().unwrap_or(true)
+    {
+        let _ = window.show();
+        focus_on_main_thread(app, window);
+    }
 }
 
 /// Opens or focuses the settings window, scrolled to `section` when one is given.
@@ -119,6 +210,10 @@ pub fn open_settings(app: &AppHandle, section: Option<&str>) -> Result<(), Strin
         }),
     )
     .title("Zephyr Settings")
+    .background_color(WINDOW_BACKGROUND)
+    .transparent(true)
+    .effects(glass())
+    .visible(false)
     .inner_size(760.0, 720.0)
     .min_inner_size(560.0, 480.0)
     .center()
@@ -126,7 +221,7 @@ pub fn open_settings(app: &AppHandle, section: Option<&str>) -> Result<(), Strin
     .focused(true)
     .build()
     .map_err(|err| err.to_string())?;
-    focus_on_main_thread(app, window);
+    reveal_soon(app, window);
     Ok(())
 }
 

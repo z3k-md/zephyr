@@ -22,6 +22,13 @@
   "dependencies": {
     "@tailwindcss/vite": "4.3.3",
     "@tauri-apps/api": "^2.12.1",
+    "@tiptap/extension-highlight": "^3",
+    "@tiptap/extension-list": "^3",
+    "@tiptap/extension-text-style": "^3",
+    "@tiptap/extensions": "^3",
+    "@tiptap/pm": "^3",
+    "@tiptap/starter-kit": "^3",
+    "@tiptap/vue-3": "^3",
     "tailwindcss": "4.3.3",
     "vue": "3.5.43"
   },

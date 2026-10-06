@@ -116,7 +116,12 @@ pub fn decide(
         if prefix.is_empty() {
             return Decision::Palette;
         }
-        if apps::is_scope(&prefix) || settings::is_scope(&prefix) || files::is_scope(&prefix) {
+        if apps::is_scope(&prefix)
+            || settings::is_scope(&prefix)
+            || files::is_scope(&prefix)
+            || crate::notes::is_scope(&prefix)
+            || prefix == "type"
+        {
             return Decision::Empty;
         }
         return match destination::exact_trigger(destinations, &prefix) {
@@ -168,6 +173,15 @@ pub fn decide(
                 message: format!("No file matches {}", parsed.query),
             },
         };
+    }
+
+    // Notes open from the suggestion rows; plain Enter has nothing else to do.
+    if parsed
+        .bang
+        .as_deref()
+        .is_some_and(|bang| crate::notes::is_scope(bang) || bang == "type")
+    {
+        return Decision::Empty;
     }
 
     if let Some(trigger) = parsed.bang {

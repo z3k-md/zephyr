@@ -2,6 +2,6 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Zephyr windows. The frontend only calls Zephyr's own commands and listens for events; plugins are driven from Rust.",
-  "windows": ["main", "settings"],
+  "windows": ["main", "settings", "notes"],
   "permissions": ["core:default"]
 }

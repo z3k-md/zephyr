@@ -1,13 +1,17 @@
 mod ai;
 mod answer;
 mod apps;
+mod claude;
+mod clipboard;
 mod commands;
 mod deeplink;
 mod destination;
 mod files;
 mod history;
 mod logger;
+mod notes;
 mod query;
+mod secrets;
 mod settings;
 mod shortcut;
 mod state;
@@ -17,7 +21,7 @@ mod tray;
 mod updater;
 mod window;
 
-use tauri::{Manager, WindowEvent};
+use tauri::{Emitter, Manager, WindowEvent};
 use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_global_shortcut::ShortcutState;
 
@@ -37,8 +41,20 @@ pub fn run() {
         }))
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(|app, _shortcut, event| {
-                    if event.state == ShortcutState::Pressed {
+                .with_handler(|app, pressed, event| {
+                    if event.state != ShortcutState::Pressed {
+                        return;
+                    }
+                    if shortcut::is_clipboard(pressed) {
+                        window::show_clipboard(app);
+                    } else if shortcut::is_notes(pressed) {
+                        let app = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            if let Err(err) = window::open_notes(&app, None) {
+                                log::error!("couldn't open notes: {err}");
+                            }
+                        });
+                    } else {
                         window::show_bar(app);
                     }
                 })
@@ -50,6 +66,7 @@ pub fn run() {
         ))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             // A tray utility should not put an icon in the Dock or take over the menu bar.
@@ -62,14 +79,26 @@ pub fn run() {
                 .snapshot()
                 .map_err(Box::<dyn std::error::Error>::from)?;
 
-            if let Err(err) = shortcut::register(app.handle(), &snapshot.summon_shortcut) {
+            if let Err(err) = shortcut::register(
+                app.handle(),
+                &snapshot.summon_shortcut,
+                snapshot.extra_shortcuts(),
+            ) {
                 log::error!("{err}");
             }
             if let Err(err) = commands::apply_autostart(app.handle(), snapshot.launch_at_startup) {
                 log::error!("{err}");
             }
 
+            secrets::init(app.path().app_data_dir()?);
+            notes::init(config_dir.join("notes"));
+            clipboard::start(
+                app.path().app_data_dir()?.join("clipboard"),
+                snapshot.clipboard.clone(),
+            );
+
             app.manage(state);
+            claude::init(app.handle(), app.path().app_data_dir()?.join("claude"));
 
             if let Err(err) = tray::init(app) {
                 log::error!("tray setup failed: {err}");
@@ -89,6 +118,7 @@ pub fn run() {
                     }
                     WindowEvent::Focused(false) if !window::suppressing_blur() => {
                         let _ = watched.hide();
+                        let _ = watched.emit("bar-hidden", ());
                     }
                     _ => {}
                 });
@@ -112,6 +142,39 @@ pub fn run() {
             commands::get_snapshot,
             commands::ai_ask,
             commands::resolve_url,
+            commands::clip_list,
+            commands::clip_detail,
+            commands::clip_paste,
+            commands::clip_copy,
+            commands::clip_pin,
+            commands::clip_delete,
+            commands::clip_clear,
+            commands::clip_can_paste,
+            commands::clip_request_paste_permission,
+            commands::clip_stats,
+            commands::save_clipboard_settings,
+            commands::open_clipboard,
+            commands::page_ready,
+            commands::save_typing_result,
+            commands::save_resume_seconds,
+            commands::claude_jobs,
+            commands::claude_approvals,
+            commands::claude_submit,
+            commands::claude_follow_up,
+            commands::claude_cancel,
+            commands::claude_remove,
+            commands::claude_open_terminal,
+            commands::claude_answer,
+            commands::claude_status,
+            commands::save_claude_settings,
+            commands::notes_list,
+            commands::note_get,
+            commands::note_create,
+            commands::note_save,
+            commands::note_delete,
+            commands::reveal_notes,
+            commands::open_notes,
+            commands::save_notes_shortcut,
             commands::export_destinations,
             commands::import_destinations,
             commands::ai_cancel,

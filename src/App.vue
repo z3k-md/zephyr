@@ -1,7 +1,10 @@
 <script setup lang="ts">
   import { computed } from 'vue';
   import BarView from './bar/BarView.vue';
+  import NotesView from './notes/NotesView.vue';
   import SettingsView from './settings/SettingsView.vue';
+
+  const view = new URLSearchParams(window.location.search).get('view');
 
   const isSettings = computed(() => {
     const params = new URLSearchParams(window.location.search);
@@ -10,6 +13,7 @@
 </script>
 
 <template>
-  <SettingsView v-if="isSettings" />
+  <NotesView v-if="view === 'notes'" />
+  <SettingsView v-else-if="isSettings" />
   <BarView v-else />
 </template>

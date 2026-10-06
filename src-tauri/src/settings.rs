@@ -232,6 +232,24 @@ const ZEPHYR: &[Setting] = &[
         ],
     ),
     zephyr(
+        "zephyr.claude",
+        "Zephyr Claude Projects",
+        "claude",
+        &["claude code", "claude projects", "background agent"],
+    ),
+    zephyr(
+        "zephyr.notes",
+        "Zephyr Notes",
+        "notes",
+        &["notes shortcut", "quick notes", "notes folder"],
+    ),
+    zephyr(
+        "zephyr.clipboard",
+        "Zephyr Clipboard History",
+        "clipboard",
+        &["clipboard", "paste history", "copied", "ignored apps"],
+    ),
+    zephyr(
         "zephyr.ai",
         "Zephyr AI",
         "ai",
@@ -429,7 +447,16 @@ mod tests {
         for setting in ZEPHYR {
             assert!(matches!(
                 setting.target,
-                Target::Zephyr("general" | "ai" | "destinations" | "files" | "history")
+                Target::Zephyr(
+                    "general"
+                        | "ai"
+                        | "claude"
+                        | "clipboard"
+                        | "notes"
+                        | "destinations"
+                        | "files"
+                        | "history"
+                )
             ));
         }
         for setting in WINDOWS {

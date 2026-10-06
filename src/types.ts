@@ -65,6 +65,137 @@ export interface Snapshot {
   fileExcludes: string[];
   fileOpens: LaunchEntry[];
   ai: AiSettings;
+  clipboard: ClipboardSettings;
+  notesShortcut: string;
+  typingBests: TypingBest[];
+  claude: ClaudeSettings;
+  resumeSeconds: number;
+}
+
+export type ClaudeProfile = 'edit' | 'auto' | 'plan';
+
+export interface ClaudeProject {
+  id: string;
+  folder: string;
+  alias: string;
+  profile: ClaudeProfile;
+  allow: string[];
+  model: string;
+  effort: string;
+  note: string;
+}
+
+export interface ClaudeSettings {
+  binary: string;
+  projects: ClaudeProject[];
+  lastProject: string;
+  maxTurns: number;
+  timeoutMinutes: number;
+  approvalMinutes: number;
+  notifications: boolean;
+}
+
+export type ClaudeStatus =
+  'queued' | 'running' | 'waiting' | 'done' | 'failed' | 'cancelled' | 'interrupted';
+
+export interface ClaudeTurn {
+  prompt: string;
+  started: number | null;
+  ended: number | null;
+  result: string;
+  denials: string[];
+  exit: number | null;
+}
+
+export interface ClaudeJob {
+  id: string;
+  session: string;
+  projectId: string;
+  project: string;
+  folder: string;
+  title: string;
+  status: ClaudeStatus;
+  activity: string;
+  summary: string;
+  created: number;
+  updated: number;
+  turns: ClaudeTurn[];
+}
+
+export interface ClaudeApproval {
+  id: string;
+  jobId: string;
+  project: string;
+  tool: string;
+  summary: string;
+  detail: string;
+  created: number;
+}
+
+export interface ClaudeCliStatus {
+  path: string | null;
+  version: string | null;
+  loggedIn: boolean | null;
+  authMethod: string | null;
+}
+
+export interface TypingBest {
+  mode: string;
+  wpm: number;
+  raw: number;
+  accuracy: number;
+  consistency: number;
+  at: number;
+}
+
+export interface ClipboardSettings {
+  enabled: boolean;
+  shortcut: string;
+  retentionDays: number;
+  ignoredApps: string[];
+  recognizeText: boolean;
+}
+
+export type ClipKind = 'text' | 'link' | 'color' | 'image' | 'files';
+
+export interface ClipImage {
+  width: number;
+  height: number;
+  bytes: number;
+}
+
+export interface ClipSummary {
+  id: number;
+  kind: ClipKind;
+  title: string;
+  source: string | null;
+  lastCopied: number;
+  copies: number;
+  pinned: boolean;
+  color?: string;
+  image?: ClipImage | null;
+}
+
+export interface ClipList {
+  items: ClipSummary[];
+  problem: string | null;
+  enabled: boolean;
+}
+
+export interface ClipDetail {
+  id: number;
+  kind: ClipKind;
+  text: string;
+  files: string[];
+  imageUrl: string | null;
+  image: ClipImage | null;
+  ocr: string | null;
+  source: string | null;
+  firstCopied: number;
+  lastCopied: number;
+  copies: number;
+  pinned: boolean;
+  color: string | null;
 }
 
 export interface FileIndexStatus {
@@ -83,11 +214,37 @@ export interface Suggestion {
   label: string;
   query: string;
   destinationId: string;
-  kind: 'history' | 'remote' | 'destination' | 'app' | 'setting' | 'file' | 'answer';
+  kind:
+    | 'history'
+    | 'remote'
+    | 'destination'
+    | 'app'
+    | 'setting'
+    | 'file'
+    | 'answer'
+    | 'note'
+    | 'noteNew'
+    | 'view';
   hint: string;
   appId?: string;
   settingId?: string;
   path?: string;
+  noteId?: string;
+}
+
+export interface NoteSummary {
+  id: string;
+  title: string;
+  snippet: string;
+  updated: number;
+}
+
+export interface Note {
+  id: string;
+  body: string;
+  /** 'markdown' for a note saved by an earlier build. */
+  format: 'html' | 'markdown';
+  updated: number;
 }
 
 export interface SuggestResponse {

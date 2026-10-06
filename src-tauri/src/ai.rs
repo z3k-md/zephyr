@@ -146,14 +146,8 @@ pub fn set_key(provider: &str, key: Option<&str>) -> Result<(), String> {
     if provider != "custom" && !preset(provider).is_some_and(|preset| preset.needs_key) {
         return Err("That provider doesn't use a key".into());
     }
-    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, provider).map_err(keychain_error)?;
-    match key.map(str::trim).filter(|key| !key.is_empty()) {
-        Some(key) => entry.set_password(key).map_err(keychain_error),
-        None => match entry.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(err) => Err(keychain_error(err)),
-        },
-    }
+    let key = key.map(str::trim).filter(|key| !key.is_empty());
+    crate::secrets::set(KEYCHAIN_SERVICE, provider, key)
 }
 
 pub fn has_key(provider: &str) -> bool {
@@ -161,16 +155,7 @@ pub fn has_key(provider: &str) -> bool {
 }
 
 fn read_key(provider: &str) -> Result<Option<String>, String> {
-    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, provider).map_err(keychain_error)?;
-    match entry.get_password() {
-        Ok(key) => Ok(Some(key)),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(err) => Err(keychain_error(err)),
-    }
-}
-
-fn keychain_error(err: keyring::Error) -> String {
-    format!("Couldn't use the keychain: {err}")
+    crate::secrets::get(KEYCHAIN_SERVICE, provider)
 }
 
 // HTTP

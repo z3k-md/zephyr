@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ai::AiSettings;
 use crate::apps::{self, LaunchEntry};
+use crate::clipboard::ClipboardSettings;
 use crate::destination::{self, Destination};
 use crate::history::{self, HistoryEntry};
 use crate::shortcut::{DEFAULT_SHORTCUT, LEGACY_DEFAULT_SHORTCUT};
@@ -34,6 +35,44 @@ pub struct Persisted {
     pub file_opens: Vec<LaunchEntry>,
     /// The provider and model behind the Ask AI destination; keys are in the keychain.
     pub ai: AiSettings,
+    /// Clipboard history: on or off, its shortcut, retention and ignored apps.
+    pub clipboard: ClipboardSettings,
+    /// Global shortcut that opens the notes window; empty for none.
+    #[serde(default = "default_notes_shortcut")]
+    pub notes_shortcut: String,
+    /// Best typing test result per mode, e.g. `time-30` or `words-25`.
+    pub typing_bests: Vec<TypingBest>,
+    /// Projects and limits for background Claude Code jobs (`!claude`).
+    pub claude: crate::claude::ClaudeSettings,
+    /// Reopening the bar within this many seconds returns to the view it closed on
+    /// (Claude, clipboard, typing); 0 always starts at the search box.
+    #[serde(default = "default_resume_seconds")]
+    pub resume_seconds: u32,
+}
+
+fn default_resume_seconds() -> u32 {
+    120
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TypingBest {
+    pub mode: String,
+    pub wpm: f64,
+    pub raw: f64,
+    pub accuracy: f64,
+    pub consistency: f64,
+    pub at: i64,
+}
+
+#[cfg(target_os = "macos")]
+pub fn default_notes_shortcut() -> String {
+    "command+option+n".into()
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn default_notes_shortcut() -> String {
+    "ctrl+alt+n".into()
 }
 
 const SCHEMA_VERSION: u32 = 2;
@@ -68,6 +107,11 @@ impl Persisted {
             file_excludes: Vec::new(),
             file_opens: Vec::new(),
             ai: AiSettings::default(),
+            clipboard: ClipboardSettings::default(),
+            notes_shortcut: default_notes_shortcut(),
+            typing_bests: Vec::new(),
+            claude: crate::claude::ClaudeSettings::default(),
+            resume_seconds: default_resume_seconds(),
         }
     }
 
@@ -85,6 +129,74 @@ impl Persisted {
             let at = position.min(self.destinations.len());
             self.destinations.insert(at, builtin);
         }
+    }
+
+    pub fn set_clipboard(&mut self, settings: ClipboardSettings) -> Result<(), String> {
+        let settings = settings.normalized()?;
+        if !settings.shortcut.is_empty() && settings.shortcut == self.summon_shortcut {
+            return Err("Clipboard history needs a different shortcut from the bar".into());
+        }
+        self.clipboard = settings;
+        Ok(())
+    }
+
+    pub fn set_notes_shortcut(&mut self, shortcut: String) -> Result<(), String> {
+        let shortcut = shortcut.trim().to_string();
+        let shortcut = if shortcut.is_empty() {
+            shortcut
+        } else {
+            crate::shortcut::canonical_shortcut(&shortcut)?
+        };
+        if !shortcut.is_empty()
+            && (shortcut == self.summon_shortcut || shortcut == self.clipboard.shortcut)
+        {
+            return Err("Notes needs its own shortcut".into());
+        }
+        self.notes_shortcut = shortcut;
+        Ok(())
+    }
+
+    /// The optional shortcuts to register alongside the summon one.
+    pub fn extra_shortcuts(&self) -> crate::shortcut::Extras<'_> {
+        crate::shortcut::Extras {
+            clipboard: self
+                .clipboard
+                .enabled
+                .then_some(self.clipboard.shortcut.as_str()),
+            notes: Some(self.notes_shortcut.as_str()),
+        }
+    }
+
+    /// Keeps `result` if it beats the best for its mode; says whether it did.
+    pub fn record_typing(&mut self, result: TypingBest) -> Result<bool, String> {
+        let valid_mode = result.mode.len() <= 16
+            && result
+                .mode
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '-');
+        if !valid_mode || !result.wpm.is_finite() || !(0.0..=400.0).contains(&result.wpm) {
+            return Err("That result doesn't look right".into());
+        }
+        match self
+            .typing_bests
+            .iter_mut()
+            .find(|best| best.mode == result.mode)
+        {
+            Some(best) if best.wpm >= result.wpm => Ok(false),
+            Some(best) => {
+                *best = result;
+                Ok(true)
+            }
+            None => {
+                self.typing_bests.push(result);
+                Ok(true)
+            }
+        }
+    }
+
+    pub fn set_claude(&mut self, settings: crate::claude::ClaudeSettings) -> Result<(), String> {
+        self.claude = settings.normalized()?;
+        Ok(())
     }
 
     pub fn set_ai(&mut self, settings: AiSettings) -> Result<(), String> {
@@ -430,6 +542,18 @@ fn normalize_triggers(triggers: &[String]) -> Result<Vec<String>, String> {
         }
         if files::is_scope(&trigger) {
             return Err(format!("!{trigger} is reserved for finding files"));
+        }
+        if crate::notes::is_scope(&trigger) {
+            return Err(format!("!{trigger} is reserved for notes"));
+        }
+        if trigger == "clip" {
+            return Err("!clip is reserved for clipboard history".into());
+        }
+        if trigger == "claude" {
+            return Err("!claude is reserved for Claude jobs".into());
+        }
+        if trigger == "type" {
+            return Err("!type is reserved for the typing test".into());
         }
         if !normalized.contains(&trigger) {
             normalized.push(trigger);

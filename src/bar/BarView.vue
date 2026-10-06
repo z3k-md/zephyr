@@ -2,6 +2,9 @@
   import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import {
+    claudeAnswer,
+    claudeApprovals,
+    claudeJobs,
     aiAsk,
     aiCancel,
     dispatch,
@@ -12,13 +15,25 @@
     launchApp,
     openFile,
     openSetting,
+    openNotes,
     openSettings,
     resolveUrl,
     revealFile,
     setBarHeight,
     suggest,
   } from '../api';
-  import { isSnapshot, type Destination, type Snapshot, type Suggestion } from '../types';
+  import ClipboardView from './ClipboardView.vue';
+  import TypingView from '../typing/TypingView.vue';
+  import ApprovalCard from '../claude/ApprovalCard.vue';
+  import ClaudeView from '../claude/ClaudeView.vue';
+  import {
+    isSnapshot,
+    type ClaudeApproval,
+    type ClaudeJob,
+    type Destination,
+    type Snapshot,
+    type Suggestion,
+  } from '../types';
 
   const root = ref<HTMLElement | null>(null);
   const inputEl = ref<HTMLInputElement | null>(null);
@@ -30,6 +45,25 @@
   const notice = ref<string | null>(null);
   const selected = ref(-1);
   const loadError = ref<string | null>(null);
+
+  // Clipboard history takes over the bar: from its hotkey, or by typing !clip.
+  const CLIP_WIDTH = 860;
+  const clipMode = ref(false);
+  const clipQuery = ref('');
+  const clipView = ref<InstanceType<typeof ClipboardView> | null>(null);
+  // The typing test also takes over the bar, from !type.
+  const TYPING_WIDTH = 760;
+  const typingMode = ref(false);
+  const typingView = ref<InstanceType<typeof TypingView> | null>(null);
+  // Background Claude jobs, from !claude; pending permission requests show above everything.
+  const claudeMode = ref(false);
+  const claudeQuery = ref('');
+  const claudeView = ref<InstanceType<typeof ClaudeView> | null>(null);
+  const approvals = ref<ClaudeApproval[]>([]);
+  const jobs = ref<ClaudeJob[]>([]);
+
+  // Reopening soon after closing returns to the view and text it closed on.
+  let hiddenAt = 0;
 
   interface Answer {
     question: string;
@@ -83,6 +117,9 @@
     if (answerReady.value) return 'copy answer';
     const item = selectedItem.value;
     if (item?.kind === 'answer') return `copy ${item.label}`;
+    if (item?.kind === 'note') return `open ${item.label}`;
+    if (item?.kind === 'noteNew') return 'create note';
+    if (item?.kind === 'view') return `open ${item.label}`;
     if (item?.kind === 'app' || item?.kind === 'setting' || item?.kind === 'file') {
       return `Open ${item.label}`;
     }
@@ -156,8 +193,20 @@
 
     unlistens.push(
       await listen('bar-shown', () => {
-        resetForSummon();
-        void focusInput();
+        const limit = (snapshot.value?.resumeSeconds ?? 120) * 1000;
+        const resume = hiddenAt > 0 && limit > 0 && Date.now() - hiddenAt < limit;
+        if (resume) {
+          void loadApprovals();
+          void loadJobs();
+        } else {
+          resetForSummon();
+        }
+        if (!clipMode.value && !typingMode.value && !claudeMode.value) void focusInput();
+      })
+    );
+    unlistens.push(
+      await listen('bar-hidden', () => {
+        hiddenAt = Date.now();
       })
     );
     // A zephyr:// link: text to type in, and optionally where to send it right away.
@@ -181,6 +230,21 @@
           void focusInput();
         }
       )
+    );
+    unlistens.push(
+      await listen('claude-changed', () => {
+        void loadApprovals();
+        void loadJobs();
+      })
+    );
+    void loadApprovals();
+    void loadJobs();
+    unlistens.push(
+      await listen('clipboard-shown', () => {
+        resetForSummon();
+        clipQuery.value = '';
+        clipMode.value = true;
+      })
     );
     unlistens.push(
       await listen('bar-focus', () => {
@@ -222,7 +286,117 @@
     actionsOpen.value = false;
   });
 
+  watch([clipMode, typingMode, claudeMode], async () => {
+    await nextTick();
+    syncHeight();
+    if (!clipMode.value && !typingMode.value && !claudeMode.value) void focusInput();
+  });
+
+  async function loadJobs() {
+    try {
+      jobs.value = await claudeJobs();
+    } catch {
+      jobs.value = [];
+    }
+  }
+
+  /** Rows on the empty bar that jump straight into a view. */
+  function viewRows(): Suggestion[] {
+    const rows: Suggestion[] = [];
+    const settings = snapshot.value;
+    if (jobs.value.length || settings?.claude.projects.length) {
+      const running = jobs.value.filter(
+        (job) => job.status === 'running' || job.status === 'waiting' || job.status === 'queued'
+      ).length;
+      const latest = jobs.value[0];
+      const hint = running
+        ? `${running} running`
+        : latest
+          ? `${latest.status === 'failed' ? '✗' : '✓'} ${latest.title}`
+          : '!claude';
+      rows.push(view('claude', 'Claude jobs', hint));
+    }
+    if (settings?.clipboard.enabled) {
+      rows.push(
+        view(
+          'clip',
+          'Clipboard history',
+          settings.clipboard.shortcut ? formatShortcut(settings.clipboard.shortcut) : '!clip'
+        )
+      );
+    }
+    rows.push(
+      view(
+        'notes',
+        'Notes',
+        settings?.notesShortcut ? formatShortcut(settings.notesShortcut) : '!note'
+      )
+    );
+    return rows;
+  }
+
+  function view(id: string, label: string, hint: string): Suggestion {
+    return { label, hint, query: '', destinationId: id, kind: 'view' };
+  }
+
+  function openView(id: string) {
+    query.value = '';
+    if (id === 'claude') {
+      claudeQuery.value = '';
+      claudeMode.value = true;
+    } else if (id === 'clip') {
+      clipQuery.value = '';
+      clipMode.value = true;
+    } else if (id === 'notes') {
+      void openNotes();
+    }
+  }
+
+  async function loadApprovals() {
+    try {
+      approvals.value = await claudeApprovals();
+    } catch {
+      approvals.value = [];
+    }
+  }
+
+  /** Answers the oldest permission request; text typed in the bar becomes a deny reason. */
+  async function answerApproval(decision: 'allow' | 'always' | 'deny') {
+    const approval = approvals.value[0];
+    if (!approval) return;
+    const typed = claudeMode.value ? (claudeView.value?.text ?? '') : query.value;
+    try {
+      await claudeAnswer(approval.id, decision, decision === 'deny' ? typed : undefined);
+      if (decision === 'deny' && typed) {
+        if (claudeMode.value && claudeView.value) claudeView.value.text = '';
+        else query.value = '';
+      }
+      await loadApprovals();
+    } catch (error) {
+      notice.value = errorMessage(error);
+    }
+  }
+
   watch(query, () => {
+    if (/^!type$/i.test(query.value.trim()) && query.value.endsWith(' ')) {
+      query.value = '';
+      typingMode.value = true;
+      return;
+    }
+    const claude = /^!claude(?:\s+(.*))?$/i.exec(query.value);
+    if (claude) {
+      claudeQuery.value = claude[1] ?? '';
+      query.value = '';
+      claudeMode.value = true;
+      return;
+    }
+    const clip = /^!clip(?:\s+(.*))?$/i.exec(query.value);
+    if (clip) {
+      clipQuery.value = clip[1] ?? '';
+      query.value = '';
+      clipMode.value = true;
+      return;
+    }
     actionsOpen.value = false;
     if (answer.value && query.value !== answer.value.input) clearAnswer();
     selected.value = -1;
@@ -238,6 +412,10 @@
   });
 
   function resetForSummon() {
+    clipMode.value = false;
+    typingMode.value = false;
+    claudeMode.value = false;
+    void loadApprovals();
     clearAnswer();
     query.value = '';
     selected.value = -1;
@@ -254,7 +432,12 @@
   function syncHeight() {
     if (!root.value) return;
     const height = Math.ceil(root.value.getBoundingClientRect().height);
-    void setBarHeight(height).catch(() => undefined);
+    const width = clipMode.value
+      ? CLIP_WIDTH
+      : typingMode.value || claudeMode.value
+        ? TYPING_WIDTH
+        : undefined;
+    void setBarHeight(height, width).catch(() => undefined);
   }
 
   // Local results (apps, history) land on the keystroke; remote suggestions follow after a
@@ -274,10 +457,13 @@
       const response = await suggest(query.value, armedId.value, includeRemote);
       if (current !== generation || (!includeRemote && remoteApplied)) return;
       if (includeRemote) remoteApplied = true;
-      items.value = response.items;
+      const views = response.mode === 'recent' && !query.value.trim() ? viewRows() : [];
+      items.value = [...views, ...response.items];
       mode.value = response.mode;
       notice.value = response.notice;
-      if (!userMoved) selected.value = response.preselect ?? -1;
+      if (!userMoved) {
+        selected.value = response.preselect === null ? -1 : response.preselect + views.length;
+      }
       await nextTick();
       syncHeight();
     } catch (error) {
@@ -288,6 +474,38 @@
 
   function onKey(event: KeyboardEvent) {
     if (event.isComposing) return;
+    // A pending Claude permission request: never plain Enter, only these keys.
+    if (approvals.value.length && (event.metaKey || event.ctrlKey) && !event.altKey) {
+      if (event.code === 'KeyY') {
+        event.preventDefault();
+        void answerApproval(event.shiftKey ? 'always' : 'allow');
+        return;
+      }
+      if (event.code === 'KeyN' && !event.shiftKey) {
+        event.preventDefault();
+        void answerApproval('deny');
+        return;
+      }
+    }
+    if (claudeMode.value) {
+      claudeView.value?.onKey(event);
+      return;
+    }
+    if (clipMode.value) {
+      clipView.value?.onKey(event);
+      return;
+    }
+    if (typingMode.value) {
+      typingView.value?.onKey(event);
+      return;
+    }
+    // !type then Enter opens the typing test too.
+    if (event.key === 'Enter' && /^!type$/i.test(query.value.trim())) {
+      event.preventDefault();
+      query.value = '';
+      typingMode.value = true;
+      return;
+    }
 
     const modifier = event.ctrlKey || event.metaKey;
     if (modifier && !event.altKey && !event.shiftKey && event.code === 'KeyK') {
@@ -468,6 +686,16 @@
     if (text) await copyText(text);
   }
 
+  async function openNote(item: Suggestion) {
+    try {
+      if (item.kind === 'note') await openNotes(item.noteId);
+      else await openNotes(undefined, item.query);
+      query.value = '';
+    } catch (error) {
+      notice.value = errorMessage(error);
+    }
+  }
+
   async function copyText(text: string) {
     try {
       await navigator.clipboard.writeText(text);
@@ -534,6 +762,14 @@
         await copyText(item.label);
         return;
       }
+      if (item.kind === 'note' || item.kind === 'noteNew') {
+        await openNote(item);
+        return;
+      }
+      if (item.kind === 'view') {
+        openView(item.destinationId);
+        return;
+      }
       if (item.kind === 'app' && item.appId) {
         await launch(item.appId);
         return;
@@ -561,6 +797,14 @@
   function choose(item: Suggestion) {
     if (item.kind === 'answer') {
       void copyText(item.label);
+      return;
+    }
+    if (item.kind === 'note' || item.kind === 'noteNew') {
+      void openNote(item);
+      return;
+    }
+    if (item.kind === 'view') {
+      openView(item.destinationId);
       return;
     }
     if (item.kind === 'app' && item.appId) {
@@ -673,108 +917,141 @@
 </script>
 
 <template>
-  <div ref="root" class="bar" role="dialog" aria-label="Zephyr">
-    <div class="input-row">
-      <svg class="mark" viewBox="0 0 24 24" aria-hidden="true">
-        <circle cx="11" cy="11" r="6.5" />
-        <path d="M16 16.5 20 20.5" />
-      </svg>
-      <input
-        ref="inputEl"
-        v-model="query"
-        class="query"
-        type="text"
-        role="combobox"
-        aria-autocomplete="list"
-        aria-controls="results"
-        :aria-expanded="items.length > 0"
-        :aria-activedescendant="selected >= 0 ? `result-${selected}` : undefined"
-        placeholder="Search, open an app, or ! for a destination"
-        spellcheck="false"
-        autocomplete="off"
-        autocapitalize="off"
-      />
-      <button class="text-button" type="button" @mousedown.prevent @click="openSettings">
-        Settings
-      </button>
-    </div>
-
-    <div v-if="strip.length" class="strip" aria-label="Destinations">
-      <button
-        v-for="(destination, index) in strip"
-        :key="destination.id"
-        type="button"
-        class="chip"
-        :class="{ active: destination.id === armedId }"
-        @mousedown.prevent
-        @click="arm(destination)"
-      >
-        {{ destination.name }}
-        <kbd>Ctrl+{{ index + 1 }}</kbd>
-      </button>
-    </div>
-
-    <p v-if="loadError || notice" class="notice">{{ loadError || notice }}</p>
-
-    <ul v-if="actionsOpen" class="results actions" role="listbox" aria-label="Actions">
-      <li
-        v-for="(action, index) in actions"
-        :key="action.label"
-        role="option"
-        :aria-selected="index === actionIndex"
-        class="item"
-        :class="{ selected: index === actionIndex }"
-        @mousedown.prevent
-        @click="runAction(action)"
-        @mousemove="actionIndex = index"
-      >
-        <span class="label">{{ action.label }}</span>
-        <span v-if="action.hint" class="hint">{{ action.hint }}</span>
-      </li>
-    </ul>
-
-    <section v-else-if="answer" class="answer" aria-live="polite">
-      <div ref="answerEl" class="answer-body">
-        <p v-if="answer.status === 'waiting'" class="answer-wait">Thinking…</p>
-        <!-- prettier-ignore -->
-        <div v-else-if="answer.text" class="answer-text">{{ answer.text }}<span v-if="answer.status === 'streaming'" class="caret" /></div>
-        <p v-if="answer.error" class="answer-error">{{ answer.error }}</p>
+  <div
+    ref="root"
+    class="bar"
+    :class="{ wide: clipMode, 'typing-wide': typingMode }"
+    role="dialog"
+    aria-label="Zephyr"
+  >
+    <ApprovalCard
+      v-if="approvals.length"
+      :approval="approvals[0]"
+      :queued="approvals.length"
+      @answer="answerApproval"
+    />
+    <ClaudeView
+      v-if="claudeMode"
+      ref="claudeView"
+      :initial-query="claudeQuery"
+      :settings="snapshot?.claude ?? null"
+      @exit="claudeMode = false"
+    />
+    <TypingView
+      v-else-if="typingMode"
+      ref="typingView"
+      :bests="snapshot?.typingBests ?? []"
+      @exit="typingMode = false"
+    />
+    <ClipboardView
+      v-else-if="clipMode"
+      ref="clipView"
+      :initial-query="clipQuery"
+      @exit="clipMode = false"
+    />
+    <template v-else>
+      <div class="input-row">
+        <svg class="mark" viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="11" cy="11" r="6.5" />
+          <path d="M16 16.5 20 20.5" />
+        </svg>
+        <input
+          ref="inputEl"
+          v-model="query"
+          class="query"
+          type="text"
+          role="combobox"
+          aria-autocomplete="list"
+          aria-controls="results"
+          :aria-expanded="items.length > 0"
+          :aria-activedescendant="selected >= 0 ? `result-${selected}` : undefined"
+          placeholder="Search, open an app, or ! for a destination"
+          spellcheck="false"
+          autocomplete="off"
+          autocapitalize="off"
+        />
+        <button class="text-button" type="button" @mousedown.prevent @click="openSettings">
+          Settings
+        </button>
       </div>
-      <p v-if="answer.source" class="answer-source">{{ answer.source }}</p>
-    </section>
 
-    <ul v-else-if="items.length" id="results" class="results" role="listbox">
-      <li
-        v-for="(item, index) in items"
-        :id="`result-${index}`"
-        :key="`${item.kind}-${item.destinationId}-${item.path ?? item.label}`"
-        role="option"
-        :aria-selected="index === selected"
-        class="item"
-        :class="{ selected: index === selected, answer: item.kind === 'answer' }"
-        @mousedown.prevent
-        @click="choose(item)"
-        @mousemove="hover(index)"
-      >
-        <span class="label">{{ item.label }}</span>
-        <span class="hint">{{ item.hint }}</span>
-      </li>
-    </ul>
+      <div v-if="strip.length" class="strip" aria-label="Destinations">
+        <button
+          v-for="(destination, index) in strip"
+          :key="destination.id"
+          type="button"
+          class="chip"
+          :class="{ active: destination.id === armedId }"
+          @mousedown.prevent
+          @click="arm(destination)"
+        >
+          {{ destination.name }}
+          <kbd>Ctrl+{{ index + 1 }}</kbd>
+        </button>
+      </div>
 
-    <p v-else-if="mode === 'recent' && !query.trim()" class="empty">
-      Searches you run will show up here.
-    </p>
+      <p v-if="loadError || notice" class="notice">{{ loadError || notice }}</p>
 
-    <footer class="footer">
-      <span>
-        Enter {{ enterLabel }}
-        <template v-if="selectedItem?.kind === 'file'">
-          · Ctrl+Enter show in {{ isMac ? 'Finder' : 'Explorer' }} · Ctrl+Shift+C copy path
-        </template>
-        <template v-if="actions.length && !actionsOpen"> · {{ actionKey }} actions</template>
-        <template v-if="actionsOpen"> · Esc back</template>
-      </span>
-      <span>{{ shortcutLabel }}</span>
-    </footer>
+      <ul v-if="actionsOpen" class="results actions" role="listbox" aria-label="Actions">
+        <li
+          v-for="(action, index) in actions"
+          :key="action.label"
+          role="option"
+          :aria-selected="index === actionIndex"
+          class="item"
+          :class="{ selected: index === actionIndex }"
+          @mousedown.prevent
+          @click="runAction(action)"
+          @mousemove="actionIndex = index"
+        >
+          <span class="label">{{ action.label }}</span>
+          <span v-if="action.hint" class="hint">{{ action.hint }}</span>
+        </li>
+      </ul>
+
+      <section v-else-if="answer" class="answer" aria-live="polite">
+        <div ref="answerEl" class="answer-body">
+          <p v-if="answer.status === 'waiting'" class="answer-wait">Thinking…</p>
+          <!-- prettier-ignore -->
+          <div v-else-if="answer.text" class="answer-text">{{ answer.text }}<span v-if="answer.status === 'streaming'" class="caret" /></div>
+          <p v-if="answer.error" class="answer-error">{{ answer.error }}</p>
+        </div>
+        <p v-if="answer.source" class="answer-source">{{ answer.source }}</p>
+      </section>
+
+      <ul v-else-if="items.length" id="results" class="results" role="listbox">
+        <li
+          v-for="(item, index) in items"
+          :id="`result-${index}`"
+          :key="`${item.kind}-${item.destinationId}-${item.path ?? item.label}`"
+          role="option"
+          :aria-selected="index === selected"
+          class="item"
+          :class="{ selected: index === selected, answer: item.kind === 'answer' }"
+          @mousedown.prevent
+          @click="choose(item)"
+          @mousemove="hover(index)"
+        >
+          <span class="label">{{ item.label }}</span>
+          <span class="hint">{{ item.hint }}</span>
+        </li>
+      </ul>
+
+      <p v-else-if="mode === 'recent' && !query.trim()" class="empty">
+        Searches you run will show up here.
+      </p>
+
+      <footer class="footer">
+        <span>
+          Enter {{ enterLabel }}
+          <template v-if="selectedItem?.kind === 'file'">
+            · Ctrl+Enter show in {{ isMac ? 'Finder' : 'Explorer' }} · Ctrl+Shift+C copy path
+          </template>
+          <template v-if="actions.length && !actionsOpen"> · {{ actionKey }} actions</template>
+          <template v-if="actionsOpen"> · Esc back</template>
+        </span>
+        <span>{{ shortcutLabel }}</span>
+      </footer>
+    </template>
   </div>
 </template>
