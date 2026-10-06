@@ -1,3 +1,16 @@
+# [2.1.0](https://github.com/z3k-md/zephyr/compare/v2.0.0...v2.1.0) (2026-10-06)
+
+
+### Bug Fixes
+
+* open settings without deadlocking the main thread on Windows ([739e4d1](https://github.com/z3k-md/zephyr/commit/739e4d15c2ed043bac675a02eb22125feb0addef))
+
+
+### Features
+
+* new app icon ([88ed2ad](https://github.com/z3k-md/zephyr/commit/88ed2adbb4edbb8ef8e4fc663ba56691ce808e2d))
+* open installed apps from the bar ([bfebc02](https://github.com/z3k-md/zephyr/commit/bfebc029372e8188f63bfa9cb8a21b6c08b6e851))
+
 # [2.0.0](https://github.com/z3k-md/zephyr/compare/v1.3.1...v2.0.0) (2026-10-04)
 
 
