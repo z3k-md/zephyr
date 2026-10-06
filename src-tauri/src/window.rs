@@ -34,13 +34,18 @@ pub fn show_bar(app: &AppHandle) {
         }
     }
 
-    if let Err(err) = window.show() {
-        log::error!("couldn't show the bar: {err}");
-    }
-    let _ = window.unminimize();
-    force_foreground(&window);
-    if let Err(err) = window.set_focus() {
-        log::error!("couldn't focus the bar: {err}");
+    #[cfg(target_os = "macos")]
+    show_panel(app, &window);
+    #[cfg(not(target_os = "macos"))]
+    {
+        if let Err(err) = window.show() {
+            log::error!("couldn't show the bar: {err}");
+        }
+        let _ = window.unminimize();
+        force_foreground(&window);
+        if let Err(err) = window.set_focus() {
+            log::error!("couldn't focus the bar: {err}");
+        }
     }
 
     let event = if was_visible {
@@ -135,25 +140,62 @@ fn focus_on_main_thread(app: &AppHandle, window: tauri::WebviewWindow) {
     }
 }
 
-/// A normal macOS window stays on the Space it was first shown on, and a full-screen Space
-/// only admits windows marked as auxiliary to it, so the bar never appeared over a
-/// full-screen app. Joining every Space as a full-screen auxiliary, above the menu bar,
-/// lets it open over whatever is in front without switching Spaces.
 #[cfg(target_os = "macos")]
-pub fn float_over_full_screen(window: &tauri::WebviewWindow) -> Result<(), String> {
-    use objc2_app_kit::{NSStatusWindowLevel, NSWindow, NSWindowCollectionBehavior};
+tauri_nspanel::tauri_panel! {
+    panel!(BarPanel {
+        config: {
+            can_become_key_window: true,
+            can_become_main_window: false,
+            is_floating_panel: true
+        }
+    })
+}
 
-    let ns_window = window.ns_window().map_err(|err| err.to_string())?;
-    // SAFETY: tauri hands back the live NSWindow behind this webview window, and setup
-    // runs on the main thread.
-    let ns_window = unsafe { &*ns_window.cast::<NSWindow>() };
-    ns_window.setCollectionBehavior(
+/// macOS keeps a normal window off another app's full-screen Space even when it is marked
+/// to join all Spaces, and showing it activates Zephyr, which pulls the user back to the
+/// desktop. Spotlight and Raycast use a non-activating panel instead: it floats over
+/// full-screen apps and takes keystrokes without activating the app behind it.
+#[cfg(target_os = "macos")]
+pub fn make_bar_panel(window: &tauri::WebviewWindow) -> Result<(), String> {
+    use objc2_app_kit::{NSStatusWindowLevel, NSWindowCollectionBehavior, NSWindowStyleMask};
+    use tauri_nspanel::WebviewWindowExt;
+
+    let panel = window
+        .to_panel::<BarPanel>()
+        .map_err(|err| err.to_string())?;
+    panel
+        .add_style_mask(NSWindowStyleMask::NonactivatingPanel)
+        .map_err(|err| err.to_string())?;
+    panel.set_collection_behavior(
         NSWindowCollectionBehavior::CanJoinAllSpaces
             | NSWindowCollectionBehavior::FullScreenAuxiliary
             | NSWindowCollectionBehavior::IgnoresCycle,
     );
-    ns_window.setLevel(NSStatusWindowLevel);
+    panel.set_level(NSStatusWindowLevel as i64);
+    panel.set_hides_on_deactivate(false);
     Ok(())
+}
+
+/// Shows the bar panel and gives it the keyboard without activating Zephyr, so a
+/// full-screen app stays on screen behind it.
+#[cfg(target_os = "macos")]
+fn show_panel(app: &AppHandle, window: &tauri::WebviewWindow) {
+    use tauri_nspanel::ManagerExt;
+
+    let Ok(panel) = app.get_webview_panel(window.label()) else {
+        log::error!("the bar panel is missing");
+        return;
+    };
+    let webview = window.clone();
+    let result = app.run_on_main_thread(move || {
+        panel.show_and_make_key();
+        if let Err(err) = webview.as_ref().set_focus() {
+            log::error!("couldn't focus the bar: {err}");
+        }
+    });
+    if let Err(err) = result {
+        log::error!("couldn't show the bar: {err}");
+    }
 }
 
 /// Showing the bar activates Zephyr, and macOS leaves an app with no visible window active,
