@@ -47,7 +47,7 @@ pub fn init(app: &App) -> Result<(), String> {
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => window::show_bar(app),
             "settings" => {
-                if let Err(err) = window::open_settings(app) {
+                if let Err(err) = window::open_settings(app, None) {
                     log::error!("couldn't open settings: {err}");
                 }
             }
