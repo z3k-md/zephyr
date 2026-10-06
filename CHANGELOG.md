@@ -1,3 +1,10 @@
+# [2.3.0](https://github.com/z3k-md/zephyr/compare/v2.2.0...v2.3.0) (2026-10-06)
+
+
+### Features
+
+* find and open files from the bar (!f) ([9401d03](https://github.com/z3k-md/zephyr/commit/9401d03221e4a982e00d4fd340023753b007a6e1))
+
 # [2.2.0](https://github.com/z3k-md/zephyr/compare/v2.1.0...v2.2.0) (2026-10-06)
 
 
