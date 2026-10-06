@@ -1,3 +1,21 @@
+# [2.4.0](https://github.com/z3k-md/zephyr/compare/v2.3.0...v2.4.0) (2026-10-06)
+
+
+### Bug Fixes
+
+* let the settings window scroll ([792ad7f](https://github.com/z3k-md/zephyr/commit/792ad7fb6fea052169836e2a1abeeb0a0ea5fe8c))
+* **macos:** give focus back to the previous app when Esc dismisses the bar ([92d5668](https://github.com/z3k-md/zephyr/commit/92d5668403cf2fa82fd8ed1b4e60fe93d57565b7))
+* **macos:** open the bar over full-screen apps ([e605401](https://github.com/z3k-md/zephyr/commit/e605401c7d1ad9dd7f7a8e467e56f1506141b49d))
+* **macos:** show the bar as a non-activating panel over full-screen apps ([7fb0643](https://github.com/z3k-md/zephyr/commit/7fb0643d3f753afe8134eef33dc8e74e9edb0eae))
+* stop cutting the bar off at half height on Retina screens ([3813ea2](https://github.com/z3k-md/zephyr/commit/3813ea248e2d6b505855b6f508ae0397ea95323b))
+
+
+### Features
+
+* ask AI from the bar with a local model or your own key ([7ad8884](https://github.com/z3k-md/zephyr/commit/7ad8884332ace0ca0e86490dac00cfb58eadd24e))
+* clipboard history, notes, Claude jobs, typing test and a glass theme ([42b9d0f](https://github.com/z3k-md/zephyr/commit/42b9d0f1d0243238e9d28196cd41e05d018b8bf1))
+* inline answers, action panel, richer templates and zephyr:// links ([8543d5a](https://github.com/z3k-md/zephyr/commit/8543d5adfe24cb216cab10557cbaf0d3db3d6995))
+
 # [2.3.0](https://github.com/z3k-md/zephyr/compare/v2.2.0...v2.3.0) (2026-10-06)
 
 
