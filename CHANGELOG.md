@@ -1,3 +1,10 @@
+# [2.2.0](https://github.com/z3k-md/zephyr/compare/v2.1.0...v2.2.0) (2026-10-06)
+
+
+### Features
+
+* search and open settings from the bar ([2f10b17](https://github.com/z3k-md/zephyr/commit/2f10b17819cdd609bf40625593e71d2e7d6d720d))
+
 # [2.1.0](https://github.com/z3k-md/zephyr/compare/v2.0.0...v2.1.0) (2026-10-06)
 
 
