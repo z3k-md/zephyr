@@ -1,8 +1,10 @@
 # Zephyr
 
-A dispatch bar for Windows and macOS. Summon it over any app, type once, and send that text to Google, ChatGPT, Wikipedia, PubMed, or a destination you added.
+A dispatch bar for Windows and macOS. Summon it over any app, type once, and send that text to Google, ChatGPT, Wikipedia, PubMed, or a destination you added, or open an installed app.
 
 `Alt+Space` opens the bar (`Command+Space` on a Mac keyboard). Enter searches the armed destination. `Ctrl+1` through `Ctrl+8` send the same text to a pinned destination. `!` filters destinations, and `crispr !pm` searches PubMed directly.
+
+Typing the start of an app's name (`chr`, `excel`, or initials like `vsc`) selects that app, and Enter opens it; longer free text still goes to the armed destination. A bang or `Ctrl+1`–`Ctrl+8` always sends the text to the web, and Zephyr remembers that choice for the same text next time. `!app` searches only apps.
 
 ## Install
 

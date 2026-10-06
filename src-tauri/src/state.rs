@@ -5,6 +5,7 @@ use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
+use crate::apps::{self, LaunchEntry};
 use crate::destination::{self, Destination};
 use crate::history::{self, HistoryEntry};
 use crate::shortcut::{DEFAULT_SHORTCUT, LEGACY_DEFAULT_SHORTCUT};
@@ -20,6 +21,9 @@ pub struct Persisted {
     pub default_destination_id: String,
     pub destinations: Vec<Destination>,
     pub history: Vec<HistoryEntry>,
+    pub launches: Vec<LaunchEntry>,
+    /// Lowercased texts the user sent to the web even though they matched an app.
+    pub app_overrides: Vec<String>,
 }
 
 const SCHEMA_VERSION: u32 = 2;
@@ -48,6 +52,8 @@ impl Persisted {
             default_destination_id: "google".into(),
             destinations: destination::builtins(),
             history: Vec::new(),
+            launches: Vec::new(),
+            app_overrides: Vec::new(),
         }
     }
 
@@ -66,6 +72,14 @@ impl Persisted {
 
     pub fn record(&mut self, query: &str, destination_id: &str, now: i64) {
         history::record(&mut self.history, query, destination_id, now);
+    }
+
+    pub fn record_launch(&mut self, app_id: &str, now: i64) {
+        apps::record_launch(&mut self.launches, app_id, now);
+    }
+
+    pub fn record_app_override(&mut self, query: &str) {
+        apps::record_override(&mut self.app_overrides, query);
     }
 
     pub fn set_general(
@@ -261,6 +275,9 @@ fn normalize_triggers(triggers: &[String]) -> Result<Vec<String>, String> {
                 trigger.trim().trim_start_matches('!')
             ));
         };
+        if apps::is_scope(&trigger) {
+            return Err(format!("!{trigger} is reserved for finding apps"));
+        }
         if !normalized.contains(&trigger) {
             normalized.push(trigger);
         }
