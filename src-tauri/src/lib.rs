@@ -24,7 +24,10 @@ pub fn init_logging() {
 }
 
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(target_os = "macos")]
+    let builder = builder.plugin(tauri_nspanel::init());
+    builder
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             window::show_bar(app);
         }))
@@ -69,7 +72,7 @@ pub fn run() {
 
             if let Some(main_window) = app.get_webview_window("main") {
                 #[cfg(target_os = "macos")]
-                if let Err(err) = window::float_over_full_screen(&main_window) {
+                if let Err(err) = window::make_bar_panel(&main_window) {
                     log::error!("couldn't let the bar float over full-screen apps: {err}");
                 }
 
