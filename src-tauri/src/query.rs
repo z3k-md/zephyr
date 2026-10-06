@@ -2,7 +2,7 @@ use serde::Serialize;
 
 use crate::apps::{self, Catalog};
 use crate::destination::{self, Destination};
-use crate::settings;
+use crate::{files, settings};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Parsed {
@@ -27,6 +27,9 @@ pub enum Decision {
     OpenSetting {
         setting_id: String,
     },
+    OpenFile {
+        path: String,
+    },
     Palette,
     UnknownBang {
         trigger: String,
@@ -48,6 +51,7 @@ pub enum DispatchOutcome {
     Armed { destination_id: String },
     Launched { app_id: String },
     SettingOpened { setting_id: String },
+    FileOpened { path: String },
     Palette,
     UnknownBang { trigger: String },
     Empty,
@@ -107,7 +111,7 @@ pub fn decide(
         if prefix.is_empty() {
             return Decision::Palette;
         }
-        if apps::is_scope(&prefix) || settings::is_scope(&prefix) {
+        if apps::is_scope(&prefix) || settings::is_scope(&prefix) || files::is_scope(&prefix) {
             return Decision::Empty;
         }
         return match destination::exact_trigger(destinations, &prefix) {
@@ -140,6 +144,17 @@ pub fn decide(
             },
             None => Decision::Rejected {
                 message: format!("No setting matches {}", parsed.query),
+            },
+        };
+    }
+
+    if let Some(trigger) = parsed.bang.as_deref()
+        && files::is_scope(trigger)
+    {
+        return match catalog.files(&parsed.query, 1).into_iter().next() {
+            Some(hit) => Decision::OpenFile { path: hit.path },
+            None => Decision::Rejected {
+                message: format!("No file matches {}", parsed.query),
             },
         };
     }
@@ -287,6 +302,7 @@ mod tests {
     use super::*;
     use crate::apps::{App, Catalog};
     use crate::destination::builtins;
+    use crate::files::FileIndex;
     use crate::settings::{Setting, Target};
 
     const SETTINGS: &[Setting] = &[
@@ -304,21 +320,22 @@ mod tests {
         },
     ];
 
+    fn no_files() -> &'static FileIndex {
+        static EMPTY: std::sync::LazyLock<FileIndex> = std::sync::LazyLock::new(FileIndex::default);
+        &EMPTY
+    }
+
     fn none() -> Catalog<'static> {
-        Catalog {
-            apps: &[],
-            settings: SETTINGS,
-            launches: &[],
-            overrides: &[],
-            now: 0,
-        }
+        installed(&[], &[])
     }
 
     fn installed<'a>(apps: &'a [App], overrides: &'a [String]) -> Catalog<'a> {
         Catalog {
             apps,
             settings: SETTINGS,
+            files: no_files(),
             launches: &[],
+            file_opens: &[],
             overrides,
             now: 0,
         }
@@ -477,6 +494,48 @@ mod tests {
         // Unscoped, Enter keeps searching even when the text names a setting exactly.
         assert!(open(&decide_text("display")).contains("google.com"));
         assert!(open(&decide_text("dark mode")).contains("google.com"));
+    }
+
+    #[test]
+    fn the_file_scope_opens_the_best_match_and_free_text_never_does() {
+        let root = std::env::temp_dir().join("zephyr-query-files");
+        let files = FileIndex::with_paths(
+            vec![root.clone()],
+            &[(
+                &*format!("Documents{}budget.xlsx", std::path::MAIN_SEPARATOR),
+                false,
+            )],
+        );
+        let catalog = Catalog {
+            files: &files,
+            ..none()
+        };
+        let destinations = builtins();
+        let decide_text =
+            |text: &str| decide(text, "google", "google", true, &destinations, catalog);
+        let expected = root
+            .join("Documents")
+            .join("budget.xlsx")
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(
+            decide_text("!f budget"),
+            Decision::OpenFile {
+                path: expected.clone()
+            }
+        );
+        assert_eq!(
+            decide_text("budg !files"),
+            Decision::OpenFile { path: expected }
+        );
+        assert_eq!(
+            decide_text("!f taxes"),
+            Decision::Rejected {
+                message: "No file matches taxes".into()
+            }
+        );
+        assert_eq!(decide_text("!f"), Decision::Empty);
+        assert!(open(&decide_text("budget")).contains("google.com"));
     }
 
     fn open(decision: &Decision) -> &str {

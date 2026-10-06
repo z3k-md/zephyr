@@ -5,15 +5,24 @@
     checkForUpdates,
     clearHistory,
     errorMessage,
+    fileIndexStatus,
     formatShortcut,
     getSnapshot,
     moveDestination,
+    rebuildFileIndex,
     removeDestination,
     saveDestination,
+    saveFileFolders,
     saveSettings,
     showBar,
   } from '../api';
-  import { isSnapshot, type Destination, type Snapshot, type SuggestKind } from '../types';
+  import {
+    isSnapshot,
+    type Destination,
+    type FileIndexStatus,
+    type Snapshot,
+    type SuggestKind,
+  } from '../types';
 
   const snapshot = ref<Snapshot | null>(null);
   const status = ref<string | null>(null);
@@ -37,7 +46,23 @@
     suggest: 'none' as SuggestKind,
   });
 
+  const fileStatus = ref<FileIndexStatus | null>(null);
+  const newRoot = ref('');
+  const newExclude = ref('');
+
   let unlistens: UnlistenFn[] = [];
+  let statusTimer = 0;
+
+  // Saved roots, or the default (home) the index reports when none are saved.
+  const fileRoots = computed(() => snapshot.value?.fileRoots ?? fileStatus.value?.roots ?? []);
+
+  const indexSummary = computed(() => {
+    const current = fileStatus.value;
+    if (!current) return '';
+    if (current.roots.length === 0) return 'File search is off. Add a folder to turn it on.';
+    const count = current.entries.toLocaleString();
+    return current.scanning ? `Indexing… ${count} items so far` : `${count} items indexed`;
+  });
 
   const historyPreview = computed(() => snapshot.value?.history.slice(0, 8) ?? []);
 
@@ -58,9 +83,11 @@
     const section = new URLSearchParams(window.location.search).get('section');
     if (section) void revealSection(section);
     window.addEventListener('keydown', onShortcutKey, true);
+    void pollFileStatus();
   });
 
   onUnmounted(() => {
+    window.clearTimeout(statusTimer);
     window.removeEventListener('keydown', onShortcutKey, true);
     for (const unlisten of unlistens) unlisten();
   });
@@ -297,6 +324,79 @@
     }
   }
 
+  // Poll while a walk runs so the count climbs, then stop.
+  async function pollFileStatus() {
+    window.clearTimeout(statusTimer);
+    try {
+      fileStatus.value = await fileIndexStatus();
+    } catch {
+      return;
+    }
+    if (fileStatus.value.scanning) {
+      statusTimer = window.setTimeout(() => void pollFileStatus(), 1000);
+    }
+  }
+
+  async function saveFolders(roots: string[] | null, excludes: string[]) {
+    busy.value = true;
+    try {
+      apply(await saveFileFolders(roots, excludes));
+      // The new walk starts on a worker thread; give it a moment to report.
+      window.setTimeout(() => void pollFileStatus(), 300);
+      return true;
+    } catch (error) {
+      formError.value = errorMessage(error);
+      return false;
+    } finally {
+      busy.value = false;
+    }
+  }
+
+  async function addRoot() {
+    if (!snapshot.value || !newRoot.value.trim()) return;
+    if (await saveFolders([...fileRoots.value, newRoot.value], snapshot.value.fileExcludes)) {
+      newRoot.value = '';
+    }
+  }
+
+  function removeRoot(root: string) {
+    if (!snapshot.value) return;
+    void saveFolders(
+      fileRoots.value.filter((item) => item !== root),
+      snapshot.value.fileExcludes
+    );
+  }
+
+  function useHomeFolder() {
+    if (!snapshot.value) return;
+    void saveFolders(null, snapshot.value.fileExcludes);
+  }
+
+  async function addExclude() {
+    if (!snapshot.value || !newExclude.value.trim()) return;
+    if (
+      await saveFolders(snapshot.value.fileRoots, [
+        ...snapshot.value.fileExcludes,
+        newExclude.value,
+      ])
+    ) {
+      newExclude.value = '';
+    }
+  }
+
+  function removeExclude(exclude: string) {
+    if (!snapshot.value) return;
+    void saveFolders(
+      snapshot.value.fileRoots,
+      snapshot.value.fileExcludes.filter((item) => item !== exclude)
+    );
+  }
+
+  async function rebuild() {
+    await rebuildFileIndex();
+    window.setTimeout(() => void pollFileStatus(), 300);
+  }
+
   function destinationName(id: string): string {
     if (id === 'url') return 'Link';
     return snapshot.value?.destinations.find((destination) => destination.id === id)?.name ?? id;
@@ -467,6 +567,54 @@
         </label>
         <button class="primary" type="submit" :disabled="busy">Add destination</button>
       </form>
+    </section>
+
+    <section v-if="snapshot" id="section-files">
+      <h2>Files</h2>
+      <p class="lede">
+        Type !f and a name to open a file or folder; Ctrl+Enter shows it in its folder. Hidden
+        folders, .gitignored files and caches like node_modules are skipped.
+      </p>
+      <h3>Folders to search</h3>
+      <ul class="folders">
+        <li v-for="root in fileRoots" :key="root">
+          <span class="path">{{ root }}</span>
+          <button type="button" :disabled="busy" @click="removeRoot(root)">Remove</button>
+        </li>
+      </ul>
+      <form class="field inline" @submit.prevent="addRoot">
+        <input
+          v-model="newRoot"
+          type="text"
+          placeholder="Folder path, e.g. D:\Projects or ~/Work"
+        />
+        <button type="submit" :disabled="busy || !newRoot.trim()">Add folder</button>
+        <button
+          v-if="snapshot.fileRoots !== null"
+          type="button"
+          :disabled="busy"
+          @click="useHomeFolder"
+        >
+          Use home folder
+        </button>
+      </form>
+      <h3>Folders to skip</h3>
+      <ul v-if="snapshot.fileExcludes.length" class="folders">
+        <li v-for="exclude in snapshot.fileExcludes" :key="exclude">
+          <span class="path">{{ exclude }}</span>
+          <button type="button" :disabled="busy" @click="removeExclude(exclude)">Remove</button>
+        </li>
+      </ul>
+      <form class="field inline" @submit.prevent="addExclude">
+        <input v-model="newExclude" type="text" placeholder="Folder path to leave out" />
+        <button type="submit" :disabled="busy || !newExclude.trim()">Skip folder</button>
+      </form>
+      <div class="field inline">
+        <span class="hint-text">{{ indexSummary }}</span>
+        <button type="button" :disabled="fileStatus?.scanning" @click="rebuild">
+          Rebuild index
+        </button>
+      </div>
     </section>
 
     <section v-if="snapshot" id="section-history">
