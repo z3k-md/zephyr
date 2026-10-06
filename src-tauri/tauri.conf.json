@@ -29,7 +29,14 @@
         "visible": false,
         "focus": false,
         "shadow": false,
-        "center": false
+        "center": false,
+        "windowEffects": {
+          "effects": [
+            "hudWindow"
+          ],
+          "state": "active",
+          "radius": 16
+        }
       }
     ],
     "security": {

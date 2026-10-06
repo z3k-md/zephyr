@@ -7,8 +7,10 @@ use tauri_plugin_opener::OpenerExt;
 
 use crate::ai::{self, AiEvent, AiSettings};
 use crate::apps::{self, Catalog};
+use crate::clipboard;
 use crate::destination::Destination;
 use crate::files;
+use crate::notes;
 use crate::query::{self, Decision, DispatchOutcome};
 use crate::settings::{self, Target};
 use crate::shortcut;
@@ -302,15 +304,24 @@ pub fn save_settings(
     let shortcut = shortcut::canonical_shortcut(&summon_shortcut)?;
     let previous = state.snapshot()?;
     let shortcut_changed = shortcut != previous.summon_shortcut;
+    if shortcut == previous.clipboard.shortcut {
+        return Err("That shortcut already opens clipboard history".into());
+    }
+    if shortcut == previous.notes_shortcut {
+        return Err("That shortcut already opens notes".into());
+    }
+    let clip = previous.extra_shortcuts();
 
     // Registering unregisters the old shortcut first, so every failure path has to put it back.
     let restore_shortcut = || {
-        if shortcut_changed && let Err(err) = shortcut::register(&app, &previous.summon_shortcut) {
+        if shortcut_changed
+            && let Err(err) = shortcut::register(&app, &previous.summon_shortcut, clip)
+        {
             log::error!("couldn't restore the summon shortcut: {err}");
         }
     };
 
-    if shortcut_changed && let Err(err) = shortcut::register(&app, &shortcut) {
+    if shortcut_changed && let Err(err) = shortcut::register(&app, &shortcut, clip) {
         restore_shortcut();
         return Err(err);
     }
@@ -376,8 +387,8 @@ pub fn clear_history(app: AppHandle, state: State<'_, AppState>) -> Result<Persi
 }
 
 #[tauri::command]
-pub fn set_bar_height(app: AppHandle, height: f64) -> Result<(), String> {
-    window::set_bar_height(&app, height)
+pub fn set_bar_height(app: AppHandle, height: f64, width: Option<f64>) -> Result<(), String> {
+    window::set_bar_height(&app, height, width)
 }
 
 #[tauri::command]
@@ -515,5 +526,281 @@ pub fn import_destinations(
     let incoming: Vec<crate::state::ImportedDestination> = serde_json::from_value(list)
         .map_err(|err| format!("That JSON isn't a list of destinations: {err}"))?;
     let snapshot = state.update(|persisted| persisted.import(incoming).map(|_| ()))?;
+    publish(&app, snapshot)
+}
+
+// Clipboard history
+
+#[tauri::command]
+pub fn clip_list(query: String, filter: String) -> clipboard::ClipList {
+    clipboard::list(&query, &filter, 300)
+}
+
+#[tauri::command]
+pub fn clip_detail(id: u64) -> Result<clipboard::ClipDetail, String> {
+    clipboard::detail(id)
+}
+
+/// Pastes into the app in front. Without Accessibility permission it copies instead and
+/// says so.
+#[tauri::command]
+pub fn clip_paste(app: AppHandle, id: u64, plain: bool) -> Result<String, String> {
+    match clipboard::paste(id, plain, || window::hide_bar(&app))? {
+        clipboard::PasteOutcome::Pasted => Ok("pasted".into()),
+        clipboard::PasteOutcome::NeedsPermission => Ok("needsPermission".into()),
+    }
+}
+
+#[tauri::command]
+pub fn clip_copy(app: AppHandle, id: u64) -> Result<(), String> {
+    clipboard::copy(id, false)?;
+    window::dismiss_bar(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn clip_pin(id: u64, pinned: bool) -> Result<(), String> {
+    clipboard::set_pinned(id, pinned)
+}
+
+#[tauri::command]
+pub fn clip_delete(id: u64) -> Result<(), String> {
+    clipboard::delete(id)
+}
+
+#[tauri::command]
+pub fn clip_clear(pinned_too: bool) -> Result<usize, String> {
+    clipboard::clear(pinned_too)
+}
+
+#[tauri::command]
+pub fn clip_can_paste() -> bool {
+    clipboard::can_paste()
+}
+
+#[tauri::command]
+pub fn clip_request_paste_permission() -> bool {
+    clipboard::request_paste_permission()
+}
+
+#[tauri::command]
+pub fn clip_stats() -> std::collections::HashMap<&'static str, usize> {
+    clipboard::stats()
+}
+
+#[tauri::command]
+pub fn save_clipboard_settings(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    settings: clipboard::ClipboardSettings,
+) -> Result<Persisted, String> {
+    let snapshot = state.update(|persisted| persisted.set_clipboard(settings))?;
+    if let Err(err) =
+        shortcut::register(&app, &snapshot.summon_shortcut, snapshot.extra_shortcuts())
+    {
+        log::error!("{err}");
+    }
+    clipboard::apply_settings(snapshot.clipboard.clone());
+    publish(&app, snapshot)
+}
+
+#[tauri::command]
+pub fn open_clipboard(app: AppHandle) {
+    window::show_clipboard(&app);
+}
+
+// Notes
+
+#[tauri::command]
+pub fn notes_list(query: String) -> Vec<notes::NoteSummary> {
+    notes::list(&query)
+}
+
+#[tauri::command]
+pub fn note_get(id: String) -> Result<notes::Note, String> {
+    notes::get(&id)
+}
+
+#[tauri::command]
+pub fn note_create(body: String) -> Result<String, String> {
+    notes::create(&body)
+}
+
+#[tauri::command]
+pub fn note_save(id: String, body: String) -> Result<i64, String> {
+    notes::save(&id, &body)
+}
+
+#[tauri::command]
+pub fn note_delete(id: String) -> Result<(), String> {
+    notes::delete(&id)
+}
+
+#[tauri::command]
+pub fn reveal_notes(app: AppHandle) -> Result<(), String> {
+    app.opener()
+        .open_path(notes::folder()?, None::<&str>)
+        .map_err(|err| err.to_string())
+}
+
+/// Opens the notes window, on `id` when given, or on a new note holding `body`.
+// Async for the same reason as open_settings: it may build a webview.
+#[tauri::command]
+pub async fn open_notes(
+    app: AppHandle,
+    id: Option<String>,
+    body: Option<String>,
+) -> Result<(), String> {
+    let id = match (id, body) {
+        (Some(id), _) => Some(id),
+        (None, Some(body)) => Some(notes::create(&body)?),
+        (None, None) => None,
+    };
+    window::hide_bar(&app);
+    window::open_notes(&app, id.as_deref())
+}
+
+#[tauri::command]
+pub fn save_notes_shortcut(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    shortcut: String,
+) -> Result<Persisted, String> {
+    let snapshot = state.update(|persisted| persisted.set_notes_shortcut(shortcut))?;
+    if let Err(err) =
+        shortcut::register(&app, &snapshot.summon_shortcut, snapshot.extra_shortcuts())
+    {
+        log::error!("{err}");
+    }
+    publish(&app, snapshot)
+}
+
+/// A settings or notes page has drawn and can be shown.
+#[tauri::command]
+pub fn page_ready(app: AppHandle, window: tauri::WebviewWindow) {
+    window::page_ready(&app, window.label());
+}
+
+/// Records a finished typing test; true when it is a new personal best for its mode.
+#[tauri::command]
+pub fn save_typing_result(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    result: crate::state::TypingBest,
+) -> Result<bool, String> {
+    let mut best = false;
+    let snapshot = state.update(|persisted| {
+        best = persisted.record_typing(result.clone())?;
+        Ok(())
+    })?;
+    if best {
+        let _ = publish(&app, snapshot);
+    }
+    Ok(best)
+}
+
+// Claude jobs
+
+#[tauri::command]
+pub fn claude_jobs() -> Vec<crate::claude::Job> {
+    crate::claude::jobs()
+}
+
+#[tauri::command]
+pub fn claude_approvals() -> Vec<crate::claude::hook::Approval> {
+    crate::claude::hook::approvals()
+}
+
+/// `!claude [alias] task`: starts a job in the aliased project, or the last one used.
+#[tauri::command]
+pub fn claude_submit(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    input: String,
+    project_id: Option<String>,
+) -> Result<String, String> {
+    let config = state.snapshot()?.claude;
+    let (routed, task) = crate::claude::route(&config, &input);
+    let project = match project_id {
+        Some(id) => config.projects.iter().find(|project| project.id == id),
+        None => routed,
+    }
+    .ok_or("Add a project in Settings > Claude first")?;
+    let task = if task.is_empty() { input.trim() } else { task };
+    let id = crate::claude::submit(&app, &project.id, task)?;
+    window::dismiss_bar(&app);
+    Ok(id)
+}
+
+#[tauri::command]
+pub fn claude_follow_up(app: AppHandle, job_id: String, prompt: String) -> Result<(), String> {
+    crate::claude::follow_up(&app, &job_id, &prompt)?;
+    window::dismiss_bar(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn claude_cancel(app: AppHandle, job_id: String) -> Result<(), String> {
+    crate::claude::cancel(&app, &job_id)
+}
+
+#[tauri::command]
+pub fn claude_remove(app: AppHandle, job_id: String) -> Result<(), String> {
+    crate::claude::remove(&app, &job_id)
+}
+
+#[tauri::command]
+pub fn claude_open_terminal(app: AppHandle, job_id: String) -> Result<(), String> {
+    crate::claude::open_in_terminal(&app, &job_id)
+}
+
+/// `decision`: "allow", "always" or "deny" (with an optional reason).
+#[tauri::command]
+pub fn claude_answer(
+    app: AppHandle,
+    approval_id: String,
+    decision: String,
+    reason: Option<String>,
+) -> Result<(), String> {
+    use crate::claude::hook::Decision;
+    let decision = match decision.as_str() {
+        "allow" => Decision::Allow,
+        "always" => Decision::AllowAlways,
+        "deny" => Decision::Deny(reason.unwrap_or_default().trim().to_string()),
+        _ => return Err("Unknown answer".into()),
+    };
+    crate::claude::hook::answer(&app, &approval_id, decision)
+}
+
+#[tauri::command]
+pub async fn claude_status(
+    state: State<'_, AppState>,
+) -> Result<crate::claude::binary::CliStatus, String> {
+    let configured = state.snapshot()?.claude.binary;
+    tauri::async_runtime::spawn_blocking(move || crate::claude::binary::status(&configured))
+        .await
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn save_claude_settings(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    settings: crate::claude::ClaudeSettings,
+) -> Result<Persisted, String> {
+    let snapshot = state.update(|persisted| persisted.set_claude(settings))?;
+    publish(&app, snapshot)
+}
+
+#[tauri::command]
+pub fn save_resume_seconds(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    seconds: u32,
+) -> Result<Persisted, String> {
+    let snapshot = state.update(|persisted| {
+        persisted.resume_seconds = seconds.min(24 * 60 * 60);
+        Ok(())
+    })?;
     publish(&app, snapshot)
 }

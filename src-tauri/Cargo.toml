@@ -37,17 +37,31 @@ fend-core = "1.5"
 chrono-tz = "0.10"
 tauri-plugin-deep-link = "2"
 url = "2"
+chacha20poly1305 = "0.10"
+base64 = "0.22"
+sha2 = "0.10"
+getrandom = "0.3"
+tiny_http = "0.12"
+uuid = { version = "1", features = ["v4"] }
+tauri-plugin-notification = "2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = [
     "std",
     "libc",
+    "NSBitmapImageRep",
+    "NSImageRep",
+    "NSPasteboard",
+    "NSPasteboardItem",
     "NSResponder",
     "NSRunningApplication",
     "NSWindow",
     "NSWorkspace",
 ] }
+objc2-core-graphics = "0.3"
+objc2-foundation = "0.3"
+objc2-vision = "0.3"
 tauri-nspanel = "2.1"
 
 [target.'cfg(windows)'.dependencies]
@@ -57,3 +71,6 @@ windows = { version = "0.62", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_System_Threading",
 ] }
+
+[target."cfg(unix)".dependencies]
+libc = "0.2"

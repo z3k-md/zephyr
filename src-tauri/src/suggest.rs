@@ -9,6 +9,7 @@ use crate::apps::{self, App, Catalog};
 use crate::destination::{self, Destination};
 use crate::files::{self, Hit};
 use crate::history::{self, HistoryEntry};
+use crate::notes;
 use crate::query::{self, Parsed};
 use crate::settings::{self, Setting, Target};
 
@@ -26,6 +27,8 @@ pub struct Suggestion {
     pub setting_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -53,7 +56,10 @@ pub async fn gather(
     let scoped = parsed.bang.as_deref().is_some_and(apps::is_scope);
     let settings_scoped = parsed.bang.as_deref().is_some_and(settings::is_scope);
     let files_scoped = parsed.bang.as_deref().is_some_and(files::is_scope);
-    if parsed.only_bang && !scoped && !settings_scoped && !files_scoped {
+    let notes_scoped = parsed.bang.as_deref().is_some_and(notes::is_scope);
+    let typing = parsed.bang.as_deref() == Some("type");
+    if parsed.only_bang && !scoped && !settings_scoped && !files_scoped && !notes_scoped && !typing
+    {
         return palette(destinations, parsed.bang.as_deref().unwrap_or(""));
     }
     if input.trim().is_empty() {
@@ -94,6 +100,17 @@ pub async fn gather(
             preselect: (!items.is_empty() && !parsed.query.is_empty()).then_some(0),
             items,
             notice,
+        };
+    }
+    if notes_scoped {
+        return notes_response(&parsed.query);
+    }
+    if parsed.bang.as_deref() == Some("type") {
+        return SuggestResponse {
+            mode: "search".into(),
+            items: Vec::new(),
+            notice: Some("Press Enter to start a typing test".into()),
+            preselect: None,
         };
     }
     if files_scoped {
@@ -186,6 +203,7 @@ pub async fn gather(
             app_id: None,
             setting_id: None,
             path: None,
+            note_id: None,
         });
     }
     items.extend(history_items(history, &parsed.query, destinations, now, 4));
@@ -210,6 +228,57 @@ pub async fn gather(
     }
 }
 
+/// `!note` lists recent notes; with text it finds notes and offers to start one with it.
+/// Enter opens the best match, or creates the note when nothing matches by title.
+fn notes_response(query: &str) -> SuggestResponse {
+    let found = notes::list(query);
+    let lower = query.to_lowercase();
+    let note_rows = found.iter().take(7).map(|note| Suggestion {
+        label: note.title.clone(),
+        query: String::new(),
+        destination_id: String::new(),
+        kind: "note".into(),
+        hint: if note.snippet.is_empty() {
+            "Note".into()
+        } else {
+            note.snippet.clone()
+        },
+        app_id: None,
+        setting_id: None,
+        path: None,
+        note_id: Some(note.id.clone()),
+    });
+    let create = (!query.is_empty()).then(|| Suggestion {
+        label: format!("New note: {query}"),
+        query: query.to_string(),
+        destination_id: String::new(),
+        kind: "noteNew".into(),
+        hint: "Create".into(),
+        app_id: None,
+        setting_id: None,
+        path: None,
+        note_id: None,
+    });
+    let title_match = found
+        .iter()
+        .any(|note| note.title.to_lowercase().contains(&lower));
+    let mut items: Vec<Suggestion> = Vec::new();
+    if title_match {
+        items.extend(note_rows);
+        items.extend(create);
+    } else {
+        items.extend(create);
+        items.extend(note_rows);
+    }
+    let notice = (items.is_empty()).then(|| "No notes yet. Type to start one.".to_string());
+    SuggestResponse {
+        mode: "search".into(),
+        preselect: (!items.is_empty() && !query.is_empty()).then_some(0),
+        items,
+        notice,
+    }
+}
+
 fn app_item(app: &App) -> Suggestion {
     Suggestion {
         label: app.name.clone(),
@@ -220,6 +289,7 @@ fn app_item(app: &App) -> Suggestion {
         app_id: Some(app.id.clone()),
         setting_id: None,
         path: None,
+        note_id: None,
     }
 }
 
@@ -233,6 +303,7 @@ fn setting_item(setting: &Setting) -> Suggestion {
         app_id: None,
         setting_id: Some(setting.id.to_string()),
         path: None,
+        note_id: None,
     }
 }
 
@@ -246,6 +317,7 @@ fn file_item(hit: &Hit) -> Suggestion {
         app_id: None,
         setting_id: None,
         path: Some(hit.path.clone()),
+        note_id: None,
     }
 }
 
@@ -272,6 +344,7 @@ fn palette(destinations: &[Destination], prefix: &str) -> SuggestResponse {
             app_id: None,
             setting_id: None,
             path: None,
+            note_id: None,
             hint: destination
                 .triggers
                 .iter()
@@ -315,6 +388,7 @@ fn history_items(
             app_id: None,
             setting_id: None,
             path: None,
+            note_id: None,
         })
         .collect()
 }
@@ -334,6 +408,7 @@ fn merge_remote(items: &mut Vec<Suggestion>, remote: Vec<String>, destination: &
             app_id: None,
             setting_id: None,
             path: None,
+            note_id: None,
         });
     }
 }

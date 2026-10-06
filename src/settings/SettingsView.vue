@@ -8,6 +8,18 @@
     aiPresets,
     aiSetKey,
     checkForUpdates,
+    claudeStatus,
+    saveClaudeSettings,
+    clipCanPaste,
+    clipClear,
+    clipRequestPastePermission,
+    clipStats,
+    openNotes,
+    pageReady,
+    revealNotes,
+    saveClipboardSettings,
+    saveResumeSeconds,
+    saveNotesShortcut,
     clearHistory,
     errorMessage,
     exportDestinations,
@@ -28,6 +40,10 @@
     isSnapshot,
     type AiPreset,
     type AiSettings,
+    type ClaudeCliStatus,
+    type ClaudeProject,
+    type ClaudeSettings,
+    type ClipboardSettings,
     type Destination,
     type FileIndexStatus,
     type LocalServer,
@@ -67,6 +83,23 @@
   const fileStatus = ref<FileIndexStatus | null>(null);
   const newRoot = ref('');
   const newExclude = ref('');
+
+  const notesListening = ref(false);
+  const cli = ref<ClaudeCliStatus | null>(null);
+  const newProjectFolder = ref('');
+  const clipListening = ref(false);
+  const clipNewApp = ref('');
+  const clipCount = ref<number | null>(null);
+  const clipPasteAllowed = ref<boolean | null>(null);
+  const clipConfirm = ref(false);
+  const RETENTION = [
+    { days: 7, label: '7 days' },
+    { days: 30, label: '1 month' },
+    { days: 90, label: '3 months' },
+    { days: 180, label: '6 months' },
+    { days: 365, label: '1 year' },
+    { days: 0, label: 'Until the 2,000 item limit' },
+  ];
 
   const presets = ref<AiPreset[]>([]);
   const aiDraft = ref<AiSettings>({ provider: 'auto', model: '', baseUrl: '', api: 'openai' });
@@ -123,7 +156,10 @@
 
   onMounted(async () => {
     await refresh();
+    pageReady();
     void loadAi();
+    void loadClip();
+    void loadCli();
     unlistens.push(
       await listen<unknown>('state-changed', (event) => {
         if (isSnapshot(event.payload)) snapshot.value = event.payload;
@@ -206,6 +242,32 @@
   }
 
   function onShortcutKey(event: KeyboardEvent) {
+    if (notesListening.value && !event.isComposing) {
+      event.preventDefault();
+      event.stopPropagation();
+      notesListening.value = false;
+      if (event.key === 'Escape') return;
+      const shortcut = event.key === 'Backspace' ? '' : captureShortcut(event);
+      if (shortcut === null) {
+        formError.value = 'Use at least one modifier and a letter, number, or space.';
+        return;
+      }
+      void saveNotesKey(shortcut);
+      return;
+    }
+    if (clipListening.value && !event.isComposing) {
+      event.preventDefault();
+      event.stopPropagation();
+      clipListening.value = false;
+      if (event.key === 'Escape') return;
+      const shortcut = captureShortcut(event);
+      if (!shortcut) {
+        formError.value = 'Use at least one modifier and a letter, number, or space.';
+        return;
+      }
+      void saveClip({ shortcut });
+      return;
+    }
     if (!listening.value || event.isComposing) return;
     event.preventDefault();
     event.stopPropagation();
@@ -486,6 +548,158 @@
     window.setTimeout(() => void pollFileStatus(), 300);
   }
 
+  const RESUME = [
+    { seconds: 0, label: 'Never: always start at the search box' },
+    { seconds: 30, label: 'Within 30 seconds' },
+    { seconds: 120, label: 'Within 2 minutes' },
+    { seconds: 600, label: 'Within 10 minutes' },
+    { seconds: 3600, label: 'Within an hour' },
+    { seconds: 86400, label: 'Always' },
+  ];
+
+  async function changeResume(event: Event) {
+    busy.value = true;
+    try {
+      apply(await saveResumeSeconds(Number((event.target as HTMLSelectElement).value)));
+    } catch (error) {
+      formError.value = errorMessage(error);
+    } finally {
+      busy.value = false;
+    }
+  }
+
+  async function loadCli() {
+    try {
+      cli.value = await claudeStatus();
+    } catch {
+      cli.value = null;
+    }
+  }
+
+  async function saveClaude(next: ClaudeSettings) {
+    busy.value = true;
+    try {
+      apply(await saveClaudeSettings(next));
+      return true;
+    } catch (error) {
+      formError.value = errorMessage(error);
+      return false;
+    } finally {
+      busy.value = false;
+    }
+  }
+
+  async function addProject() {
+    if (!snapshot.value || !newProjectFolder.value.trim()) return;
+    const claude = snapshot.value.claude;
+    const project: ClaudeProject = {
+      id: '',
+      folder: newProjectFolder.value.trim(),
+      alias: '',
+      profile: 'edit',
+      allow: [],
+      model: '',
+      effort: '',
+      note: '',
+    };
+    if (await saveClaude({ ...claude, projects: [...claude.projects, project] })) {
+      newProjectFolder.value = '';
+      status.value =
+        'Project added. Claude runs that folder’s own .claude hooks and .mcp.json servers without asking.';
+    }
+  }
+
+  function updateProject(id: string, partial: Partial<ClaudeProject>) {
+    if (!snapshot.value) return;
+    const claude = snapshot.value.claude;
+    void saveClaude({
+      ...claude,
+      projects: claude.projects.map((project) =>
+        project.id === id ? { ...project, ...partial } : project
+      ),
+    });
+  }
+
+  function removeProject(id: string) {
+    if (!snapshot.value) return;
+    const claude = snapshot.value.claude;
+    void saveClaude({
+      ...claude,
+      projects: claude.projects.filter((project) => project.id !== id),
+    });
+  }
+
+  function saveClaudeLimits(partial: Partial<ClaudeSettings>) {
+    if (!snapshot.value) return;
+    void saveClaude({ ...snapshot.value.claude, ...partial });
+  }
+
+  async function saveNotesKey(shortcut: string) {
+    busy.value = true;
+    try {
+      apply(await saveNotesShortcut(shortcut));
+    } catch (error) {
+      formError.value = errorMessage(error);
+    } finally {
+      busy.value = false;
+    }
+  }
+
+  async function loadClip() {
+    try {
+      clipCount.value = (await clipStats()).total ?? 0;
+      clipPasteAllowed.value = await clipCanPaste();
+    } catch {
+      clipCount.value = null;
+    }
+  }
+
+  async function saveClip(partial: Partial<ClipboardSettings>) {
+    if (!snapshot.value) return;
+    busy.value = true;
+    try {
+      apply(await saveClipboardSettings({ ...snapshot.value.clipboard, ...partial }));
+      void loadClip();
+    } catch (error) {
+      formError.value = errorMessage(error);
+    } finally {
+      busy.value = false;
+    }
+  }
+
+  function addIgnoredApp() {
+    const app = clipNewApp.value.trim();
+    if (!snapshot.value || !app) return;
+    void saveClip({ ignoredApps: [...snapshot.value.clipboard.ignoredApps, app] });
+    clipNewApp.value = '';
+  }
+
+  function removeIgnoredApp(app: string) {
+    if (!snapshot.value) return;
+    void saveClip({
+      ignoredApps: snapshot.value.clipboard.ignoredApps.filter((item) => item !== app),
+    });
+  }
+
+  async function clearClipboard() {
+    if (!clipConfirm.value) {
+      clipConfirm.value = true;
+      return;
+    }
+    clipConfirm.value = false;
+    try {
+      const removed = await clipClear(false);
+      status.value = `Deleted ${removed} clipboard items. Pinned items stayed.`;
+      void loadClip();
+    } catch (error) {
+      formError.value = errorMessage(error);
+    }
+  }
+
+  async function allowPasting() {
+    clipPasteAllowed.value = await clipRequestPastePermission();
+  }
+
   async function loadAi() {
     if (snapshot.value) aiDraft.value = { ...snapshot.value.ai };
     try {
@@ -621,6 +835,14 @@
           </option>
         </select>
       </label>
+      <label class="field">
+        <span>Reopening the bar returns to where you left off</span>
+        <select :value="snapshot.resumeSeconds" :disabled="busy" @change="changeResume">
+          <option v-for="option in RESUME" :key="option.seconds" :value="option.seconds">
+            {{ option.label }}
+          </option>
+        </select>
+      </label>
       <div class="field">
         <button type="button" @click="updates">Check for updates</button>
         <span v-if="updateMessage" class="hint-text">{{ updateMessage }}</span>
@@ -698,6 +920,290 @@
         </form>
       </template>
       <p v-if="aiMessage" class="hint-text">{{ aiMessage }}</p>
+    </section>
+
+    <section v-if="snapshot" id="section-clipboard">
+      <h2>Clipboard</h2>
+      <p class="lede">
+        Zephyr keeps what you copy so you can search it and paste it again. Open it with its
+        shortcut or by typing !clip. History stays on this computer, encrypted with a key in your
+        keychain.
+      </p>
+      <label class="check">
+        <input
+          type="checkbox"
+          :checked="snapshot.clipboard.enabled"
+          :disabled="busy"
+          @change="saveClip({ enabled: !snapshot.clipboard.enabled })"
+        />
+        Keep clipboard history
+      </label>
+      <div class="field">
+        <span>Shortcut</span>
+        <button
+          type="button"
+          class="recorder"
+          :class="{ listening: clipListening }"
+          @click="clipListening = true"
+        >
+          {{
+            clipListening
+              ? 'Press a shortcut'
+              : snapshot.clipboard.shortcut
+                ? formatShortcut(snapshot.clipboard.shortcut)
+                : 'None'
+          }}
+        </button>
+      </div>
+      <label class="field">
+        <span>Keep items for</span>
+        <select
+          :value="snapshot.clipboard.retentionDays"
+          :disabled="busy"
+          @change="saveClip({ retentionDays: Number(($event.target as HTMLSelectElement).value) })"
+        >
+          <option v-for="option in RETENTION" :key="option.days" :value="option.days">
+            {{ option.label }}
+          </option>
+        </select>
+      </label>
+      <label class="check">
+        <input
+          type="checkbox"
+          :checked="snapshot.clipboard.recognizeText"
+          :disabled="busy"
+          @change="saveClip({ recognizeText: !snapshot.clipboard.recognizeText })"
+        />
+        Recognize text in copied images so they can be searched
+      </label>
+      <div class="field inline">
+        <span class="hint-text">
+          {{
+            clipPasteAllowed
+              ? 'Zephyr can paste straight into the app you are using.'
+              : 'To paste straight into apps, Zephyr needs Accessibility permission.'
+          }}
+        </span>
+        <button v-if="clipPasteAllowed === false" type="button" @click="allowPasting">
+          Allow pasting
+        </button>
+      </div>
+      <h3>Never record from</h3>
+      <ul class="folders">
+        <li v-for="app in snapshot.clipboard.ignoredApps" :key="app">
+          <span class="path">{{ app }}</span>
+          <button type="button" :disabled="busy" @click="removeIgnoredApp(app)">Remove</button>
+        </li>
+      </ul>
+      <form class="field inline" @submit.prevent="addIgnoredApp">
+        <input v-model="clipNewApp" type="text" placeholder="App name or bundle id" />
+        <button type="submit" :disabled="busy || !clipNewApp.trim()">Add app</button>
+      </form>
+      <div class="field inline">
+        <span class="hint-text">{{
+          clipCount === null ? '' : `${clipCount.toLocaleString()} items in history`
+        }}</span>
+        <button type="button" :disabled="!clipCount" @click="clearClipboard">
+          {{ clipConfirm ? 'Click again to delete' : 'Clear history' }}
+        </button>
+      </div>
+    </section>
+
+    <section v-if="snapshot" id="section-notes">
+      <h2>Notes</h2>
+      <p class="lede">
+        Quick notes open in a small window that stays on top. Type !note in the bar to find a note
+        or start one. Notes are Markdown files in Zephyr's folder.
+      </p>
+      <div class="field">
+        <span>Shortcut</span>
+        <button
+          type="button"
+          class="recorder"
+          :class="{ listening: notesListening }"
+          @click="notesListening = true"
+        >
+          {{
+            notesListening
+              ? 'Press a shortcut, or Backspace for none'
+              : snapshot.notesShortcut
+                ? formatShortcut(snapshot.notesShortcut)
+                : 'None'
+          }}
+        </button>
+      </div>
+      <div class="field inline">
+        <button type="button" @click="openNotes()">Open notes</button>
+        <button type="button" @click="revealNotes">Show notes folder</button>
+      </div>
+    </section>
+
+    <section v-if="snapshot" id="section-claude">
+      <h2>Claude</h2>
+      <p class="lede">
+        Type !claude and a task, from any app, and Claude Code works on it in the background in one
+        of your project folders. It uses the claude command on this computer and your own sign-in.
+        Permission requests come to Zephyr as a notification and a card in the bar.
+      </p>
+      <div class="field inline">
+        <span class="hint-text">
+          <template v-if="!cli">Checking for the claude command…</template>
+          <template v-else-if="!cli.path">
+            The claude command isn't installed, or Zephyr can't find it. Set its path below.
+          </template>
+          <template v-else>
+            {{ cli.version ?? 'claude' }} ·
+            {{
+              cli.loggedIn
+                ? `signed in (${cli.authMethod ?? 'account'})`
+                : 'not signed in: run "claude auth login" in a terminal'
+            }}
+          </template>
+        </span>
+        <button type="button" @click="loadCli">Check again</button>
+      </div>
+      <label class="field">
+        <span>claude command path (leave empty to find it)</span>
+        <input
+          :value="snapshot.claude.binary"
+          type="text"
+          spellcheck="false"
+          :placeholder="cli?.path ?? '~/.local/bin/claude'"
+          @change="
+            saveClaudeLimits({ binary: ($event.target as HTMLInputElement).value });
+            loadCli();
+          "
+        />
+      </label>
+
+      <h3>Projects</h3>
+      <article
+        v-for="(project, index) in snapshot.claude.projects"
+        :key="project.id"
+        class="destination"
+      >
+        <div class="destination-row">
+          <div>
+            <strong>{{ project.alias || project.folder.split('/').pop() }}</strong>
+            <span class="hint-text">{{ project.folder }}</span>
+            <span v-if="index < 8" class="badge">Ctrl+{{ index + 1 }}</span>
+          </div>
+          <div class="row-actions">
+            <button type="button" :disabled="busy" @click="removeProject(project.id)">
+              Remove
+            </button>
+          </div>
+        </div>
+        <div class="editor">
+          <label class="field">
+            <span>Alias, typed after !claude</span>
+            <input
+              :value="project.alias"
+              type="text"
+              placeholder="e.g. zephyr"
+              @change="
+                updateProject(project.id, { alias: ($event.target as HTMLInputElement).value })
+              "
+            />
+          </label>
+          <label class="field">
+            <span>What Claude may do without asking</span>
+            <select
+              :value="project.profile"
+              @change="
+                updateProject(project.id, {
+                  profile: ($event.target as HTMLSelectElement).value as ClaudeProject['profile'],
+                })
+              "
+            >
+              <option value="edit">Edit files in this folder (other commands ask)</option>
+              <option value="auto">
+                Auto: Claude Code decides what's safe (commit and push ask)
+              </option>
+              <option value="plan">Plan only: read and propose, change nothing</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Note added to every task here</span>
+            <textarea
+              class="import-box"
+              rows="2"
+              :value="project.note"
+              placeholder="e.g. Run the tests before finishing. Use tabs."
+              @change="
+                updateProject(project.id, { note: ($event.target as HTMLTextAreaElement).value })
+              "
+            />
+          </label>
+          <template v-if="project.allow.length">
+            <span class="hint-text">Always allowed here</span>
+            <ul class="folders">
+              <li v-for="rule in project.allow" :key="rule">
+                <span class="path">{{ rule }}</span>
+                <button
+                  type="button"
+                  :disabled="busy"
+                  @click="
+                    updateProject(project.id, {
+                      allow: project.allow.filter((item) => item !== rule),
+                    })
+                  "
+                >
+                  Remove
+                </button>
+              </li>
+            </ul>
+          </template>
+        </div>
+      </article>
+      <form class="field inline" @submit.prevent="addProject">
+        <input
+          v-model="newProjectFolder"
+          type="text"
+          placeholder="Project folder, e.g. ~/code/zephyr"
+        />
+        <button type="submit" :disabled="busy || !newProjectFolder.trim()">Add project</button>
+      </form>
+      <p class="lede">
+        Claude never commits or pushes without your approval, and it's never allowed to reset,
+        force-push, delete branches or rm -rf. Claude runs a folder's own .claude hooks and
+        .mcp.json servers without a trust prompt, so only add folders you trust.
+      </p>
+
+      <h3>Limits</h3>
+      <label class="field">
+        <span>Minutes a task may run (time waiting on you doesn't count)</span>
+        <input
+          :value="snapshot.claude.timeoutMinutes"
+          type="number"
+          min="1"
+          max="600"
+          @change="
+            saveClaudeLimits({ timeoutMinutes: Number(($event.target as HTMLInputElement).value) })
+          "
+        />
+      </label>
+      <label class="field">
+        <span>Minutes a permission request waits before it's denied</span>
+        <input
+          :value="snapshot.claude.approvalMinutes"
+          type="number"
+          min="1"
+          max="120"
+          @change="
+            saveClaudeLimits({ approvalMinutes: Number(($event.target as HTMLInputElement).value) })
+          "
+        />
+      </label>
+      <label class="check">
+        <input
+          type="checkbox"
+          :checked="snapshot.claude.notifications"
+          :disabled="busy"
+          @change="saveClaudeLimits({ notifications: !snapshot.claude.notifications })"
+        />
+        Notify me when a task finishes or needs permission
+      </label>
     </section>
 
     <section v-if="snapshot" id="section-destinations">

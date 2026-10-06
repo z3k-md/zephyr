@@ -16,6 +16,16 @@ A destination's template can be a URL, an app link such as `obsidian://`, or a f
 
 Other apps and scripts can drive Zephyr with links: `zephyr://open?q=text` shows the bar with text typed in, `zephyr://dispatch?d=pubmed&q=crispr` sends it to a destination, and `zephyr://ask?q=...` asks AI. On macOS the link scheme comes from the installed app.
 
+**Clipboard history** (macOS for now): press ⌘⇧V or type `!clip` to search everything you've copied, including text, links, colors, images and files. Text in copied screenshots is searchable too. Enter pastes into the app you're in, ⌘Enter copies, ⇧Enter pastes as plain text, and ⌘K shows more. History stays on this computer, encrypted with a key in the system keychain, and copies from password managers are never recorded.
+
+**Notes**: press ⌥⌘N (Ctrl+Alt+N on Windows) for a small always-on-top notes window with rich text, or type `!note` to find a note or start one. Notes are HTML files in Zephyr's settings folder.
+
+**Claude jobs**: type `!claude <alias> <task>` from any app, and your own `claude` CLI works on it in the background in a project folder you've registered in Settings > Claude. When it needs permission you get a notification and a card in the bar (⌘Y allow, ⌘⇧Y always, ⌘N deny). Commit and push always ask, and destructive git commands are always refused. `!claude` alone lists jobs; pick one and type to follow up.
+
+**Typing test**: `!type` runs a Monkeytype-style test (15/30/60 seconds or 10/25/50 words) with WPM, accuracy, consistency and personal bests.
+
+Reopening the bar soon after closing it returns to the view you were in. The window is set in Settings > General. Esc steps back to the main bar, and with nothing typed the bar offers Claude jobs, clipboard history and notes.
+
 `!f` (or `!file`, `!files`) searches file and folder names under your home folder (`!f budget`, `!f taxes 2025 return`). Enter opens the top match with its default app, `Ctrl+Enter` shows it in Explorer or Finder, and `Ctrl+Shift+C` copies its path. Hidden folders, `.gitignore`d files, `node_modules` and build caches are skipped; Settings > Files picks other folders or leaves some out. Without `!f`, only files you've opened from Zephyr before can appear, sharing the same two rows as settings.
 
 ## Install
