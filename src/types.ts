@@ -70,6 +70,10 @@ export interface Snapshot {
   typingBests: TypingBest[];
   claude: ClaudeSettings;
   resumeSeconds: number;
+  activeMode: string;
+  returnToMode: boolean;
+  routeCmd: string;
+  routeAlt: string;
 }
 
 export type ClaudeProfile = 'edit' | 'auto' | 'plan';
@@ -224,12 +228,23 @@ export interface Suggestion {
     | 'answer'
     | 'note'
     | 'noteNew'
-    | 'view';
+    | 'view'
+    | 'query'
+    | 'searchWith'
+    | 'more';
   hint: string;
   appId?: string;
   settingId?: string;
   path?: string;
   noteId?: string;
+  /** apps, answer, recent, web, files, settings, notes, destinations; jump and searchWith
+   *  come from the bar itself. */
+  section?: string;
+  subtitle?: string;
+  /** app:<id>, dest:<id> or glyph:<name>. */
+  icon?: string;
+  /** Keycaps shown instead of the hint. */
+  keys?: string[];
 }
 
 export interface NoteSummary {
@@ -252,6 +267,9 @@ export interface SuggestResponse {
   items: Suggestion[];
   notice: string | null;
   preselect: number | null;
+  target: string | null;
+  text: string;
+  searchWith: string[];
 }
 
 export type DispatchOutcome =
@@ -268,4 +286,37 @@ export type DispatchOutcome =
 export function isSnapshot(value: unknown): value is Snapshot {
   if (typeof value !== 'object' || value === null) return false;
   return Array.isArray((value as Snapshot).destinations);
+}
+
+export type SyncPhase =
+  | { kind: 'signedOut' }
+  | { kind: 'browser' }
+  | { kind: 'showRecovery'; recovery: string }
+  | { kind: 'awaitingApproval'; words: string }
+  | { kind: 'ready' };
+
+export interface SyncDevice {
+  id: string;
+  platform: string;
+  displayName: string;
+  lastSeenAt: string | null;
+  revokedAt: string | null;
+  createdAt: string | null;
+}
+
+export interface SyncStatus {
+  phase: SyncPhase;
+  email: string;
+  deviceId: string;
+  deviceName: string;
+  words: string;
+  keyGen: number | null;
+  devices: SyncDevice[];
+}
+
+export interface SyncPending {
+  id: string;
+  name: string;
+  platform: string;
+  words: string;
 }

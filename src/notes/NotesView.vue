@@ -10,6 +10,7 @@
   import {
     dispatch,
     errorMessage,
+    leaveNotes,
     noteCreate,
     noteDelete,
     noteGet,
@@ -337,6 +338,12 @@
     if (modifier && event.shiftKey && event.key === 'Backspace') {
       event.preventDefault();
       void removeNote();
+      return;
+    }
+    // Esc leaves Notes as the sticky mode and returns to the bar.
+    if (!browsing.value && event.key === 'Escape') {
+      event.preventDefault();
+      void flush().then(() => leaveNotes());
       return;
     }
     if (!browsing.value) return;

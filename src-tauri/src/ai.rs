@@ -362,7 +362,19 @@ pub fn cancel() {
 
 /// Streams an answer to `question` through `emit`. Returns when the answer ends, fails, or a
 /// newer ask (or `cancel`) replaces it.
-pub async fn ask(settings: &AiSettings, question: &str, emit: impl Fn(AiEvent)) {
+/// One earlier exchange in a conversation, oldest first.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ChatTurn {
+    pub question: String,
+    pub answer: String,
+}
+
+pub async fn ask(
+    settings: &AiSettings,
+    history: &[ChatTurn],
+    question: &str,
+    emit: impl Fn(AiEvent),
+) {
     let generation = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     let current = || GENERATION.load(Ordering::SeqCst) == generation;
     let fail = |message: String| {
@@ -383,7 +395,7 @@ pub async fn ask(settings: &AiSettings, question: &str, emit: impl Fn(AiEvent)) 
         model: resolved.model.clone(),
     });
 
-    let request = match build_request(&resolved, question) {
+    let request = match build_request(&resolved, history, question) {
         Ok(request) => request,
         Err(message) => return fail(message),
     };
@@ -436,8 +448,25 @@ pub async fn ask(settings: &AiSettings, question: &str, emit: impl Fn(AiEvent)) 
     }
 }
 
-fn build_request(resolved: &Resolved, question: &str) -> Result<reqwest::RequestBuilder, String> {
+fn conversation(history: &[ChatTurn], question: &str) -> Vec<Value> {
+    let mut messages = Vec::new();
+    for turn in history.iter().filter(|turn| !turn.answer.is_empty()) {
+        messages.push(json!({"role": "user", "content": turn.question}));
+        messages.push(json!({"role": "assistant", "content": turn.answer}));
+    }
+    messages.push(json!({"role": "user", "content": question}));
+    messages
+}
+
+fn build_request(
+    resolved: &Resolved,
+    history: &[ChatTurn],
+    question: &str,
+) -> Result<reqwest::RequestBuilder, String> {
     let client = http()?;
+    let messages = conversation(history, question);
+    let mut with_system = vec![json!({"role": "system", "content": SYSTEM_PROMPT})];
+    with_system.extend(messages.iter().cloned());
     let request = match resolved.api {
         Api::Openai => client
             .post(format!("{}/chat/completions", resolved.base_url))
@@ -446,10 +475,7 @@ fn build_request(resolved: &Resolved, question: &str) -> Result<reqwest::Request
                 json!({
                     "model": resolved.model,
                     "stream": true,
-                    "messages": [
-                        {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": question},
-                    ],
+                    "messages": with_system,
                 })
                 .to_string(),
             ),
@@ -459,7 +485,7 @@ fn build_request(resolved: &Resolved, question: &str) -> Result<reqwest::Request
                 "max_tokens": 16000,
                 "stream": true,
                 "system": SYSTEM_PROMPT,
-                "messages": [{"role": "user", "content": question}],
+                "messages": messages,
             });
             let mut request = client.post(format!("{}/messages", resolved.base_url));
             if supports_effort(&resolved.model) {

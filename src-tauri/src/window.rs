@@ -73,8 +73,9 @@ pub fn show_clipboard(app: &AppHandle) {
     }
 }
 
+/// Hiding only pauses whatever the bar was doing; an answer keeps streaming for when it's
+/// opened again.
 pub fn hide_bar(app: &AppHandle) {
-    crate::ai::cancel();
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.hide();
         // The bar remembers when it closed so reopening soon can return to the same view.

@@ -1,12 +1,10 @@
 <script setup lang="ts">
-  import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+  import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import {
     claudeAnswer,
     claudeApprovals,
     claudeJobs,
-    aiAsk,
-    aiCancel,
     dispatch,
     errorMessage,
     formatShortcut,
@@ -15,8 +13,13 @@
     launchApp,
     openFile,
     openSetting,
+    claudeSubmit,
+    syncApprove,
+    syncPending,
+    syncRevoke,
     openNotes,
     openSettings,
+    setActiveMode,
     resolveUrl,
     revealFile,
     setBarHeight,
@@ -24,12 +27,15 @@
   } from '../api';
   import ClipboardView from './ClipboardView.vue';
   import TypingView from '../typing/TypingView.vue';
+  import AiView from '../ai/AiView.vue';
   import ApprovalCard from '../claude/ApprovalCard.vue';
+  import DeviceCard from './DeviceCard.vue';
   import ClaudeView from '../claude/ClaudeView.vue';
   import {
     isSnapshot,
     type ClaudeApproval,
     type ClaudeJob,
+    type SyncPending,
     type Destination,
     type Snapshot,
     type Suggestion,
@@ -46,33 +52,43 @@
   const selected = ref(-1);
   const loadError = ref<string | null>(null);
 
-  // Clipboard history takes over the bar: from its hotkey, or by typing !clip.
+  // Views that take over the bar. Workspaces (Claude, Ask AI, typing, and Notes in its own
+  // window) stick: every open lands back in them until Esc leaves. Esc to the main bar only
+  // parks a workspace; a second Esc there clears it. Clipboard is a picker: it sticks until
+  // something is picked.
+  type View = 'root' | 'claude' | 'clip' | 'typing' | 'ai';
+  const WORKSPACES = ['claude', 'ai', 'typing'];
+  const MODE_NAMES: Record<string, string> = {
+    claude: 'Claude jobs',
+    ai: 'Ask AI',
+    typing: 'typing test',
+    notes: 'Notes',
+  };
+  const view = ref<View>('root');
+  const parked = ref('');
+  // A view is mounted on first use and then kept, so its state survives leaving it.
+  const visited = reactive<Record<string, boolean>>({});
+  const clipMode = computed(() => view.value === 'clip');
+  const typingMode = computed(() => view.value === 'typing');
+  const claudeMode = computed(() => view.value === 'claude');
+  const aiMode = computed(() => view.value === 'ai');
   const CLIP_WIDTH = 860;
-  const clipMode = ref(false);
   const clipQuery = ref('');
   const clipView = ref<InstanceType<typeof ClipboardView> | null>(null);
-  // The typing test also takes over the bar, from !type.
   const TYPING_WIDTH = 760;
-  const typingMode = ref(false);
   const typingView = ref<InstanceType<typeof TypingView> | null>(null);
+  const aiView = ref<InstanceType<typeof AiView> | null>(null);
   // Background Claude jobs, from !claude; pending permission requests show above everything.
-  const claudeMode = ref(false);
   const claudeQuery = ref('');
   const claudeView = ref<InstanceType<typeof ClaudeView> | null>(null);
   const approvals = ref<ClaudeApproval[]>([]);
   const jobs = ref<ClaudeJob[]>([]);
+  // Other computers asking to join sync; checked when the bar opens and every minute.
+  const devicesWaiting = ref<SyncPending[]>([]);
+  let devicePoll = 0;
 
   // Reopening soon after closing returns to the view and text it closed on.
   let hiddenAt = 0;
-
-  interface Answer {
-    question: string;
-    input: string;
-    text: string;
-    status: 'waiting' | 'streaming' | 'done' | 'error';
-    error: string | null;
-    source: string | null;
-  }
 
   interface Action {
     label: string;
@@ -82,10 +98,6 @@
 
   const actionsOpen = ref(false);
   const actionIndex = ref(0);
-
-  const answer = ref<Answer | null>(null);
-  const answerEl = ref<HTMLElement | null>(null);
-  let answerGeneration = 0;
 
   let generation = 0;
   let remoteApplied = false;
@@ -108,13 +120,7 @@
     selected.value >= 0 ? items.value[selected.value] : undefined
   );
 
-  // The answer stays up until the text changes; Enter then copies it instead of asking again.
-  const answerReady = computed(
-    () => answer.value?.status === 'done' && query.value === answer.value.input
-  );
-
   const enterLabel = computed(() => {
-    if (answerReady.value) return 'copy answer';
     const item = selectedItem.value;
     if (item?.kind === 'answer') return `copy ${item.label}`;
     if (item?.kind === 'note') return `open ${item.label}`;
@@ -133,9 +139,6 @@
   const actions = computed<Action[]>(() => {
     const item = selectedItem.value;
     const list: Action[] = [];
-    if (answerReady.value) {
-      list.push({ label: 'Copy answer', run: () => copyAnswer() });
-    }
     if (item?.kind === 'answer') {
       list.push({ label: 'Copy answer', run: () => copyText(item.label) });
     } else if (item?.kind === 'app' && item.appId) {
@@ -187,21 +190,40 @@
     try {
       snapshot.value = await getSnapshot();
       armedId.value = snapshot.value.defaultDestinationId;
+      const remembered = snapshot.value.activeMode;
+      if (snapshot.value.returnToMode && MODE_NAMES[remembered]) {
+        parked.value = remembered;
+        if (WORKSPACES.includes(remembered)) enter(remembered as View);
+      }
     } catch (error) {
       loadError.value = errorMessage(error);
     }
 
     unlistens.push(
       await listen('bar-shown', () => {
-        const limit = (snapshot.value?.resumeSeconds ?? 120) * 1000;
-        const resume = hiddenAt > 0 && limit > 0 && Date.now() - hiddenAt < limit;
-        if (resume) {
-          void loadApprovals();
-          void loadJobs();
-        } else {
+        void loadApprovals();
+        void loadJobs();
+        void loadDevices();
+        if (snapshot.value && !snapshot.value.returnToMode) {
+          parked.value = '';
+          view.value = 'root';
           resetForSummon();
+          void focusInput();
+          return;
         }
-        if (!clipMode.value && !typingMode.value && !claudeMode.value) void focusInput();
+        // Still inside a view (a workspace, or a picker mid-search): reopen right there.
+        if (view.value !== 'root') return;
+        if (WORKSPACES.includes(parked.value)) {
+          enter(parked.value as View);
+          return;
+        }
+        // The main bar keeps its text only briefly.
+        const limit = (snapshot.value?.resumeSeconds ?? 120) * 1000;
+        const recent = hiddenAt > 0 && limit > 0 && Date.now() - hiddenAt < limit;
+        // A picker search (!f, !app, !set, !note) sticks until something is picked.
+        const picker = /^!(f|file|files|app|apps|set|settings|note|notes)\b/i.test(query.value);
+        if (!recent && !picker) resetForSummon();
+        void focusInput();
       })
     );
     unlistens.push(
@@ -239,11 +261,12 @@
     );
     void loadApprovals();
     void loadJobs();
+    void loadDevices();
+    devicePoll = window.setInterval(() => void loadDevices(), 60000);
     unlistens.push(
       await listen('clipboard-shown', () => {
-        resetForSummon();
         clipQuery.value = '';
-        clipMode.value = true;
+        enter('clip');
       })
     );
     unlistens.push(
@@ -266,6 +289,9 @@
     );
 
     window.addEventListener('keydown', onKey, true);
+    window.addEventListener('keydown', trackModifiers, true);
+    window.addEventListener('keyup', trackModifiers, true);
+    window.addEventListener('blur', () => (held.value = ''));
     if (root.value) {
       observer = new ResizeObserver(() => syncHeight());
       observer.observe(root.value);
@@ -276,7 +302,10 @@
   });
 
   onUnmounted(() => {
+    window.clearInterval(devicePoll);
     window.removeEventListener('keydown', onKey, true);
+    window.removeEventListener('keydown', trackModifiers, true);
+    window.removeEventListener('keyup', trackModifiers, true);
     observer?.disconnect();
     window.clearTimeout(suggestTimer);
     for (const unlisten of unlistens) unlisten();
@@ -286,11 +315,48 @@
     actionsOpen.value = false;
   });
 
-  watch([clipMode, typingMode, claudeMode], async () => {
+  watch(view, async () => {
     await nextTick();
     syncHeight();
-    if (!clipMode.value && !typingMode.value && !claudeMode.value) void focusInput();
+    if (view.value === 'root') {
+      scheduleSuggest();
+      void focusInput();
+    } else if (view.value === 'ai') {
+      void aiView.value?.focus();
+    }
   });
+
+  /** Enters a view. Workspaces become the place Zephyr returns to. */
+  function enter(next: View) {
+    actionsOpen.value = false;
+    visited[next] = true;
+    view.value = next;
+    if (WORKSPACES.includes(next) && parked.value !== next) {
+      parked.value = next;
+      void setActiveMode(next).catch(() => undefined);
+    }
+  }
+
+  /** Esc or Backspace out of a view: back to the main bar, with a workspace left parked. */
+  function leave() {
+    view.value = 'root';
+  }
+
+  /** Esc on the main bar: forget the parked workspace, then close. */
+  function closeFromRoot() {
+    if (parked.value) {
+      parked.value = '';
+      void setActiveMode('').catch(() => undefined);
+    }
+    void hideBar();
+  }
+
+  async function enterAi(question: string, fresh = true) {
+    enter('ai');
+    await nextTick();
+    await nextTick();
+    void aiView.value?.ask(question, fresh);
+  }
 
   async function loadJobs() {
     try {
@@ -304,6 +370,9 @@
   function viewRows(): Suggestion[] {
     const rows: Suggestion[] = [];
     const settings = snapshot.value;
+    if (parked.value && MODE_NAMES[parked.value]) {
+      rows.push(viewRow('back', `Back to ${MODE_NAMES[parked.value]}`, 'Esc again to clear'));
+    }
     if (jobs.value.length || settings?.claude.projects.length) {
       const running = jobs.value.filter(
         (job) => job.status === 'running' || job.status === 'waiting' || job.status === 'queued'
@@ -314,11 +383,11 @@
         : latest
           ? `${latest.status === 'failed' ? '✗' : '✓'} ${latest.title}`
           : '!claude';
-      rows.push(view('claude', 'Claude jobs', hint));
+      rows.push(viewRow('claude', 'Claude jobs', hint));
     }
     if (settings?.clipboard.enabled) {
       rows.push(
-        view(
+        viewRow(
           'clip',
           'Clipboard history',
           settings.clipboard.shortcut ? formatShortcut(settings.clipboard.shortcut) : '!clip'
@@ -326,7 +395,7 @@
       );
     }
     rows.push(
-      view(
+      viewRow(
         'notes',
         'Notes',
         settings?.notesShortcut ? formatShortcut(settings.notesShortcut) : '!note'
@@ -335,20 +404,41 @@
     return rows;
   }
 
-  function view(id: string, label: string, hint: string): Suggestion {
+  function viewRow(id: string, label: string, hint: string): Suggestion {
     return { label, hint, query: '', destinationId: id, kind: 'view' };
   }
 
   function openView(id: string) {
     query.value = '';
-    if (id === 'claude') {
-      claudeQuery.value = '';
-      claudeMode.value = true;
+    if (id === 'back') id = parked.value;
+    if (id === 'claude' || id === 'ai' || id === 'typing') {
+      enter(id);
     } else if (id === 'clip') {
       clipQuery.value = '';
-      clipMode.value = true;
+      enter('clip');
     } else if (id === 'notes') {
+      parked.value = 'notes';
       void openNotes();
+    }
+  }
+
+  async function loadDevices() {
+    try {
+      devicesWaiting.value = await syncPending();
+    } catch {
+      devicesWaiting.value = [];
+    }
+  }
+
+  async function answerDevice(decision: 'allow' | 'deny') {
+    const device = devicesWaiting.value[0];
+    if (!device) return;
+    try {
+      if (decision === 'allow') await syncApprove(device.id);
+      else await syncRevoke(device.id);
+      await loadDevices();
+    } catch (error) {
+      notice.value = errorMessage(error);
     }
   }
 
@@ -364,11 +454,11 @@
   async function answerApproval(decision: 'allow' | 'always' | 'deny') {
     const approval = approvals.value[0];
     if (!approval) return;
-    const typed = claudeMode.value ? (claudeView.value?.text ?? '') : query.value;
+    const typed = view.value === 'claude' ? (claudeView.value?.text ?? '') : query.value;
     try {
       await claudeAnswer(approval.id, decision, decision === 'deny' ? typed : undefined);
       if (decision === 'deny' && typed) {
-        if (claudeMode.value && claudeView.value) claudeView.value.text = '';
+        if (view.value === 'claude' && claudeView.value) claudeView.value.text = '';
         else query.value = '';
       }
       await loadApprovals();
@@ -380,25 +470,24 @@
   watch(query, () => {
     if (/^!type$/i.test(query.value.trim()) && query.value.endsWith(' ')) {
       query.value = '';
-      typingMode.value = true;
+      enter('typing');
       return;
     }
     const claude = /^!claude(?:\s+(.*))?$/i.exec(query.value);
     if (claude) {
       claudeQuery.value = claude[1] ?? '';
       query.value = '';
-      claudeMode.value = true;
+      enter('claude');
       return;
     }
     const clip = /^!clip(?:\s+(.*))?$/i.exec(query.value);
     if (clip) {
       clipQuery.value = clip[1] ?? '';
       query.value = '';
-      clipMode.value = true;
+      enter('clip');
       return;
     }
     actionsOpen.value = false;
-    if (answer.value && query.value !== answer.value.input) clearAnswer();
     selected.value = -1;
     userMoved = false;
     notice.value = null;
@@ -411,12 +500,8 @@
     scheduleSuggest();
   });
 
+  /** Clears the main bar's text and selection; views and the parked workspace are untouched. */
   function resetForSummon() {
-    clipMode.value = false;
-    typingMode.value = false;
-    claudeMode.value = false;
-    void loadApprovals();
-    clearAnswer();
     query.value = '';
     selected.value = -1;
     notice.value = null;
@@ -432,11 +517,8 @@
   function syncHeight() {
     if (!root.value) return;
     const height = Math.ceil(root.value.getBoundingClientRect().height);
-    const width = clipMode.value
-      ? CLIP_WIDTH
-      : typingMode.value || claudeMode.value
-        ? TYPING_WIDTH
-        : undefined;
+    const width =
+      view.value === 'clip' ? CLIP_WIDTH : view.value === 'root' ? undefined : TYPING_WIDTH;
     void setBarHeight(height, width).catch(() => undefined);
   }
 
@@ -475,6 +557,20 @@
   function onKey(event: KeyboardEvent) {
     if (event.isComposing) return;
     // A pending Claude permission request: never plain Enter, only these keys.
+    // A computer asking to join sync, when no Claude request is ahead of it.
+    if (
+      !approvals.value.length &&
+      devicesWaiting.value.length &&
+      (event.metaKey || event.ctrlKey) &&
+      !event.altKey &&
+      !event.shiftKey
+    ) {
+      if (event.code === 'KeyY' || event.code === 'KeyN') {
+        event.preventDefault();
+        void answerDevice(event.code === 'KeyY' ? 'allow' : 'deny');
+        return;
+      }
+    }
     if (approvals.value.length && (event.metaKey || event.ctrlKey) && !event.altKey) {
       if (event.code === 'KeyY') {
         event.preventDefault();
@@ -487,23 +583,27 @@
         return;
       }
     }
-    if (claudeMode.value) {
+    if (view.value === 'claude') {
       claudeView.value?.onKey(event);
       return;
     }
-    if (clipMode.value) {
+    if (view.value === 'clip') {
       clipView.value?.onKey(event);
       return;
     }
-    if (typingMode.value) {
+    if (view.value === 'typing') {
       typingView.value?.onKey(event);
+      return;
+    }
+    if (view.value === 'ai') {
+      aiView.value?.onKey(event);
       return;
     }
     // !type then Enter opens the typing test too.
     if (event.key === 'Enter' && /^!type$/i.test(query.value.trim())) {
       event.preventDefault();
       query.value = '';
-      typingMode.value = true;
+      enter('typing');
       return;
     }
 
@@ -543,7 +643,7 @@
 
     if (event.key === 'Escape') {
       event.preventDefault();
-      void hideBar();
+      closeFromRoot();
       return;
     }
 
@@ -591,14 +691,100 @@
 
     if (event.key === 'Enter') {
       event.preventDefault();
-      if (event.repeat) return;
-      if (answer.value && query.value === answer.value.input) {
-        if (answerReady.value) void copyAnswer();
+      if (event.repeat || event.shiftKey) return;
+      if (modifier || event.altKey) {
+        void route(event.altKey ? 'alt' : 'cmd');
         return;
       }
       void accept();
     }
   }
+
+  // Enter routes: ⌘↵ (Ctrl+Enter) and ⌥↵ (Alt+Enter) send the typed text somewhere else
+  // without arming anything. Settings > General can point either at any destination or
+  // Claude project.
+  interface Route {
+    kind: 'ai' | 'web' | 'claude';
+    id: string;
+    label: string;
+  }
+
+  function webDefault(): string {
+    const destinations = snapshot.value?.destinations ?? [];
+    const preferred = destinations.find(
+      (item) => item.id === snapshot.value?.defaultDestinationId && item.kind !== 'ai'
+    );
+    return (
+      (preferred ?? destinations.find((item) => !item.disabled && item.kind !== 'ai'))?.id ??
+      'google'
+    );
+  }
+
+  function routeFor(which: 'cmd' | 'alt'): Route {
+    const configured =
+      (which === 'cmd' ? snapshot.value?.routeCmd : snapshot.value?.routeAlt) ?? '';
+    const destinations = snapshot.value?.destinations ?? [];
+    const projects = snapshot.value?.claude.projects ?? [];
+    const claudeRoute = (projectId: string): Route => {
+      const project =
+        projects.find((item) => item.id === projectId) ??
+        projects.find((item) => item.id === snapshot.value?.claude.lastProject) ??
+        projects[0];
+      const name = project ? project.alias || project.folder.split(/[\\/]/).pop() : 'Claude';
+      return { kind: 'claude', id: project?.id ?? '', label: `Claude job in ${name}` };
+    };
+    if (configured.startsWith('claude')) return claudeRoute(configured.slice(7));
+    const chosen = destinations.find((item) => item.id === configured && !item.disabled);
+    if (chosen) {
+      return chosen.kind === 'ai'
+        ? { kind: 'ai', id: chosen.id, label: 'Ask AI' }
+        : { kind: 'web', id: chosen.id, label: chosen.name };
+    }
+    if (which === 'alt') return claudeRoute('');
+    // The other primary action: AI when a web destination is armed, and the reverse.
+    if (armed.value?.kind === 'ai') {
+      const id = webDefault();
+      return {
+        kind: 'web',
+        id,
+        label: destinations.find((item) => item.id === id)?.name ?? 'search',
+      };
+    }
+    return { kind: 'ai', id: 'ai', label: 'Ask AI' };
+  }
+
+  async function route(which: 'cmd' | 'alt') {
+    // A row with its own alternate action keeps it for ⌘↵.
+    const item = selectedItem.value;
+    if (which === 'cmd' && item?.kind === 'app' && item.appId) {
+      await launch(item.appId);
+      return;
+    }
+    const text = query.value.trim();
+    if (!text) return;
+    const target = routeFor(which);
+    if (target.kind === 'ai') {
+      query.value = '';
+      await enterAi(text);
+    } else if (target.kind === 'claude') {
+      try {
+        await claudeSubmit(text, target.id || undefined);
+        query.value = '';
+      } catch (error) {
+        notice.value = errorMessage(error);
+      }
+    } else {
+      await run(text, target.id, false);
+    }
+  }
+
+  // Holding ⌘ or ⌥ previews where Enter would go.
+  const held = ref<'' | 'cmd' | 'alt'>('');
+  function trackModifiers(event: KeyboardEvent) {
+    held.value = event.altKey ? 'alt' : event.metaKey || event.ctrlKey ? 'cmd' : '';
+  }
+  const cmdLabel = computed(() => routeFor('cmd').label);
+  const altLabel = computed(() => routeFor('alt').label);
 
   function runAction(action: Action | undefined) {
     if (!action) return;
@@ -626,67 +812,8 @@
     }
   }
 
-  function clearAnswer() {
-    if (!answer.value) return;
-    answerGeneration++;
-    answer.value = null;
-    void aiCancel().catch(() => undefined);
-  }
-
-  async function startAnswer(question: string) {
-    const generation = ++answerGeneration;
-    if (!query.value.trim()) query.value = question;
-    answer.value = {
-      question,
-      input: query.value,
-      text: '',
-      status: 'waiting',
-      error: null,
-      source: null,
-    };
-    selected.value = -1;
-    notice.value = null;
-    const current = () => (generation === answerGeneration ? answer.value : null);
-    try {
-      await aiAsk(question, (event) => {
-        const target = current();
-        if (!target) return;
-        if (event.kind === 'started') {
-          target.source = `${event.model} · ${event.provider}`;
-        } else if (event.kind === 'delta') {
-          target.text += event.text;
-          target.status = 'streaming';
-          void followAnswer();
-        } else if (event.kind === 'done') {
-          target.status = 'done';
-        } else {
-          target.status = 'error';
-          target.error = event.message;
-        }
-      });
-    } catch (error) {
-      const target = current();
-      if (target) {
-        target.status = 'error';
-        target.error = errorMessage(error);
-      }
-    }
-  }
-
-  // Keep the newest text in view unless the user scrolled up to read.
-  async function followAnswer() {
-    const el = answerEl.value;
-    const pinned = !el || el.scrollHeight - el.scrollTop - el.clientHeight < 24;
-    await nextTick();
-    if (pinned && answerEl.value) answerEl.value.scrollTop = answerEl.value.scrollHeight;
-  }
-
-  async function copyAnswer() {
-    const text = answer.value?.text.trim();
-    if (text) await copyText(text);
-  }
-
   async function openNote(item: Suggestion) {
+    parked.value = 'notes';
     try {
       if (item.kind === 'note') await openNotes(item.noteId);
       else await openNotes(undefined, item.query);
@@ -896,7 +1023,8 @@
         return;
       }
       if (outcome.kind === 'ask') {
-        void startAnswer(outcome.query);
+        query.value = '';
+        void enterAi(outcome.query);
         return;
       }
       if (outcome.kind === 'armed') {
@@ -920,7 +1048,7 @@
   <div
     ref="root"
     class="bar"
-    :class="{ wide: clipMode, 'typing-wide': typingMode }"
+    :class="{ wide: clipMode, 'typing-wide': view !== 'root' && !clipMode }"
     role="dialog"
     aria-label="Zephyr"
   >
@@ -930,26 +1058,35 @@
       :queued="approvals.length"
       @answer="answerApproval"
     />
+    <DeviceCard
+      v-if="!approvals.length && devicesWaiting.length"
+      :device="devicesWaiting[0]"
+      @answer="answerDevice"
+    />
     <ClaudeView
-      v-if="claudeMode"
+      v-if="visited.claude"
+      v-show="claudeMode"
       ref="claudeView"
       :initial-query="claudeQuery"
       :settings="snapshot?.claude ?? null"
-      @exit="claudeMode = false"
+      @exit="leave"
     />
+    <AiView v-if="visited.ai" v-show="aiMode" ref="aiView" @exit="leave" />
     <TypingView
-      v-else-if="typingMode"
+      v-if="visited.typing"
+      v-show="typingMode"
       ref="typingView"
       :bests="snapshot?.typingBests ?? []"
-      @exit="typingMode = false"
+      @exit="leave"
     />
     <ClipboardView
-      v-else-if="clipMode"
+      v-if="clipMode"
       ref="clipView"
       :initial-query="clipQuery"
-      @exit="clipMode = false"
+      @exit="leave"
+      @picked="leave"
     />
-    <template v-else>
+    <template v-if="view === 'root'">
       <div class="input-row">
         <svg class="mark" viewBox="0 0 24 24" aria-hidden="true">
           <circle cx="11" cy="11" r="6.5" />
@@ -1009,16 +1146,6 @@
         </li>
       </ul>
 
-      <section v-else-if="answer" class="answer" aria-live="polite">
-        <div ref="answerEl" class="answer-body">
-          <p v-if="answer.status === 'waiting'" class="answer-wait">Thinking…</p>
-          <!-- prettier-ignore -->
-          <div v-else-if="answer.text" class="answer-text">{{ answer.text }}<span v-if="answer.status === 'streaming'" class="caret" /></div>
-          <p v-if="answer.error" class="answer-error">{{ answer.error }}</p>
-        </div>
-        <p v-if="answer.source" class="answer-source">{{ answer.source }}</p>
-      </section>
-
       <ul v-else-if="items.length" id="results" class="results" role="listbox">
         <li
           v-for="(item, index) in items"
@@ -1043,7 +1170,15 @@
 
       <footer class="footer">
         <span>
-          Enter {{ enterLabel }}
+          <span :class="{ dim: held }">↵ {{ enterLabel }}</span>
+          <template v-if="query.trim()">
+            ·
+            <span :class="{ lit: held === 'cmd' }"
+              >{{ isMac ? '⌘' : 'Ctrl+' }}↵ {{ cmdLabel }}</span
+            >
+            ·
+            <span :class="{ lit: held === 'alt' }">{{ isMac ? '⌥' : 'Alt+' }}↵ {{ altLabel }}</span>
+          </template>
           <template v-if="selectedItem?.kind === 'file'">
             · Ctrl+Enter show in {{ isMac ? 'Finder' : 'Explorer' }} · Ctrl+Shift+C copy path
           </template>
