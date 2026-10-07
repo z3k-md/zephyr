@@ -696,11 +696,15 @@ mod tests {
     #[test]
     fn says_where_free_text_goes() {
         assert_eq!(
-            local_full("cats !w", &[], &[], "google", false).target.as_deref(),
+            local_full("cats !w", &[], &[], "google", false)
+                .target
+                .as_deref(),
             Some("wikipedia")
         );
         assert_eq!(
-            local_full("example.com", &[], &[], "google", false).target.as_deref(),
+            local_full("example.com", &[], &[], "google", false)
+                .target
+                .as_deref(),
             Some("url")
         );
         let plain = local_full("cats", &[], &[], "pubmed", false);
@@ -723,7 +727,11 @@ mod tests {
         ];
         let history = [searched("vs code shortcuts", "google")];
         let response = local_full("vs", &apps, &history, "google", false);
-        let kinds: Vec<&str> = response.items.iter().map(|item| item.kind.as_str()).collect();
+        let kinds: Vec<&str> = response
+            .items
+            .iter()
+            .map(|item| item.kind.as_str())
+            .collect();
         let first_history = kinds.iter().position(|kind| *kind == "history");
         let last_app = kinds.iter().rposition(|kind| *kind == "app");
         if let (Some(history), Some(app)) = (first_history, last_app) {
@@ -743,8 +751,15 @@ mod tests {
     fn rows_carry_their_section() {
         let history = [searched("crispr review", "pubmed")];
         let response = local_full("crispr", &[], &history, "google", false);
-        let row = response.items.iter().find(|item| item.kind == "history").unwrap();
-        assert_eq!((row.section.as_str(), row.icon.as_str()), ("recent", "dest:pubmed"));
+        let row = response
+            .items
+            .iter()
+            .find(|item| item.kind == "history")
+            .unwrap();
+        assert_eq!(
+            (row.section.as_str(), row.icon.as_str()),
+            ("recent", "dest:pubmed")
+        );
         let answer = local_full("12 * 7", &[], &[], "google", false);
         assert_eq!(answer.items[0].section, "answer");
         assert_eq!(answer.items[0].subtitle, "12 * 7");
