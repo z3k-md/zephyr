@@ -58,9 +58,16 @@
       "icons/icon.ico"
     ],
     "publisher": "Zephyr",
+    "copyright": "© 2025 Zach Connelly",
     "createUpdaterArtifacts": true,
     "category": "Utility",
-    "shortDescription": "Desktop dispatch bar"
+    "shortDescription": "Desktop dispatch bar",
+    "windows": {
+      "nsis": {
+        "installerIcon": "icons/icon.ico",
+        "sidebarImage": "installer/sidebar.bmp"
+      }
+    }
   },
   "plugins": {
     "updater": {
