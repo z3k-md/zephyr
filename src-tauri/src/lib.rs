@@ -55,7 +55,7 @@ pub fn run() {
                             }
                         });
                     } else {
-                        window::show_bar(app);
+                        window::toggle_bar(app);
                     }
                 })
                 .build(),
