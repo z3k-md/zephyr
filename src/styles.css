@@ -71,6 +71,11 @@ select {
   overflow: hidden;
 }
 
+/* Windows clips the Acrylic blur to its own 8px rounded corners (window.rs). */
+[data-platform='windows'] .bar {
+  border-radius: 8px;
+}
+
 .input-row {
   display: flex;
   align-items: center;
