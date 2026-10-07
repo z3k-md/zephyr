@@ -30,6 +30,8 @@
   import AiView from '../ai/AiView.vue';
   import ApprovalCard from '../claude/ApprovalCard.vue';
   import DeviceCard from './DeviceCard.vue';
+  import ResultList from './ResultList.vue';
+  import { buildRows, groups, primaryLabel, rowKey, type RowCtx } from './rows';
   import ClaudeView from '../claude/ClaudeView.vue';
   import ShellView from '../shell/ShellView.vue';
   import {
@@ -40,6 +42,7 @@
     type Destination,
     type Snapshot,
     type Suggestion,
+    type SuggestResponse,
   } from '../types';
 
   const root = ref<HTMLElement | null>(null);
@@ -47,7 +50,10 @@
   const snapshot = ref<Snapshot | null>(null);
   const query = ref('');
   const armedId = ref('google');
-  const items = ref<Suggestion[]>([]);
+  // The last suggest reply and the text it was for; the rows are built from it, so jump-in
+  // rows and job counts stay current without asking again.
+  const lastResponse = ref<SuggestResponse | null>(null);
+  const lastQuery = ref('');
   const mode = ref<'search' | 'destinations' | 'recent'>('recent');
   const notice = ref<string | null>(null);
   const selected = ref(-1);
@@ -109,6 +115,8 @@
   let generation = 0;
   let remoteApplied = false;
   let userMoved = false;
+  // Arrow presses that land before the first rows do.
+  let pendingMove = 0;
   let suggestTimer = 0;
   let unlistens: UnlistenFn[] = [];
   let observer: ResizeObserver | null = null;
@@ -123,21 +131,41 @@
     snapshot.value?.destinations.find((destination) => destination.id === armedId.value)
   );
 
+  const rowCtx = computed<RowCtx>(() => ({
+    snapshot: snapshot.value,
+    armedId: armedId.value,
+    jobs: jobs.value,
+    parked: parked.value,
+    parkedName: MODE_NAMES[parked.value] ?? '',
+    strip: strip.value.map((destination) => destination.id),
+  }));
+
+  const built = computed(() => {
+    if (!lastResponse.value) return { rows: [] as Suggestion[], preselect: null };
+    const result = buildRows(lastResponse.value, rowCtx.value);
+    if (looksLikeCommand(lastQuery.value)) {
+      result.rows.push({
+        label: 'Run in shell',
+        hint: '> or !sh',
+        query: '',
+        destinationId: 'shell',
+        kind: 'view',
+        section: 'shell',
+        icon: 'glyph:prompt',
+      });
+    }
+    return result;
+  });
+  const items = computed(() => built.value.rows);
+  const sections = computed(() => groups(items.value, rowCtx.value));
+
   const selectedItem = computed(() =>
     selected.value >= 0 ? items.value[selected.value] : undefined
   );
 
-  const enterLabel = computed(() => {
-    const item = selectedItem.value;
-    if (item?.kind === 'answer') return `copy ${item.label}`;
-    if (item?.kind === 'note') return `open ${item.label}`;
-    if (item?.kind === 'noteNew') return 'create note';
-    if (item?.kind === 'view') return `open ${item.label}`;
-    if (item?.kind === 'app' || item?.kind === 'setting' || item?.kind === 'file') {
-      return `Open ${item.label}`;
-    }
-    return armed.value?.name ?? 'search';
-  });
+  const enterLabel = computed(
+    () => primaryLabel(selectedItem.value, rowCtx.value) ?? `Search ${armed.value?.name ?? ''}`
+  );
 
   const isMac = navigator.userAgent.includes('Mac');
   const actionKey = isMac ? '⌘K' : 'Ctrl+K';
@@ -403,54 +431,13 @@
     }
   }
 
-  /** Rows on the empty bar that jump straight into a view. */
-  function viewRows(): Suggestion[] {
-    const rows: Suggestion[] = [];
-    const settings = snapshot.value;
-    if (parked.value && MODE_NAMES[parked.value]) {
-      rows.push(viewRow('back', `Back to ${MODE_NAMES[parked.value]}`, 'Esc again to clear'));
-    }
-    if (jobs.value.length || settings?.claude.projects.length) {
-      const running = jobs.value.filter(
-        (job) => job.status === 'running' || job.status === 'waiting' || job.status === 'queued'
-      ).length;
-      const latest = jobs.value[0];
-      const hint = running
-        ? `${running} running`
-        : latest
-          ? `${latest.status === 'failed' ? '✗' : '✓'} ${latest.title}`
-          : '!claude';
-      rows.push(viewRow('claude', 'Claude jobs', hint));
-    }
-    if (settings?.clipboard.enabled) {
-      rows.push(
-        viewRow(
-          'clip',
-          'Clipboard history',
-          settings.clipboard.shortcut ? formatShortcut(settings.clipboard.shortcut) : '!clip'
-        )
-      );
-    }
-    rows.push(
-      viewRow(
-        'notes',
-        'Notes',
-        settings?.notesShortcut ? formatShortcut(settings.notesShortcut) : '!note'
-      )
-    );
-    return rows;
-  }
-
-  function viewRow(id: string, label: string, hint: string): Suggestion {
-    return { label, hint, query: '', destinationId: id, kind: 'view' };
-  }
-
   function openView(id: string) {
     const typed = query.value;
     query.value = '';
-    if (id === 'back') id = parked.value;
+    const back = id === 'back';
+    if (back) id = parked.value;
     if (id === 'shell') {
-      enterWith('shell', id === parked.value ? '' : typed.trim().replace(/^\$\s+/, ''));
+      enterWith('shell', back ? '' : typed.trim().replace(/^\$\s+/, ''));
     } else if (id === 'claude' || id === 'ai' || id === 'typing') {
       enter(id);
     } else if (id === 'clip') {
@@ -586,15 +573,23 @@
       const response = await suggest(query.value, armedId.value, includeRemote);
       if (current !== generation || (!includeRemote && remoteApplied)) return;
       if (includeRemote) remoteApplied = true;
-      const views = response.mode === 'recent' && !query.value.trim() ? viewRows() : [];
-      const shellRow = looksLikeCommand(query.value)
-        ? [viewRow('shell', 'Run in shell', '> or !sh')]
-        : [];
-      items.value = [...views, ...response.items, ...shellRow];
+      // Keep the row the user moved to selected when late results reshuffle the list.
+      const kept = userMoved && selectedItem.value ? rowKey(selectedItem.value) : null;
+      lastResponse.value = response;
+      lastQuery.value = query.value;
       mode.value = response.mode;
       notice.value = response.notice;
-      if (!userMoved) {
-        selected.value = response.preselect === null ? -1 : response.preselect + views.length;
+      const index = kept ? items.value.findIndex((row) => rowKey(row) === kept) : -1;
+      if (index >= 0) {
+        selected.value = index;
+      } else {
+        userMoved = false;
+        selected.value = built.value.preselect ?? -1;
+      }
+      if (pendingMove) {
+        const delta = pendingMove;
+        pendingMove = 0;
+        moveSelection(delta);
       }
       await nextTick();
       syncHeight();
@@ -912,7 +907,10 @@
   }
 
   function moveSelection(delta: number) {
-    if (items.value.length === 0) return;
+    if (items.value.length === 0) {
+      pendingMove += delta;
+      return;
+    }
     userMoved = true;
     if (selected.value < 0) {
       selected.value = delta > 0 ? 0 : items.value.length - 1;
@@ -957,6 +955,15 @@
         openView(item.destinationId);
         return;
       }
+      if (item.kind === 'query') {
+        await run(query.value, armedId.value, true);
+        return;
+      }
+      if (item.kind === 'more') {
+        actionsOpen.value = true;
+        actionIndex.value = 0;
+        return;
+      }
       if (item.kind === 'app' && item.appId) {
         await launch(item.appId);
         return;
@@ -981,38 +988,16 @@
     await run(query.value, armedId.value, true);
   }
 
-  function choose(item: Suggestion) {
-    if (item.kind === 'answer') {
-      void copyText(item.label);
-      return;
-    }
-    if (item.kind === 'note' || item.kind === 'noteNew') {
-      void openNote(item);
-      return;
-    }
-    if (item.kind === 'view') {
-      openView(item.destinationId);
-      return;
-    }
-    if (item.kind === 'app' && item.appId) {
-      void launch(item.appId);
-      return;
-    }
-    if (item.kind === 'setting' && item.settingId) {
-      void openPage(item.settingId);
-      return;
-    }
-    if (item.kind === 'file' && item.path) {
-      void openPath(item.path);
-      return;
-    }
-    if (item.kind === 'destination') {
-      armedId.value = item.destinationId;
-      query.value = '';
-      inputEl.value?.focus();
-      return;
-    }
-    void run(item.query, item.destinationId, false);
+  // Keyboard moves keep the selected row in view inside the scrolling list.
+  watch(selected, async (index) => {
+    if (index < 0) return;
+    await nextTick();
+    document.getElementById(`result-${index}`)?.scrollIntoView({ block: 'nearest' });
+  });
+
+  function chooseAt(index: number) {
+    selected.value = index;
+    void accept();
   }
 
   async function launch(appId: string) {
@@ -1214,23 +1199,13 @@
         </li>
       </ul>
 
-      <ul v-else-if="items.length" id="results" class="results" role="listbox">
-        <li
-          v-for="(item, index) in items"
-          :id="`result-${index}`"
-          :key="`${item.kind}-${item.destinationId}-${item.path ?? item.label}`"
-          role="option"
-          :aria-selected="index === selected"
-          class="item"
-          :class="{ selected: index === selected, answer: item.kind === 'answer' }"
-          @mousedown.prevent
-          @click="choose(item)"
-          @mousemove="hover(index)"
-        >
-          <span class="label">{{ item.label }}</span>
-          <span class="hint">{{ item.hint }}</span>
-        </li>
-      </ul>
+      <ResultList
+        v-else-if="items.length"
+        :groups="sections"
+        :selected="selected"
+        @choose="chooseAt"
+        @hover="hover"
+      />
 
       <p v-else-if="mode === 'recent' && !query.trim()" class="empty">
         Searches you run will show up here.
