@@ -42,6 +42,7 @@
     saveSettings,
   } from '../api';
   import SyncSection from './SyncSection.vue';
+  import SelectMenu from './SelectMenu.vue';
   import { GLYPHS } from '../bar/glyphs';
   import {
     isSnapshot,
@@ -211,6 +212,7 @@
   const search = ref('');
   const searchEl = ref<HTMLInputElement | null>(null);
   const paneEl = ref<HTMLElement | null>(null);
+  const settingsEl = ref<HTMLElement | null>(null);
   const resultIndex = ref(0);
 
   interface Result {
@@ -1009,7 +1011,7 @@
 </script>
 
 <template>
-  <main class="settings">
+  <main ref="settingsEl" class="settings">
     <aside class="settings-nav">
       <input
         ref="searchEl"
@@ -1797,5 +1799,6 @@
         </button>
       </section>
     </div>
+    <SelectMenu :root="settingsEl" />
   </main>
 </template>
