@@ -1,5 +1,5 @@
 <script setup lang="ts">
-  import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue';
+  import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import {
     aiDetectLocal,
@@ -19,6 +19,7 @@
     pickFolder,
     revealNotes,
     saveClipboardSettings,
+    saveOpenBehavior,
     saveResumeSeconds,
     saveNotesShortcut,
     clearHistory,
@@ -35,8 +36,9 @@
     saveAiSettings,
     saveFileFolders,
     saveSettings,
-    showBar,
   } from '../api';
+  import SyncSection from './SyncSection.vue';
+  import { GLYPHS } from '../bar/glyphs';
   import {
     isSnapshot,
     type AiPreset,
@@ -185,15 +187,113 @@
     for (const unlisten of unlistens) unlisten();
   });
 
-  async function revealSection(section: string) {
+  // Sidebar sections; one shows at a time.
+  const SECTIONS = [
+    { id: 'general', label: 'General', icon: 'gear', hue: 250 },
+    { id: 'ai', label: 'AI', icon: 'sparkle', hue: 275 },
+    { id: 'claude', label: 'Claude', icon: 'terminal', hue: 20 },
+    { id: 'sync', label: 'Sync', icon: 'sync', hue: 200 },
+    { id: 'clipboard', label: 'Clipboard', icon: 'clipboard', hue: 160 },
+    { id: 'notes', label: 'Notes', icon: 'note', hue: 45 },
+    { id: 'destinations', label: 'Destinations', icon: 'link', hue: 300 },
+    { id: 'files', label: 'Files', icon: 'folder', hue: 215 },
+    { id: 'history', label: 'History', icon: 'clock', hue: 340 },
+  ];
+  const active = ref('general');
+  const search = ref('');
+  const searchEl = ref<HTMLInputElement | null>(null);
+  const paneEl = ref<HTMLElement | null>(null);
+  const resultIndex = ref(0);
+
+  interface Result {
+    section: string;
+    label: string;
+    element: HTMLElement;
+  }
+  const results = ref<Result[]>([]);
+
+  function sectionLabel(id: string): string {
+    return SECTIONS.find((section) => section.id === id)?.label ?? id;
+  }
+
+  function open(id: string) {
+    search.value = '';
+    active.value = id;
+    paneEl.value?.scrollTo({ top: 0 });
+  }
+
+  /**
+   * Search reads the labels already on the page, so every setting is findable without a
+   * separate index to keep in step.
+   */
+  watch(search, async () => {
+    resultIndex.value = 0;
+    const query = search.value.trim().toLowerCase();
+    if (!query) {
+      results.value = [];
+      return;
+    }
     await nextTick();
-    const target = document.getElementById(`section-${section}`);
-    if (!target) return;
+    const found: Result[] = [];
+    const seen = new Set<string>();
+    for (const section of SECTIONS) {
+      const root = document.getElementById(`section-${section.id}`);
+      if (!root) continue;
+      if (section.label.toLowerCase().includes(query)) {
+        found.push({ section: section.id, label: section.label, element: root });
+      }
+      const labels = root.querySelectorAll<HTMLElement>(
+        '.field > span:first-child, label.check, h3, .destination strong, button'
+      );
+      for (const element of labels) {
+        const text = (element.textContent ?? '').replace(/\s+/g, ' ').trim();
+        const key = `${section.id}:${text}`;
+        if (!text || text.length > 80 || seen.has(key) || !text.toLowerCase().includes(query)) {
+          continue;
+        }
+        seen.add(key);
+        found.push({ section: section.id, label: text, element });
+      }
+    }
+    results.value = found.slice(0, 30);
+  });
+
+  async function jump(result: Result) {
+    search.value = '';
+    active.value = result.section;
+    await nextTick();
+    const target =
+      (result.element.closest('.field, .check, .destination, h3') as HTMLElement | null) ??
+      result.element;
     const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    target.scrollIntoView({ block: 'start', behavior: still ? 'auto' : 'smooth' });
+    target.scrollIntoView({ block: 'center', behavior: still ? 'auto' : 'smooth' });
     target.classList.remove('revealed');
     void target.offsetWidth;
     target.classList.add('revealed');
+  }
+
+  function onSearchKey(event: KeyboardEvent) {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      const count = results.value.length;
+      if (count) {
+        resultIndex.value =
+          (resultIndex.value + (event.key === 'ArrowDown' ? 1 : -1) + count) % count;
+      }
+    } else if (event.key === 'Enter') {
+      event.preventDefault();
+      const result = results.value[resultIndex.value];
+      if (result) void jump(result);
+    } else if (event.key === 'Escape' && search.value) {
+      event.preventDefault();
+      search.value = '';
+    }
+  }
+
+  /** The bar's !set opens a section directly. */
+  async function revealSection(section: string) {
+    if (SECTIONS.some((item) => item.id === section)) open(section);
+    await nextTick();
   }
 
   async function refresh() {
@@ -243,6 +343,13 @@
   }
 
   function onShortcutKey(event: KeyboardEvent) {
+    // ⌘F / Ctrl+F jumps to the settings search.
+    if ((event.metaKey || event.ctrlKey) && event.code === 'KeyF') {
+      event.preventDefault();
+      searchEl.value?.focus();
+      searchEl.value?.select();
+      return;
+    }
     if (notesListening.value && !event.isComposing) {
       event.preventDefault();
       event.stopPropagation();
@@ -549,14 +656,49 @@
     window.setTimeout(() => void pollFileStatus(), 300);
   }
 
+  const isMacOs = navigator.userAgent.includes('Mac');
   const RESUME = [
-    { seconds: 0, label: 'Never: always start at the search box' },
-    { seconds: 30, label: 'Within 30 seconds' },
-    { seconds: 120, label: 'Within 2 minutes' },
-    { seconds: 600, label: 'Within 10 minutes' },
-    { seconds: 3600, label: 'Within an hour' },
+    { seconds: 0, label: 'Nothing: start empty' },
+    { seconds: 30, label: '30 seconds' },
+    { seconds: 120, label: '2 minutes' },
+    { seconds: 600, label: '10 minutes' },
+    { seconds: 3600, label: 'An hour' },
     { seconds: 86400, label: 'Always' },
   ];
+
+  async function saveBehavior(partial: {
+    returnToMode?: boolean;
+    routeCmd?: string;
+    routeAlt?: string;
+  }) {
+    if (!snapshot.value) return;
+    busy.value = true;
+    try {
+      apply(
+        await saveOpenBehavior(
+          partial.returnToMode ?? snapshot.value.returnToMode,
+          partial.routeCmd ?? snapshot.value.routeCmd,
+          partial.routeAlt ?? snapshot.value.routeAlt
+        )
+      );
+    } catch (error) {
+      formError.value = errorMessage(error);
+    } finally {
+      busy.value = false;
+    }
+  }
+
+  const routeTargets = computed(() => {
+    const targets: { value: string; label: string }[] = [];
+    for (const destination of snapshot.value?.destinations ?? []) {
+      if (!destination.disabled) targets.push({ value: destination.id, label: destination.name });
+    }
+    for (const project of snapshot.value?.claude.projects ?? []) {
+      const name = project.alias || project.folder.split(/[\\/]/).pop();
+      targets.push({ value: `claude:${project.id}`, label: `Claude job in ${name}` });
+    }
+    return targets;
+  });
 
   async function changeResume(event: Event) {
     busy.value = true;
@@ -809,503 +951,630 @@
 
 <template>
   <main class="settings">
-    <header class="settings-header">
-      <div>
-        <h1>Zephyr</h1>
-        <p>Summon the bar, type once, and send it somewhere.</p>
-      </div>
-      <button type="button" class="primary" @click="showBar">Show Zephyr</button>
-    </header>
-
-    <p v-if="formError" class="notice">{{ formError }}</p>
-    <p v-else-if="status" class="status">{{ status }}</p>
-
-    <section v-if="snapshot" id="section-general">
-      <h2>General</h2>
-      <div class="field">
-        <span>Summon shortcut</span>
-        <button type="button" class="recorder" :class="{ listening }" @click="listening = true">
-          {{ listening ? 'Press a shortcut' : formatShortcut(snapshot.summonShortcut) }}
+    <aside class="settings-nav">
+      <input
+        ref="searchEl"
+        v-model="search"
+        class="settings-search"
+        type="search"
+        placeholder="Search settings"
+        spellcheck="false"
+        @keydown="onSearchKey"
+      />
+      <nav aria-label="Settings sections">
+        <button
+          v-for="section in SECTIONS"
+          :key="section.id"
+          type="button"
+          class="nav-item"
+          :class="{ active: !search && active === section.id }"
+          @click="open(section.id)"
+        >
+          <span class="nav-icon" :style="{ '--hue': section.hue }" aria-hidden="true">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.9"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              v-html="GLYPHS[section.icon]"
+            />
+          </span>
+          {{ section.label }}
         </button>
-      </div>
-      <label class="check">
-        <input
-          type="checkbox"
-          :checked="snapshot.launchAtStartup"
-          :disabled="busy"
-          @change="toggleStartup"
-        />
-        Launch at startup
-      </label>
-      <label class="field">
-        <span>Default destination</span>
-        <select :value="snapshot.defaultDestinationId" :disabled="busy" @change="changeDefault">
-          <option
-            v-for="destination in snapshot.destinations.filter((item) => !item.disabled)"
-            :key="destination.id"
-            :value="destination.id"
-          >
-            {{ destination.name }}
-          </option>
-        </select>
-      </label>
-      <label class="field">
-        <span>Reopening the bar returns to where you left off</span>
-        <select :value="snapshot.resumeSeconds" :disabled="busy" @change="changeResume">
-          <option v-for="option in RESUME" :key="option.seconds" :value="option.seconds">
-            {{ option.label }}
-          </option>
-        </select>
-      </label>
-      <div class="field">
-        <button type="button" @click="updates">Check for updates</button>
-        <span v-if="updateMessage" class="hint-text">{{ updateMessage }}</span>
-      </div>
-    </section>
+      </nav>
+    </aside>
 
-    <section v-if="snapshot" id="section-ai">
-      <h2>AI</h2>
-      <p class="lede">
-        Press Tab to arm Ask AI, or type !ai, and the answer streams into the bar. Enter copies it.
-        Requests go straight from Zephyr to the provider you pick.
-      </p>
-      <label class="field">
-        <span>Provider</span>
-        <select :value="aiDraft.provider" :disabled="busy" @change="changeProvider">
-          <option value="auto">Automatic: a local model if one is running</option>
-          <option v-for="preset in presets" :key="preset.id" :value="preset.id">
-            {{ preset.name }}{{ preset.local ? ' (local)' : '' }}
-          </option>
-          <option value="custom">Custom server</option>
-        </select>
-      </label>
-      <div v-if="aiShowsLocal" class="field inline">
-        <span class="hint-text">{{ localSummary }}</span>
-        <button type="button" @click="detectLocal">Check again</button>
-      </div>
-      <template v-if="aiDraft.provider === 'custom'">
-        <label class="field">
-          <span>Base URL</span>
+    <div ref="paneEl" class="settings-pane">
+      <p v-if="formError" class="notice">{{ formError }}</p>
+      <p v-else-if="status" class="status">{{ status }}</p>
+
+      <section v-if="search" class="search-results">
+        <h2>Results</h2>
+        <ul v-if="results.length" class="results-list">
+          <li v-for="(result, index) in results" :key="index">
+            <button
+              type="button"
+              :class="{ selected: index === resultIndex }"
+              @click="jump(result)"
+              @mousemove="resultIndex = index"
+            >
+              <span>{{ result.label }}</span>
+              <span class="hint-text">{{ sectionLabel(result.section) }}</span>
+            </button>
+          </li>
+        </ul>
+        <p v-else class="hint-text">No settings match “{{ search }}”.</p>
+      </section>
+
+      <section v-if="snapshot" v-show="!search && active === 'general'" id="section-general">
+        <h2>General</h2>
+        <div class="field">
+          <span>Summon shortcut</span>
+          <button type="button" class="recorder" :class="{ listening }" @click="listening = true">
+            {{ listening ? 'Press a shortcut' : formatShortcut(snapshot.summonShortcut) }}
+          </button>
+        </div>
+        <label class="check">
           <input
-            v-model="aiDraft.baseUrl"
-            type="url"
-            placeholder="http://localhost:8080/v1"
-            @change="saveAi"
+            type="checkbox"
+            :checked="snapshot.launchAtStartup"
+            :disabled="busy"
+            @change="toggleStartup"
           />
+          Launch at startup
         </label>
         <label class="field">
-          <span>API format</span>
-          <select v-model="aiDraft.api" @change="saveAi">
-            <option value="openai">OpenAI-compatible</option>
-            <option value="anthropic">Anthropic</option>
+          <span>Default destination</span>
+          <select :value="snapshot.defaultDestinationId" :disabled="busy" @change="changeDefault">
+            <option
+              v-for="destination in snapshot.destinations.filter((item) => !item.disabled)"
+              :key="destination.id"
+              :value="destination.id"
+            >
+              {{ destination.name }}
+            </option>
           </select>
         </label>
-      </template>
-      <template v-if="aiNeedsKey">
-        <h3>API key</h3>
-        <form class="field inline" @submit.prevent="saveKey">
-          <input
-            v-model="aiKey"
-            type="password"
-            autocomplete="off"
-            :placeholder="aiKeySaved ? 'Saved in your keychain' : `${aiProviderName} API key`"
-          />
-          <button type="submit" :disabled="busy || !aiKey.trim()">Save key</button>
-          <button v-if="aiKeySaved" type="button" :disabled="busy" @click="removeKey">
-            Remove key
-          </button>
-        </form>
-      </template>
-      <template v-if="aiDraft.provider !== 'auto'">
-        <h3>Model</h3>
-        <form class="field inline" @submit.prevent="saveAi">
-          <input
-            v-model="aiDraft.model"
-            type="text"
-            list="ai-models"
-            spellcheck="false"
-            :placeholder="modelPlaceholder"
-          />
-          <datalist id="ai-models">
-            <option v-for="model in aiModelList" :key="model" :value="model" />
-          </datalist>
-          <button type="button" :disabled="busy" @click="loadModels">Load models</button>
-          <button type="submit" :disabled="busy">Save model</button>
-        </form>
-      </template>
-      <p v-if="aiMessage" class="hint-text">{{ aiMessage }}</p>
-    </section>
-
-    <section v-if="snapshot" id="section-clipboard">
-      <h2>Clipboard</h2>
-      <p class="lede">
-        Zephyr keeps what you copy so you can search it and paste it again. Open it with its
-        shortcut or by typing !clip. History stays on this computer, encrypted with a key in your
-        keychain.
-      </p>
-      <label class="check">
-        <input
-          type="checkbox"
-          :checked="snapshot.clipboard.enabled"
-          :disabled="busy"
-          @change="saveClip({ enabled: !snapshot.clipboard.enabled })"
-        />
-        Keep clipboard history
-      </label>
-      <div class="field">
-        <span>Shortcut</span>
-        <button
-          type="button"
-          class="recorder"
-          :class="{ listening: clipListening }"
-          @click="clipListening = true"
-        >
-          {{
-            clipListening
-              ? 'Press a shortcut'
-              : snapshot.clipboard.shortcut
-                ? formatShortcut(snapshot.clipboard.shortcut)
-                : 'None'
-          }}
-        </button>
-      </div>
-      <label class="field">
-        <span>Keep items for</span>
-        <select
-          :value="snapshot.clipboard.retentionDays"
-          :disabled="busy"
-          @change="saveClip({ retentionDays: Number(($event.target as HTMLSelectElement).value) })"
-        >
-          <option v-for="option in RETENTION" :key="option.days" :value="option.days">
-            {{ option.label }}
-          </option>
-        </select>
-      </label>
-      <label class="check">
-        <input
-          type="checkbox"
-          :checked="snapshot.clipboard.recognizeText"
-          :disabled="busy"
-          @change="saveClip({ recognizeText: !snapshot.clipboard.recognizeText })"
-        />
-        Recognize text in copied images so they can be searched
-      </label>
-      <div class="field inline">
-        <span class="hint-text">
-          {{
-            clipPasteAllowed
-              ? 'Zephyr can paste straight into the app you are using.'
-              : 'To paste straight into apps, Zephyr needs Accessibility permission.'
-          }}
-        </span>
-        <button v-if="clipPasteAllowed === false" type="button" @click="allowPasting">
-          Allow pasting
-        </button>
-      </div>
-      <h3>Never record from</h3>
-      <ul class="folders">
-        <li v-for="app in snapshot.clipboard.ignoredApps" :key="app">
-          <span class="path">{{ app }}</span>
-          <button type="button" :disabled="busy" @click="removeIgnoredApp(app)">Remove</button>
-        </li>
-      </ul>
-      <form class="field inline" @submit.prevent="addIgnoredApp">
-        <input v-model="clipNewApp" type="text" placeholder="App name or bundle id" />
-        <button type="submit" :disabled="busy || !clipNewApp.trim()">Add app</button>
-      </form>
-      <div class="field inline">
-        <span class="hint-text">{{
-          clipCount === null ? '' : `${clipCount.toLocaleString()} items in history`
-        }}</span>
-        <button type="button" :disabled="!clipCount" @click="clearClipboard">
-          {{ clipConfirm ? 'Click again to delete' : 'Clear history' }}
-        </button>
-      </div>
-    </section>
-
-    <section v-if="snapshot" id="section-notes">
-      <h2>Notes</h2>
-      <p class="lede">
-        Quick notes open in a small window that stays on top. Type !note in the bar to find a note
-        or start one. Notes are Markdown files in Zephyr's folder.
-      </p>
-      <div class="field">
-        <span>Shortcut</span>
-        <button
-          type="button"
-          class="recorder"
-          :class="{ listening: notesListening }"
-          @click="notesListening = true"
-        >
-          {{
-            notesListening
-              ? 'Press a shortcut, or Backspace for none'
-              : snapshot.notesShortcut
-                ? formatShortcut(snapshot.notesShortcut)
-                : 'None'
-          }}
-        </button>
-      </div>
-      <div class="field inline">
-        <button type="button" @click="openNotes()">Open notes</button>
-        <button type="button" @click="revealNotes">Show notes folder</button>
-      </div>
-    </section>
-
-    <section v-if="snapshot" id="section-claude">
-      <h2>Claude</h2>
-      <p class="lede">
-        Type !claude and a task, from any app, and Claude Code works on it in the background in one
-        of your project folders. It uses the claude command on this computer and your own sign-in.
-        Permission requests come to Zephyr as a notification and a card in the bar.
-      </p>
-      <div class="field inline">
-        <span class="hint-text">
-          <template v-if="!cli">Checking for the claude command…</template>
-          <template v-else-if="!cli.path">
-            The claude command isn't installed, or Zephyr can't find it. Set its path below.
-          </template>
-          <template v-else>
-            {{ cli.version ?? 'claude' }} ·
-            {{
-              cli.loggedIn
-                ? `signed in (${cli.authMethod ?? 'account'})`
-                : 'not signed in: run "claude auth login" in a terminal'
-            }}
-          </template>
-        </span>
-        <button type="button" @click="loadCli">Check again</button>
-      </div>
-      <label class="field">
-        <span>claude command path (leave empty to find it)</span>
-        <input
-          :value="snapshot.claude.binary"
-          type="text"
-          spellcheck="false"
-          :placeholder="cli?.path ?? '~/.local/bin/claude'"
-          @change="
-            saveClaudeLimits({ binary: ($event.target as HTMLInputElement).value });
-            loadCli();
-          "
-        />
-      </label>
-
-      <h3>Projects</h3>
-      <article
-        v-for="(project, index) in snapshot.claude.projects"
-        :key="project.id"
-        class="destination"
-      >
-        <div class="destination-row">
-          <div>
-            <strong>{{ project.alias || project.folder.split('/').pop() }}</strong>
-            <span class="hint-text">{{ project.folder }}</span>
-            <span v-if="index < 8" class="badge">Ctrl+{{ index + 1 }}</span>
-          </div>
-          <div class="row-actions">
-            <button type="button" :disabled="busy" @click="removeProject(project.id)">
-              Remove
-            </button>
-          </div>
+        <label class="field">
+          <span>When Zephyr opens</span>
+          <select
+            :value="snapshot.returnToMode ? 'return' : 'search'"
+            :disabled="busy"
+            @change="
+              saveBehavior({
+                returnToMode: ($event.target as HTMLSelectElement).value === 'return',
+              })
+            "
+          >
+            <option value="return">Return to what I was doing</option>
+            <option value="search">Always start at the search bar</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>{{ isMacOs ? '⌘↵' : 'Ctrl+Enter' }} sends what you typed to</span>
+          <select
+            :value="snapshot.routeCmd"
+            :disabled="busy"
+            @change="saveBehavior({ routeCmd: ($event.target as HTMLSelectElement).value })"
+          >
+            <option value="">Ask AI (web search when AI is armed)</option>
+            <option v-for="target in routeTargets" :key="target.value" :value="target.value">
+              {{ target.label }}
+            </option>
+          </select>
+        </label>
+        <label class="field">
+          <span>{{ isMacOs ? '⌥↵' : 'Alt+Enter' }} sends what you typed to</span>
+          <select
+            :value="snapshot.routeAlt"
+            :disabled="busy"
+            @change="saveBehavior({ routeAlt: ($event.target as HTMLSelectElement).value })"
+          >
+            <option value="">A Claude job in the last project used</option>
+            <option v-for="target in routeTargets" :key="target.value" :value="target.value">
+              {{ target.label }}
+            </option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Keep search text for</span>
+          <select :value="snapshot.resumeSeconds" :disabled="busy" @change="changeResume">
+            <option v-for="option in RESUME" :key="option.seconds" :value="option.seconds">
+              {{ option.label }}
+            </option>
+          </select>
+        </label>
+        <div class="field">
+          <button type="button" @click="updates">Check for updates</button>
+          <span v-if="updateMessage" class="hint-text">{{ updateMessage }}</span>
         </div>
-        <div class="editor">
+      </section>
+
+      <section v-if="snapshot" v-show="!search && active === 'ai'" id="section-ai">
+        <h2>AI</h2>
+        <label class="field">
+          <span>Provider</span>
+          <select :value="aiDraft.provider" :disabled="busy" @change="changeProvider">
+            <option value="auto">Automatic: a local model if one is running</option>
+            <option v-for="preset in presets" :key="preset.id" :value="preset.id">
+              {{ preset.name }}{{ preset.local ? ' (local)' : '' }}
+            </option>
+            <option value="custom">Custom server</option>
+          </select>
+        </label>
+        <div v-if="aiShowsLocal" class="field inline">
+          <span class="hint-text">{{ localSummary }}</span>
+          <button type="button" @click="detectLocal">Check again</button>
+        </div>
+        <template v-if="aiDraft.provider === 'custom'">
           <label class="field">
-            <span>Alias, typed after !claude</span>
+            <span>Base URL</span>
             <input
-              :value="project.alias"
-              type="text"
-              placeholder="e.g. zephyr"
-              @change="
-                updateProject(project.id, { alias: ($event.target as HTMLInputElement).value })
-              "
+              v-model="aiDraft.baseUrl"
+              type="url"
+              placeholder="http://localhost:8080/v1"
+              @change="saveAi"
             />
           </label>
           <label class="field">
-            <span>What Claude may do without asking</span>
-            <select
-              :value="project.profile"
-              @change="
-                updateProject(project.id, {
-                  profile: ($event.target as HTMLSelectElement).value as ClaudeProject['profile'],
-                })
-              "
-            >
-              <option value="edit">Edit files in this folder (other commands ask)</option>
-              <option value="auto">
-                Auto: Claude Code decides what's safe (commit and push ask)
-              </option>
-              <option value="plan">Plan only: read and propose, change nothing</option>
+            <span>API format</span>
+            <select v-model="aiDraft.api" @change="saveAi">
+              <option value="openai">OpenAI-compatible</option>
+              <option value="anthropic">Anthropic</option>
             </select>
           </label>
-          <label class="field">
-            <span>Note added to every task here</span>
-            <textarea
-              class="import-box"
-              rows="2"
-              :value="project.note"
-              placeholder="e.g. Run the tests before finishing. Use tabs."
-              @change="
-                updateProject(project.id, { note: ($event.target as HTMLTextAreaElement).value })
-              "
+        </template>
+        <template v-if="aiNeedsKey">
+          <h3>API key</h3>
+          <form class="field inline" @submit.prevent="saveKey">
+            <input
+              v-model="aiKey"
+              type="password"
+              autocomplete="off"
+              :placeholder="aiKeySaved ? 'Saved in your keychain' : `${aiProviderName} API key`"
             />
-          </label>
-          <template v-if="project.allow.length">
-            <span class="hint-text">Always allowed here</span>
-            <ul class="folders">
-              <li v-for="rule in project.allow" :key="rule">
-                <span class="path">{{ rule }}</span>
-                <button
-                  type="button"
-                  :disabled="busy"
-                  @click="
-                    updateProject(project.id, {
-                      allow: project.allow.filter((item) => item !== rule),
-                    })
-                  "
-                >
-                  Remove
-                </button>
-              </li>
-            </ul>
-          </template>
+            <button type="submit" :disabled="busy || !aiKey.trim()">Save key</button>
+            <button v-if="aiKeySaved" type="button" :disabled="busy" @click="removeKey">
+              Remove key
+            </button>
+          </form>
+        </template>
+        <template v-if="aiDraft.provider !== 'auto'">
+          <h3>Model</h3>
+          <form class="field inline" @submit.prevent="saveAi">
+            <input
+              v-model="aiDraft.model"
+              type="text"
+              list="ai-models"
+              spellcheck="false"
+              :placeholder="modelPlaceholder"
+            />
+            <datalist id="ai-models">
+              <option v-for="model in aiModelList" :key="model" :value="model" />
+            </datalist>
+            <button type="button" :disabled="busy" @click="loadModels">Load models</button>
+            <button type="submit" :disabled="busy">Save model</button>
+          </form>
+        </template>
+        <p v-if="aiMessage" class="hint-text">{{ aiMessage }}</p>
+      </section>
+
+      <section v-if="snapshot" v-show="!search && active === 'clipboard'" id="section-clipboard">
+        <h2>Clipboard</h2>
+        <label class="check">
+          <input
+            type="checkbox"
+            :checked="snapshot.clipboard.enabled"
+            :disabled="busy"
+            @change="saveClip({ enabled: !snapshot.clipboard.enabled })"
+          />
+          Keep clipboard history
+        </label>
+        <div class="field">
+          <span>Shortcut</span>
+          <button
+            type="button"
+            class="recorder"
+            :class="{ listening: clipListening }"
+            @click="clipListening = true"
+          >
+            {{
+              clipListening
+                ? 'Press a shortcut'
+                : snapshot.clipboard.shortcut
+                  ? formatShortcut(snapshot.clipboard.shortcut)
+                  : 'None'
+            }}
+          </button>
         </div>
-      </article>
-      <form class="field inline" @submit.prevent="addProject">
-        <input
-          v-model="newProjectFolder"
-          type="text"
-          placeholder="Project folder, e.g. ~/code/zephyr"
-        />
-        <button type="submit" :disabled="busy || !newProjectFolder.trim()">Add project</button>
-        <button type="button" :disabled="busy" @click="chooseProjectFolder">Choose folder…</button>
-      </form>
-      <p class="lede">
-        Claude never commits or pushes without your approval, and it's never allowed to reset,
-        force-push, delete branches or rm -rf. Claude runs a folder's own .claude hooks and
-        .mcp.json servers without a trust prompt, so only add folders you trust.
-      </p>
-
-      <h3>Limits</h3>
-      <label class="field">
-        <span>Minutes a task may run (time waiting on you doesn't count)</span>
-        <input
-          :value="snapshot.claude.timeoutMinutes"
-          type="number"
-          min="1"
-          max="600"
-          @change="
-            saveClaudeLimits({ timeoutMinutes: Number(($event.target as HTMLInputElement).value) })
-          "
-        />
-      </label>
-      <label class="field">
-        <span>Minutes a permission request waits before it's denied</span>
-        <input
-          :value="snapshot.claude.approvalMinutes"
-          type="number"
-          min="1"
-          max="120"
-          @change="
-            saveClaudeLimits({ approvalMinutes: Number(($event.target as HTMLInputElement).value) })
-          "
-        />
-      </label>
-      <label class="check">
-        <input
-          type="checkbox"
-          :checked="snapshot.claude.notifications"
-          :disabled="busy"
-          @change="saveClaudeLimits({ notifications: !snapshot.claude.notifications })"
-        />
-        Notify me when a task finishes or needs permission
-      </label>
-    </section>
-
-    <section v-if="snapshot" id="section-destinations">
-      <h2>Destinations</h2>
-      <p class="lede">
-        The first eight pinned destinations get Ctrl+1 through Ctrl+8. A trigger is what you type
-        after !.
-      </p>
-      <p class="lede">
-        A template is a URL, an app link like obsidian://, or a file path. Placeholders:
-        <code>{query}</code> for what you type, <code>{clipboard}</code>,
-        <code>{date offset=+1d format=%Y-%m-%d}</code>, and
-        <code>{argument name="lang" default="en"}</code>, which falls back to its default when you
-        type nothing. Add pipes such as <code>{query | trim | lowercase}</code>, or
-        <code>| raw</code> to skip URL encoding. A template with no query opens as soon as you type
-        its bang.
-      </p>
-      <article
-        v-for="(destination, index) in snapshot.destinations"
-        :key="destination.id"
-        class="destination"
-      >
-        <div class="destination-row">
-          <div>
-            <strong>{{ destination.name }}</strong>
-            <span class="hint-text">{{
-              destination.triggers.map((trigger) => `!${trigger}`).join(' ')
-            }}</span>
-            <span v-if="destination.builtin" class="badge">Built-in</span>
-          </div>
-          <div class="row-actions">
-            <button type="button" :disabled="busy || index === 0" @click="move(destination.id, -1)">
-              Up
-            </button>
-            <button
-              type="button"
-              :disabled="busy || index === snapshot.destinations.length - 1"
-              @click="move(destination.id, 1)"
-            >
-              Down
-            </button>
-            <button
-              type="button"
-              :disabled="busy"
-              @click="patch(destination, { pinned: !destination.pinned })"
-            >
-              {{ destination.pinned ? 'Unpin' : 'Pin' }}
-            </button>
-            <button
-              type="button"
-              :disabled="busy"
-              @click="patch(destination, { disabled: !destination.disabled })"
-            >
-              {{ destination.disabled ? 'Turn on' : 'Turn off' }}
-            </button>
-            <button type="button" @click="startEdit(destination)">Edit</button>
-            <button
-              v-if="!destination.builtin"
-              type="button"
-              :disabled="busy"
-              @click="remove(destination.id)"
-            >
-              Delete
-            </button>
-          </div>
+        <label class="field">
+          <span>Keep items for</span>
+          <select
+            :value="snapshot.clipboard.retentionDays"
+            :disabled="busy"
+            @change="
+              saveClip({ retentionDays: Number(($event.target as HTMLSelectElement).value) })
+            "
+          >
+            <option v-for="option in RETENTION" :key="option.days" :value="option.days">
+              {{ option.label }}
+            </option>
+          </select>
+        </label>
+        <label class="check">
+          <input
+            type="checkbox"
+            :checked="snapshot.clipboard.recognizeText"
+            :disabled="busy"
+            @change="saveClip({ recognizeText: !snapshot.clipboard.recognizeText })"
+          />
+          Search text inside copied images
+        </label>
+        <div class="field inline">
+          <span class="hint-text">
+            {{
+              clipPasteAllowed
+                ? 'Zephyr can paste straight into the app you are using.'
+                : 'To paste straight into apps, Zephyr needs Accessibility permission.'
+            }}
+          </span>
+          <button v-if="clipPasteAllowed === false" type="button" @click="allowPasting">
+            Allow pasting
+          </button>
         </div>
+        <h3>Never record from</h3>
+        <ul class="folders">
+          <li v-for="app in snapshot.clipboard.ignoredApps" :key="app">
+            <span class="path">{{ app }}</span>
+            <button type="button" :disabled="busy" @click="removeIgnoredApp(app)">Remove</button>
+          </li>
+        </ul>
+        <form class="field inline" @submit.prevent="addIgnoredApp">
+          <input v-model="clipNewApp" type="text" placeholder="App name or bundle id" />
+          <button type="submit" :disabled="busy || !clipNewApp.trim()">Add app</button>
+        </form>
+        <div class="field inline">
+          <span class="hint-text">{{
+            clipCount === null ? '' : `${clipCount.toLocaleString()} items in history`
+          }}</span>
+          <button type="button" :disabled="!clipCount" @click="clearClipboard">
+            {{ clipConfirm ? 'Click again to delete' : 'Clear history' }}
+          </button>
+        </div>
+      </section>
 
-        <form
-          v-if="editingId === destination.id"
-          class="editor"
-          @submit.prevent="saveDraft(destination)"
+      <section v-if="snapshot" v-show="!search && active === 'notes'" id="section-notes">
+        <h2>Notes</h2>
+        <div class="field">
+          <span>Shortcut</span>
+          <button
+            type="button"
+            class="recorder"
+            :class="{ listening: notesListening }"
+            @click="notesListening = true"
+          >
+            {{
+              notesListening
+                ? 'Press a shortcut, or Backspace for none'
+                : snapshot.notesShortcut
+                  ? formatShortcut(snapshot.notesShortcut)
+                  : 'None'
+            }}
+          </button>
+        </div>
+        <div class="field inline">
+          <button type="button" @click="openNotes()">Open notes</button>
+          <button type="button" @click="revealNotes">Show notes folder</button>
+        </div>
+      </section>
+
+      <SyncSection v-if="snapshot" v-show="!search && active === 'sync'" />
+
+      <section v-if="snapshot" v-show="!search && active === 'claude'" id="section-claude">
+        <h2>Claude</h2>
+        <div class="field inline">
+          <span class="hint-text">
+            <template v-if="!cli">Checking for the claude command…</template>
+            <template v-else-if="!cli.path">
+              claude command not found. Set its path below.
+            </template>
+            <template v-else>
+              {{ cli.version ?? 'claude' }} ·
+              {{
+                cli.loggedIn
+                  ? `signed in (${cli.authMethod ?? 'account'})`
+                  : 'not signed in: run "claude auth login" in a terminal'
+              }}
+            </template>
+          </span>
+          <button type="button" @click="loadCli">Check again</button>
+        </div>
+        <label class="field">
+          <span>claude command path</span>
+          <input
+            :value="snapshot.claude.binary"
+            type="text"
+            spellcheck="false"
+            :placeholder="cli?.path ?? '~/.local/bin/claude'"
+            @change="
+              saveClaudeLimits({ binary: ($event.target as HTMLInputElement).value });
+              loadCli();
+            "
+          />
+        </label>
+
+        <h3>Projects</h3>
+        <article
+          v-for="(project, index) in snapshot.claude.projects"
+          :key="project.id"
+          class="destination"
         >
+          <div class="destination-row">
+            <div>
+              <strong>{{ project.alias || project.folder.split('/').pop() }}</strong>
+              <span class="hint-text">{{ project.folder }}</span>
+              <span v-if="index < 8" class="badge">Ctrl+{{ index + 1 }}</span>
+            </div>
+            <div class="row-actions">
+              <button type="button" :disabled="busy" @click="removeProject(project.id)">
+                Remove
+              </button>
+            </div>
+          </div>
+          <div class="editor">
+            <label class="field">
+              <span>Alias</span>
+              <input
+                :value="project.alias"
+                type="text"
+                placeholder="e.g. zephyr"
+                @change="
+                  updateProject(project.id, { alias: ($event.target as HTMLInputElement).value })
+                "
+              />
+            </label>
+            <label class="field">
+              <span>Permissions</span>
+              <select
+                :value="project.profile"
+                @change="
+                  updateProject(project.id, {
+                    profile: ($event.target as HTMLSelectElement).value as ClaudeProject['profile'],
+                  })
+                "
+              >
+                <option value="edit">Edit files here; other commands ask</option>
+                <option value="auto">Auto: Claude Code decides</option>
+                <option value="plan">Plan only</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Note for every task</span>
+              <textarea
+                class="import-box"
+                rows="2"
+                :value="project.note"
+                placeholder="e.g. Run the tests before finishing. Use tabs."
+                @change="
+                  updateProject(project.id, { note: ($event.target as HTMLTextAreaElement).value })
+                "
+              />
+            </label>
+            <template v-if="project.allow.length">
+              <span class="hint-text">Always allowed here</span>
+              <ul class="folders">
+                <li v-for="rule in project.allow" :key="rule">
+                  <span class="path">{{ rule }}</span>
+                  <button
+                    type="button"
+                    :disabled="busy"
+                    @click="
+                      updateProject(project.id, {
+                        allow: project.allow.filter((item) => item !== rule),
+                      })
+                    "
+                  >
+                    Remove
+                  </button>
+                </li>
+              </ul>
+            </template>
+          </div>
+        </article>
+        <form class="field inline" @submit.prevent="addProject">
+          <input
+            v-model="newProjectFolder"
+            type="text"
+            placeholder="Project folder, e.g. ~/code/zephyr"
+          />
+          <button type="submit" :disabled="busy || !newProjectFolder.trim()">Add project</button>
+          <button type="button" :disabled="busy" @click="chooseProjectFolder">
+            Choose folder…
+          </button>
+        </form>
+        <p class="lede">
+          Commit and push always ask. Reset, force-push and rm -rf are always blocked.
+        </p>
+
+        <h3>Limits</h3>
+        <label class="field">
+          <span>Task time limit (minutes)</span>
+          <input
+            :value="snapshot.claude.timeoutMinutes"
+            type="number"
+            min="1"
+            max="600"
+            @change="
+              saveClaudeLimits({
+                timeoutMinutes: Number(($event.target as HTMLInputElement).value),
+              })
+            "
+          />
+        </label>
+        <label class="field">
+          <span>Permission timeout (minutes)</span>
+          <input
+            :value="snapshot.claude.approvalMinutes"
+            type="number"
+            min="1"
+            max="120"
+            @change="
+              saveClaudeLimits({
+                approvalMinutes: Number(($event.target as HTMLInputElement).value),
+              })
+            "
+          />
+        </label>
+        <label class="check">
+          <input
+            type="checkbox"
+            :checked="snapshot.claude.notifications"
+            :disabled="busy"
+            @change="saveClaudeLimits({ notifications: !snapshot.claude.notifications })"
+          />
+          Notifications
+        </label>
+      </section>
+
+      <section
+        v-if="snapshot"
+        v-show="!search && active === 'destinations'"
+        id="section-destinations"
+      >
+        <h2>Destinations</h2>
+        <p class="lede">
+          Pinned destinations get Ctrl+1–8. Templates take <code>{query}</code>,
+          <code>{clipboard}</code>, <code>{date}</code> and <code>{argument}</code>.
+        </p>
+        <article
+          v-for="(destination, index) in snapshot.destinations"
+          :key="destination.id"
+          class="destination"
+        >
+          <div class="destination-row">
+            <div>
+              <strong>{{ destination.name }}</strong>
+              <span class="hint-text">{{
+                destination.triggers.map((trigger) => `!${trigger}`).join(' ')
+              }}</span>
+              <span v-if="destination.builtin" class="badge">Built-in</span>
+            </div>
+            <div class="row-actions">
+              <button
+                type="button"
+                :disabled="busy || index === 0"
+                @click="move(destination.id, -1)"
+              >
+                Up
+              </button>
+              <button
+                type="button"
+                :disabled="busy || index === snapshot.destinations.length - 1"
+                @click="move(destination.id, 1)"
+              >
+                Down
+              </button>
+              <button
+                type="button"
+                :disabled="busy"
+                @click="patch(destination, { pinned: !destination.pinned })"
+              >
+                {{ destination.pinned ? 'Unpin' : 'Pin' }}
+              </button>
+              <button
+                type="button"
+                :disabled="busy"
+                @click="patch(destination, { disabled: !destination.disabled })"
+              >
+                {{ destination.disabled ? 'Turn on' : 'Turn off' }}
+              </button>
+              <button type="button" @click="startEdit(destination)">Edit</button>
+              <button
+                v-if="!destination.builtin"
+                type="button"
+                :disabled="busy"
+                @click="remove(destination.id)"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+
+          <form
+            v-if="editingId === destination.id"
+            class="editor"
+            @submit.prevent="saveDraft(destination)"
+          >
+            <label class="field">
+              <span>Name</span>
+              <input v-model="draft.name" type="text" maxlength="40" required />
+            </label>
+            <label class="field">
+              <span>Triggers</span>
+              <input v-model="draft.triggersText" type="text" placeholder="wiki, w" required />
+            </label>
+            <label v-if="destination.kind !== 'ai'" class="field">
+              <span>Template</span>
+              <input v-model="draft.urlTemplate" type="text" spellcheck="false" required />
+            </label>
+            <label v-if="destination.kind !== 'ai'" class="field">
+              <span>Suggestions</span>
+              <select v-model="draft.suggest">
+                <option value="none">None</option>
+                <option value="google">Google</option>
+                <option value="youtube">YouTube</option>
+                <option value="wikipedia">Wikipedia</option>
+                <option value="pubmed">PubMed</option>
+                <option value="custom">Custom…</option>
+              </select>
+            </label>
+            <template v-if="draft.suggest === 'custom'">
+              <label class="field">
+                <span>Suggestion URL</span>
+                <input
+                  v-model="draft.suggestUrl"
+                  type="text"
+                  spellcheck="false"
+                  placeholder="https://example.com/complete?q={query}"
+                  required
+                />
+              </label>
+              <label class="field">
+                <span>JSON path</span>
+                <input
+                  v-model="draft.suggestPath"
+                  type="text"
+                  spellcheck="false"
+                  placeholder="1, or items.*.title"
+                />
+              </label>
+            </template>
+            <div class="row-actions">
+              <button class="primary" type="submit" :disabled="busy">Save</button>
+              <button type="button" @click="editingId = null">Cancel</button>
+            </div>
+          </form>
+        </article>
+
+        <form class="editor add" @submit.prevent="addDestination">
+          <h3>Add a destination</h3>
           <label class="field">
             <span>Name</span>
-            <input v-model="draft.name" type="text" maxlength="40" required />
+            <input v-model="added.name" type="text" maxlength="40" required />
           </label>
           <label class="field">
             <span>Triggers</span>
-            <input v-model="draft.triggersText" type="text" placeholder="wiki, w" required />
+            <input v-model="added.triggersText" type="text" placeholder="arxiv" required />
           </label>
-          <label v-if="destination.kind !== 'ai'" class="field">
+          <label class="field">
             <span>Template</span>
-            <input v-model="draft.urlTemplate" type="text" spellcheck="false" required />
+            <input v-model="added.urlTemplate" type="text" spellcheck="false" required />
           </label>
-          <label v-if="destination.kind !== 'ai'" class="field">
+          <label class="field">
             <span>Suggestions</span>
-            <select v-model="draft.suggest">
+            <select v-model="added.suggest">
               <option value="none">None</option>
               <option value="google">Google</option>
               <option value="youtube">YouTube</option>
@@ -1314,11 +1583,11 @@
               <option value="custom">Custom…</option>
             </select>
           </label>
-          <template v-if="draft.suggest === 'custom'">
+          <template v-if="added.suggest === 'custom'">
             <label class="field">
               <span>Suggestion URL</span>
               <input
-                v-model="draft.suggestUrl"
+                v-model="added.suggestUrl"
                 type="text"
                 spellcheck="false"
                 placeholder="https://example.com/complete?q={query}"
@@ -1328,156 +1597,104 @@
             <label class="field">
               <span>JSON path</span>
               <input
-                v-model="draft.suggestPath"
+                v-model="added.suggestPath"
                 type="text"
                 spellcheck="false"
                 placeholder="1, or items.*.title"
               />
             </label>
           </template>
+          <button class="primary" type="submit" :disabled="busy">Add destination</button>
+        </form>
+
+        <div class="field inline">
+          <button type="button" @click="copyDestinations">Copy all as JSON</button>
+          <button type="button" @click="importOpen = !importOpen">Import JSON…</button>
+        </div>
+        <form v-if="importOpen" class="editor" @submit.prevent="runImport">
+          <label class="field">
+            <span>Paste exported destinations</span>
+            <textarea
+              v-model="importText"
+              class="import-box"
+              rows="6"
+              spellcheck="false"
+              placeholder='[{"name": "Arxiv", "triggers": ["arxiv"], "urlTemplate": "https://arxiv.org/a/{query}"}]'
+            />
+          </label>
           <div class="row-actions">
-            <button class="primary" type="submit" :disabled="busy">Save</button>
-            <button type="button" @click="editingId = null">Cancel</button>
+            <button class="primary" type="submit" :disabled="busy || !importText.trim()">
+              Import
+            </button>
+            <button type="button" @click="importOpen = false">Cancel</button>
           </div>
         </form>
-      </article>
+      </section>
 
-      <form class="editor add" @submit.prevent="addDestination">
-        <h3>Add a destination</h3>
-        <label class="field">
-          <span>Name</span>
-          <input v-model="added.name" type="text" maxlength="40" required />
-        </label>
-        <label class="field">
-          <span>Triggers</span>
-          <input v-model="added.triggersText" type="text" placeholder="arxiv" required />
-        </label>
-        <label class="field">
-          <span>Template</span>
-          <input v-model="added.urlTemplate" type="text" spellcheck="false" required />
-        </label>
-        <label class="field">
-          <span>Suggestions</span>
-          <select v-model="added.suggest">
-            <option value="none">None</option>
-            <option value="google">Google</option>
-            <option value="youtube">YouTube</option>
-            <option value="wikipedia">Wikipedia</option>
-            <option value="pubmed">PubMed</option>
-            <option value="custom">Custom…</option>
-          </select>
-        </label>
-        <template v-if="added.suggest === 'custom'">
-          <label class="field">
-            <span>Suggestion URL</span>
-            <input
-              v-model="added.suggestUrl"
-              type="text"
-              spellcheck="false"
-              placeholder="https://example.com/complete?q={query}"
-              required
-            />
-          </label>
-          <label class="field">
-            <span>JSON path</span>
-            <input
-              v-model="added.suggestPath"
-              type="text"
-              spellcheck="false"
-              placeholder="1, or items.*.title"
-            />
-          </label>
-        </template>
-        <button class="primary" type="submit" :disabled="busy">Add destination</button>
-      </form>
-
-      <div class="field inline">
-        <button type="button" @click="copyDestinations">Copy all as JSON</button>
-        <button type="button" @click="importOpen = !importOpen">Import JSON…</button>
-      </div>
-      <form v-if="importOpen" class="editor" @submit.prevent="runImport">
-        <label class="field">
-          <span>Paste exported destinations</span>
-          <textarea
-            v-model="importText"
-            class="import-box"
-            rows="6"
-            spellcheck="false"
-            placeholder='[{"name": "Arxiv", "triggers": ["arxiv"], "urlTemplate": "https://arxiv.org/a/{query}"}]'
+      <section v-if="snapshot" v-show="!search && active === 'files'" id="section-files">
+        <h2>Files</h2>
+        <h3>Folders to search</h3>
+        <ul class="folders">
+          <li v-for="root in fileRoots" :key="root">
+            <span class="path">{{ root }}</span>
+            <button type="button" :disabled="busy" @click="removeRoot(root)">Remove</button>
+          </li>
+        </ul>
+        <form class="field inline" @submit.prevent="addRoot">
+          <input
+            v-model="newRoot"
+            type="text"
+            placeholder="Folder path, e.g. D:\Projects or ~/Work"
           />
-        </label>
-        <div class="row-actions">
-          <button class="primary" type="submit" :disabled="busy || !importText.trim()">
-            Import
-          </button>
-          <button type="button" @click="importOpen = false">Cancel</button>
-        </div>
-      </form>
-    </section>
-
-    <section v-if="snapshot" id="section-files">
-      <h2>Files</h2>
-      <p class="lede">
-        Type !f and a name to open a file or folder; Ctrl+Enter shows it in its folder. Hidden
-        folders, .gitignored files and caches like node_modules are skipped.
-      </p>
-      <h3>Folders to search</h3>
-      <ul class="folders">
-        <li v-for="root in fileRoots" :key="root">
-          <span class="path">{{ root }}</span>
-          <button type="button" :disabled="busy" @click="removeRoot(root)">Remove</button>
-        </li>
-      </ul>
-      <form class="field inline" @submit.prevent="addRoot">
-        <input
-          v-model="newRoot"
-          type="text"
-          placeholder="Folder path, e.g. D:\Projects or ~/Work"
-        />
-        <button type="submit" :disabled="busy || !newRoot.trim()">Add folder</button>
-        <button type="button" :disabled="busy" @click="chooseRoot">Choose folder…</button>
-        <button
-          v-if="snapshot.fileRoots !== null"
-          type="button"
-          :disabled="busy"
-          @click="useHomeFolder"
-        >
-          Use home folder
-        </button>
-      </form>
-      <h3>Folders to skip</h3>
-      <ul v-if="snapshot.fileExcludes.length" class="folders">
-        <li v-for="exclude in snapshot.fileExcludes" :key="exclude">
-          <span class="path">{{ exclude }}</span>
-          <button type="button" :disabled="busy" @click="removeExclude(exclude)">Remove</button>
-        </li>
-      </ul>
-      <form class="field inline" @submit.prevent="addExclude">
-        <input v-model="newExclude" type="text" placeholder="Folder path to leave out" />
-        <button type="submit" :disabled="busy || !newExclude.trim()">Skip folder</button>
-      </form>
-      <div class="field inline">
-        <span class="hint-text">{{ indexSummary }}</span>
-        <button type="button" :disabled="fileStatus?.scanning" @click="rebuild">
-          Rebuild index
-        </button>
-      </div>
-    </section>
-
-    <section v-if="snapshot" id="section-history">
-      <h2>History</h2>
-      <ul v-if="historyPreview.length" class="history">
-        <li v-for="entry in historyPreview" :key="`${entry.destinationId}-${entry.query}`">
-          <span>{{ entry.query }}</span>
-          <span class="hint-text"
-            >{{ destinationName(entry.destinationId) }} · {{ entry.uses }}</span
+          <button type="submit" :disabled="busy || !newRoot.trim()">Add folder</button>
+          <button type="button" :disabled="busy" @click="chooseRoot">Choose folder…</button>
+          <button
+            v-if="snapshot.fileRoots !== null"
+            type="button"
+            :disabled="busy"
+            @click="useHomeFolder"
           >
-        </li>
-      </ul>
-      <p v-else class="lede">No searches yet.</p>
-      <button type="button" :disabled="busy || snapshot.history.length === 0" @click="wipeHistory">
-        Clear history
-      </button>
-    </section>
+            Use home folder
+          </button>
+        </form>
+        <h3>Folders to skip</h3>
+        <ul v-if="snapshot.fileExcludes.length" class="folders">
+          <li v-for="exclude in snapshot.fileExcludes" :key="exclude">
+            <span class="path">{{ exclude }}</span>
+            <button type="button" :disabled="busy" @click="removeExclude(exclude)">Remove</button>
+          </li>
+        </ul>
+        <form class="field inline" @submit.prevent="addExclude">
+          <input v-model="newExclude" type="text" placeholder="Folder path to leave out" />
+          <button type="submit" :disabled="busy || !newExclude.trim()">Skip folder</button>
+        </form>
+        <div class="field inline">
+          <span class="hint-text">{{ indexSummary }}</span>
+          <button type="button" :disabled="fileStatus?.scanning" @click="rebuild">
+            Rebuild index
+          </button>
+        </div>
+      </section>
+
+      <section v-if="snapshot" v-show="!search && active === 'history'" id="section-history">
+        <h2>History</h2>
+        <ul v-if="historyPreview.length" class="history">
+          <li v-for="entry in historyPreview" :key="`${entry.destinationId}-${entry.query}`">
+            <span>{{ entry.query }}</span>
+            <span class="hint-text"
+              >{{ destinationName(entry.destinationId) }} · {{ entry.uses }}</span
+            >
+          </li>
+        </ul>
+        <p v-else class="lede">No searches yet.</p>
+        <button
+          type="button"
+          :disabled="busy || snapshot.history.length === 0"
+          @click="wipeHistory"
+        >
+          Clear history
+        </button>
+      </section>
+    </div>
   </main>
 </template>
