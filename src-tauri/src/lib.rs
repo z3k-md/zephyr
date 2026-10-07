@@ -16,6 +16,7 @@ mod settings;
 mod shortcut;
 mod state;
 mod suggest;
+mod sync;
 mod template;
 mod tray;
 mod updater;
@@ -47,7 +48,10 @@ pub fn run() {
                     }
                     if shortcut::is_clipboard(pressed) {
                         window::show_clipboard(app);
-                    } else if shortcut::is_notes(pressed) {
+                    } else if shortcut::is_notes(pressed) || notes_is_sticky(app) {
+                        if shortcut::is_notes(pressed) {
+                            commands::remember_notes_mode(app);
+                        }
                         let app = app.clone();
                         tauri::async_runtime::spawn(async move {
                             if let Err(err) = window::open_notes(&app, None) {
@@ -92,6 +96,7 @@ pub fn run() {
             }
 
             secrets::init(app.path().app_data_dir()?);
+            sync::init(app.path().app_data_dir()?);
             notes::init(config_dir.join("notes"));
             clipboard::start(
                 app.path().app_data_dir()?.join("clipboard"),
@@ -159,6 +164,20 @@ pub fn run() {
             commands::save_typing_result,
             commands::save_resume_seconds,
             commands::pick_folder,
+            commands::set_active_mode,
+            commands::leave_notes,
+            commands::save_open_behavior,
+            commands::sync_status,
+            commands::sync_google_sign_in,
+            commands::sync_cancel_sign_in,
+            commands::sync_recovery_saved,
+            commands::sync_use_recovery,
+            commands::sync_poll,
+            commands::sync_pending,
+            commands::sync_approve,
+            commands::sync_revoke,
+            commands::sync_recovery_key,
+            commands::sync_sign_out,
             commands::claude_jobs,
             commands::claude_approvals,
             commands::claude_submit,
@@ -230,4 +249,11 @@ fn register_links(app: &tauri::App) {
             deeplink::handle(app.handle(), &url);
         }
     }
+}
+
+/// While Notes is the active mode, the summon shortcut opens notes instead of the bar.
+fn notes_is_sticky(app: &tauri::AppHandle) -> bool {
+    app.try_state::<AppState>()
+        .and_then(|state| state.snapshot().ok())
+        .is_some_and(|snapshot| snapshot.return_to_mode && snapshot.active_mode == "notes")
 }

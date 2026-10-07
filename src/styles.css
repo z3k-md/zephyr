@@ -659,6 +659,86 @@ section > button {
   }
 }
 
+textarea.query {
+  resize: none;
+  max-height: 140px;
+  field-sizing: content;
+  line-height: 1.4;
+}
+
+.footer .lit {
+  color: var(--fg);
+}
+
+.footer .dim {
+  opacity: 0.55;
+}
+
+/* ---- Ask AI ---- */
+
+.ai-turns {
+  max-height: 420px;
+  overflow-y: auto;
+  padding: 10px 18px 6px 48px;
+}
+
+.ai-turn + .ai-turn {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--stroke);
+}
+
+.ai-question {
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-size: 13px;
+  white-space: pre-wrap;
+}
+
+.ai-turns .answer-source {
+  padding: 4px 0 0;
+}
+
+.ai-input {
+  border-top: 1px solid var(--stroke);
+}
+
+.ai-mark {
+  flex: none;
+  width: 20px;
+  color: var(--focus);
+  font-size: 16px;
+  text-align: center;
+}
+
+.recovery-key {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 0;
+}
+
+.recovery-key code,
+.device-words {
+  padding: 8px 12px;
+  border: 1px solid var(--stroke-strong);
+  border-radius: 8px;
+  background: var(--panel);
+  font:
+    14px/1.5 ui-monospace,
+    'SF Mono',
+    Menlo,
+    Consolas,
+    monospace;
+  letter-spacing: 0.04em;
+  user-select: all;
+}
+
+.device-words {
+  display: inline-block;
+  font-size: 16px;
+}
+
 /* ---- Claude jobs ---- */
 
 .claude-mark {
@@ -793,6 +873,17 @@ section > button {
   overflow-wrap: anywhere;
   font:
     12px/1.45 ui-monospace,
+    'SF Mono',
+    Menlo,
+    Consolas,
+    monospace;
+}
+
+.approval-words {
+  margin: 6px 0 8px;
+  color: var(--muted);
+  font:
+    13px ui-monospace,
     'SF Mono',
     Menlo,
     Consolas,
@@ -1136,10 +1227,107 @@ section > button {
 
 /* The page itself never scrolls (the bar window must not), so settings scrolls inside. */
 .settings {
+  display: grid;
+  grid-template-columns: 210px 1fr;
   height: 100vh;
-  overflow-y: auto;
   background: var(--bg-solid);
-  padding: 32px 32px 56px;
+}
+
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 16px 10px 12px;
+  border-right: 1px solid var(--stroke);
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.settings-search {
+  margin: 0 2px 10px;
+  padding: 7px 10px;
+  border: 1px solid var(--stroke-strong);
+  border-radius: 8px;
+  background: var(--panel);
+  outline: none;
+  font-size: 13px;
+}
+
+.settings-search:focus {
+  border-color: var(--focus);
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 8px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.nav-item:hover {
+  background: var(--chip);
+  color: var(--fg);
+}
+
+.nav-item.active {
+  background: var(--select);
+  color: var(--fg);
+}
+
+/* A colored tile per section, like the launcher's row icons. */
+.nav-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  background: hsl(var(--hue) 55% 52% / 0.28);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  color: hsl(var(--hue) 90% 82%);
+}
+
+.nav-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.nav-item.active .nav-icon {
+  background: hsl(var(--hue) 60% 55% / 0.45);
+  color: #fff;
+}
+
+.settings-pane {
+  overflow-y: auto;
+  padding: 22px 28px 48px;
+}
+
+.results-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.results-list button {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.results-list button.selected {
+  background: var(--select);
 }
 
 .settings-header,
@@ -1174,12 +1362,9 @@ section > button {
 }
 
 .settings h2 {
-  font-size: 12px;
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--muted);
-  margin-bottom: 12px;
+  font-size: 20px;
+  font-weight: 600;
+  margin-bottom: 4px;
 }
 
 .settings h3 {
@@ -1194,12 +1379,13 @@ section > button {
 }
 
 .settings section {
-  margin-top: 20px;
-  max-width: 760px;
-  background: var(--panel);
-  border: 1px solid var(--stroke);
-  border-radius: 12px;
-  padding: 18px 20px;
+  max-width: 680px;
+}
+
+.settings section h3 {
+  margin-top: 22px;
+  padding-top: 14px;
+  border-top: 1px solid var(--stroke);
 }
 
 .lede code {
@@ -1215,22 +1401,25 @@ section > button {
   margin-bottom: 8px;
 }
 
-/* Briefly marks the section the bar's !set jumped to. */
-.settings section.revealed {
-  animation: reveal 1.4s ease-out;
+/* Briefly marks the setting a search jumped to. */
+.settings .revealed {
+  border-radius: 8px;
+  animation: reveal 1.6s ease-out;
 }
 
 @keyframes reveal {
   from {
-    border-color: var(--focus);
+    background: rgba(167, 139, 250, 0.22);
+    box-shadow: 0 0 0 6px rgba(167, 139, 250, 0.22);
   }
   to {
-    border-color: var(--stroke);
+    background: transparent;
+    box-shadow: 0 0 0 6px transparent;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .settings section.revealed {
+  .settings .revealed {
     animation: none;
   }
 }
@@ -1251,12 +1440,41 @@ section > button {
 .field select,
 .recorder {
   width: min(100%, 520px);
-  padding: 7px 10px;
-  border-radius: 6px;
-  border: 1px solid var(--stroke);
-  background: rgba(255, 255, 255, 0.03);
+  min-height: 34px;
+  padding: 7px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--stroke-strong);
+  background: rgba(255, 255, 255, 0.05);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
   font-size: 13px;
   text-align: left;
+  transition:
+    border-color 0.12s,
+    background-color 0.12s;
+}
+
+/* Dropdowns drop the native chrome for the glass field look, with their own chevron. */
+.settings select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 34px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23b9b3cc' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m7 10 5 5 5-5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 16px;
+  cursor: pointer;
+}
+
+.field input:hover,
+.settings select:hover,
+.recorder:hover {
+  border-color: rgba(255, 255, 255, 0.2);
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+.settings select:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .import-box {
@@ -1282,8 +1500,9 @@ section > button {
   outline: none;
 }
 
-.field select option {
-  background: var(--panel);
+.settings select option {
+  background: #231c35;
+  color: var(--fg);
 }
 
 .recorder.listening {
@@ -1292,12 +1511,64 @@ section > button {
 
 .check {
   align-items: center;
-  margin: 14px 0;
-  font-size: 13px;
+  margin: 16px 0;
+  font-size: 14px;
+  cursor: pointer;
 }
 
-.check input {
-  accent-color: var(--active);
+/* Every settings checkbox is a switch. */
+.settings input[type='checkbox'] {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  flex: none;
+  width: 40px;
+  height: 24px;
+  margin: 0;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.14);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  cursor: pointer;
+  transition: background-color 0.16s;
+}
+
+.settings input[type='checkbox']::before {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #f4f2fa;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  transition: transform 0.16s ease;
+}
+
+.settings input[type='checkbox']:checked {
+  background: var(--focus);
+  box-shadow: none;
+}
+
+.settings input[type='checkbox']:checked::before {
+  transform: translateX(16px);
+}
+
+.settings input[type='checkbox']:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.settings input[type='checkbox']:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings input[type='checkbox'],
+  .settings input[type='checkbox']::before {
+    transition: none;
+  }
 }
 
 .destination {

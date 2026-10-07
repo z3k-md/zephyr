@@ -437,10 +437,12 @@ pub fn apply_autostart(app: &AppHandle, enabled: bool) -> Result<(), String> {
 pub async fn ai_ask(
     state: State<'_, AppState>,
     question: String,
+    history: Option<Vec<ai::ChatTurn>>,
     on_event: Channel<AiEvent>,
 ) -> Result<(), String> {
     let settings = state.snapshot()?.ai;
-    ai::ask(&settings, &question, |event| {
+    let history = history.unwrap_or_default();
+    ai::ask(&settings, &history, &question, |event| {
         let _ = on_event.send(event);
     })
     .await;
@@ -656,8 +658,18 @@ pub async fn open_notes(
         (None, Some(body)) => Some(notes::create(&body)?),
         (None, None) => None,
     };
+    remember_notes_mode(&app);
     window::hide_bar(&app);
     window::open_notes(&app, id.as_deref())
+}
+
+/// Opening notes makes them the place Zephyr returns to.
+pub fn remember_notes_mode(app: &AppHandle) {
+    use tauri::Manager;
+    let _ = app.state::<AppState>().update(|persisted| {
+        persisted.active_mode = "notes".into();
+        Ok(())
+    });
 }
 
 #[tauri::command]
@@ -820,4 +832,110 @@ pub async fn pick_folder(app: AppHandle) -> Result<Option<String>, String> {
     Ok(picked
         .and_then(|path| path.into_path().ok())
         .map(|path| path.to_string_lossy().into_owned()))
+}
+
+/// Remembers the view Zephyr should come back to (`claude`, `ai`, `notes`, …; empty for the
+/// search bar), so it survives hiding and restarts.
+#[tauri::command]
+pub fn set_active_mode(state: State<'_, AppState>, mode: String) -> Result<(), String> {
+    state.update(|persisted| {
+        persisted.active_mode = mode.chars().take(32).collect();
+        Ok(())
+    })?;
+    Ok(())
+}
+
+/// Leaves Notes as the sticky mode: hides the notes window and brings back the bar.
+#[tauri::command]
+pub fn leave_notes(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    use tauri::Manager;
+    state.update(|persisted| {
+        persisted.active_mode.clear();
+        Ok(())
+    })?;
+    if let Some(notes) = app.get_webview_window("notes") {
+        let _ = notes.hide();
+    }
+    window::show_bar(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn save_open_behavior(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    return_to_mode: bool,
+    route_cmd: String,
+    route_alt: String,
+) -> Result<Persisted, String> {
+    let snapshot = state.update(|persisted| {
+        persisted.return_to_mode = return_to_mode;
+        persisted.route_cmd = route_cmd.trim().to_string();
+        persisted.route_alt = route_alt.trim().to_string();
+        Ok(())
+    })?;
+    publish(&app, snapshot)
+}
+
+// Sync (step 1: accounts, device keys, approvals)
+
+#[tauri::command]
+pub async fn sync_status() -> Result<crate::sync::Status, String> {
+    crate::sync::status().await
+}
+
+/// Opens Google sign-in in the browser and finishes when it comes back.
+#[tauri::command]
+pub async fn sync_google_sign_in(app: AppHandle) -> Result<(), String> {
+    crate::sync::google_sign_in(|url| {
+        app.opener()
+            .open_url(url, None::<&str>)
+            .map_err(|err| format!("Couldn't open the browser: {err}"))
+    })
+    .await
+}
+
+#[tauri::command]
+pub fn sync_cancel_sign_in() -> Result<(), String> {
+    crate::sync::cancel_sign_in()
+}
+
+#[tauri::command]
+pub fn sync_recovery_saved() -> Result<(), String> {
+    crate::sync::recovery_saved()
+}
+
+#[tauri::command]
+pub async fn sync_use_recovery(key: String) -> Result<(), String> {
+    crate::sync::use_recovery(&key).await
+}
+
+#[tauri::command]
+pub async fn sync_poll() -> Result<(), String> {
+    crate::sync::poll().await
+}
+
+#[tauri::command]
+pub async fn sync_pending() -> Result<Vec<crate::sync::Pending>, String> {
+    crate::sync::pending().await
+}
+
+#[tauri::command]
+pub async fn sync_approve(device_id: String) -> Result<(), String> {
+    crate::sync::approve(&device_id).await
+}
+
+#[tauri::command]
+pub async fn sync_revoke(device_id: String) -> Result<(), String> {
+    crate::sync::revoke(&device_id).await
+}
+
+#[tauri::command]
+pub fn sync_recovery_key() -> Result<String, String> {
+    crate::sync::recovery_key()
+}
+
+#[tauri::command]
+pub async fn sync_sign_out() -> Result<(), String> {
+    crate::sync::sign_out().await
 }

@@ -13,7 +13,8 @@
   import type { ClipDetail, ClipKind, ClipSummary } from '../types';
 
   const props = defineProps<{ initialQuery: string }>();
-  const emit = defineEmits<{ exit: [] }>();
+  // `picked` means an item was pasted or copied, which ends the clipboard picker.
+  const emit = defineEmits<{ exit: []; picked: [] }>();
 
   interface Action {
     label: string;
@@ -150,6 +151,8 @@
         notice.value = isMac
           ? 'Copied. To paste straight into apps, allow Zephyr in System Settings > Privacy & Security > Accessibility.'
           : 'Copied. Paste it with Ctrl+V.';
+      } else {
+        emit('picked');
       }
     } catch (error) {
       notice.value = errorMessage(error);
@@ -161,6 +164,7 @@
     if (!item) return;
     try {
       await clipCopy(item.id);
+      emit('picked');
     } catch (error) {
       notice.value = errorMessage(error);
     }
@@ -248,7 +252,7 @@
       emit('exit');
       return;
     }
-    if (event.key === 'Backspace' && query.value === '') {
+    if (event.key === 'Backspace' && !event.repeat && query.value === '') {
       event.preventDefault();
       emit('exit');
       return;

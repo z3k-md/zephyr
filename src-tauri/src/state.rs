@@ -48,6 +48,21 @@ pub struct Persisted {
     /// (Claude, clipboard, typing); 0 always starts at the search box.
     #[serde(default = "default_resume_seconds")]
     pub resume_seconds: u32,
+    /// The view Zephyr opens to while one is active (`claude`, `ai`, `notes`, …); empty for
+    /// the search bar.
+    pub active_mode: String,
+    /// Open to the active mode rather than the search bar.
+    #[serde(default = "yes")]
+    pub return_to_mode: bool,
+    /// Where ⌘↵ sends the text: empty for "the other primary" (Ask AI or web search), a
+    /// destination id, or `claude:<project id>`.
+    pub route_cmd: String,
+    /// Where ⌥↵ sends the text: empty for a Claude job in the last project used.
+    pub route_alt: String,
+}
+
+fn yes() -> bool {
+    true
 }
 
 fn default_resume_seconds() -> u32 {
@@ -112,6 +127,10 @@ impl Persisted {
             typing_bests: Vec::new(),
             claude: crate::claude::ClaudeSettings::default(),
             resume_seconds: default_resume_seconds(),
+            active_mode: String::new(),
+            return_to_mode: true,
+            route_cmd: String::new(),
+            route_alt: String::new(),
         }
     }
 

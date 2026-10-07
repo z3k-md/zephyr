@@ -17,6 +17,8 @@ import type {
   Note,
   NoteSummary,
   Snapshot,
+  SyncPending,
+  SyncStatus,
   TypingBest,
   SuggestResponse,
 } from './types';
@@ -117,10 +119,14 @@ export function checkForUpdates(): Promise<string> {
   return invoke<string>('check_for_updates');
 }
 
-export function aiAsk(question: string, onEvent: (event: AiEvent) => void): Promise<void> {
+export function aiAsk(
+  question: string,
+  onEvent: (event: AiEvent) => void,
+  history: { question: string; answer: string }[] = []
+): Promise<void> {
   const channel = new Channel<AiEvent>();
   channel.onmessage = onEvent;
-  return invoke('ai_ask', { question, onEvent: channel });
+  return invoke('ai_ask', { question, history, onEvent: channel });
 }
 
 export function aiCancel(): Promise<void> {
@@ -309,6 +315,67 @@ export function saveResumeSeconds(seconds: number): Promise<Snapshot> {
 /** The system folder picker; null when cancelled. */
 export function pickFolder(): Promise<string | null> {
   return invoke<string | null>('pick_folder');
+}
+
+export function setActiveMode(mode: string): Promise<void> {
+  return invoke('set_active_mode', { mode });
+}
+
+export function leaveNotes(): Promise<void> {
+  return invoke('leave_notes');
+}
+
+export function saveOpenBehavior(
+  returnToMode: boolean,
+  routeCmd: string,
+  routeAlt: string
+): Promise<Snapshot> {
+  return invoke<Snapshot>('save_open_behavior', { returnToMode, routeCmd, routeAlt });
+}
+
+export function syncStatus(): Promise<SyncStatus> {
+  return invoke<SyncStatus>('sync_status');
+}
+
+/** Opens Google sign-in in the browser; resolves once it comes back and sync has settled. */
+export function syncGoogleSignIn(): Promise<void> {
+  return invoke('sync_google_sign_in');
+}
+
+export function syncCancelSignIn(): Promise<void> {
+  return invoke('sync_cancel_sign_in');
+}
+
+export function syncRecoverySaved(): Promise<void> {
+  return invoke('sync_recovery_saved');
+}
+
+export function syncUseRecovery(key: string): Promise<void> {
+  return invoke('sync_use_recovery', { key });
+}
+
+export function syncPoll(): Promise<void> {
+  return invoke('sync_poll');
+}
+
+export function syncPending(): Promise<SyncPending[]> {
+  return invoke<SyncPending[]>('sync_pending');
+}
+
+export function syncApprove(deviceId: string): Promise<void> {
+  return invoke('sync_approve', { deviceId });
+}
+
+export function syncRevoke(deviceId: string): Promise<void> {
+  return invoke('sync_revoke', { deviceId });
+}
+
+export function syncRecoveryKey(): Promise<string> {
+  return invoke<string>('sync_recovery_key');
+}
+
+export function syncSignOut(): Promise<void> {
+  return invoke('sync_sign_out');
 }
 
 export function errorMessage(error: unknown): string {

@@ -26,7 +26,7 @@
   const isMac = navigator.userAgent.includes('Mac');
   const mod = isMac ? '⌘' : 'Ctrl+';
 
-  const inputEl = ref<HTMLInputElement | null>(null);
+  const inputEl = ref<HTMLTextAreaElement | null>(null);
   const text = ref(props.initialQuery);
   const jobs = ref<ClaudeJob[]>([]);
   const selected = ref(-1);
@@ -126,12 +126,15 @@
     return project.alias || project.folder.split(/[\\/]/).filter(Boolean).pop() || project.folder;
   }
 
-  async function submit() {
+  /** Enter follows up the selected job; ⌘↵ (`fresh`) starts a new job in the same project. */
+  async function submit(fresh = false) {
     const value = text.value.trim();
     if (!value) return;
     try {
       const follow = followTarget.value;
-      if (follow) {
+      if (follow && fresh) {
+        await claudeSubmit(value.replace(/^>\s*/, ''), follow.projectId);
+      } else if (follow) {
         await claudeFollowUp(follow.id, value.replace(/^>\s*/, ''));
       } else {
         if (!projects.value.length) {
@@ -218,7 +221,7 @@
       emit('exit');
       return;
     }
-    if (event.key === 'Backspace' && text.value === '' && selected.value < 0) {
+    if (event.key === 'Backspace' && !event.repeat && text.value === '' && selected.value < 0) {
       event.preventDefault();
       if (pickedProject.value) pickedProject.value = null;
       else emit('exit');
@@ -238,13 +241,15 @@
       return;
     }
     if (event.key === 'Enter') {
+      // Shift+Enter is a new line in the task.
+      if (event.shiftKey) return;
       event.preventDefault();
       if (event.repeat) return;
       if (!text.value.trim() && job.value) {
         detailOpen.value = !detailOpen.value;
         return;
       }
-      void submit();
+      void submit(modifier);
     }
   }
 
@@ -288,11 +293,11 @@
       >
         {{ followTarget && text.trim() ? followTarget.project : projectName(target.id) }}
       </button>
-      <input
+      <textarea
         ref="inputEl"
         v-model="text"
         class="query"
-        type="text"
+        rows="1"
         :placeholder="
           projects.length
             ? 'Describe a bug or a feature — Claude works on it in the background'
@@ -358,7 +363,9 @@
     </section>
 
     <footer class="footer">
-      <span>↵ {{ enterLabel }} · ↑↓ jobs · {{ mod }}K actions · &gt; follows up the latest</span>
+      <span
+        >↵ {{ enterLabel }} · {{ mod }}↵ new job · ⇧↵ new line · ↑↓ jobs · {{ mod }}K actions</span
+      >
       <span>{{ jobs.filter((item) => item.status === 'running').length }} running</span>
     </footer>
   </div>
