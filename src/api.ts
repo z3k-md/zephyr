@@ -16,6 +16,9 @@ import type {
   LocalServer,
   Note,
   NoteSummary,
+  ShellEvent,
+  ShellInfo,
+  ShellProgram,
   Snapshot,
   SyncPending,
   SyncStatus,
@@ -310,6 +313,42 @@ export function saveClaudeSettings(settings: ClaudeSettings): Promise<Snapshot> 
 
 export function saveResumeSeconds(seconds: number): Promise<Snapshot> {
   return invoke<Snapshot>('save_resume_seconds', { seconds });
+}
+
+/** Runs a shell command in `dir` (home when null); the run's id arrives in its `started` event. */
+export function shellRun(
+  command: string,
+  dir: string | null,
+  onEvent: (event: ShellEvent) => void
+): Promise<void> {
+  const channel = new Channel<ShellEvent>();
+  channel.onmessage = onEvent;
+  return invoke('shell_run', { command, dir, onEvent: channel });
+}
+
+export function shellStop(id: number): Promise<void> {
+  return invoke('shell_stop', { id });
+}
+
+/** Opens the command in a terminal window in `dir` and closes the bar. */
+export function shellOpenTerminal(command: string, dir: string | null): Promise<void> {
+  return invoke('shell_open_terminal', { command, dir });
+}
+
+export function shellInfo(): Promise<ShellInfo> {
+  return invoke<ShellInfo>('shell_info');
+}
+
+export function saveShellProgram(program: ShellProgram): Promise<Snapshot> {
+  return invoke<Snapshot>('save_shell_program', { program });
+}
+
+export function saveShellTerminal(terminal: 'auto' | 'console'): Promise<Snapshot> {
+  return invoke<Snapshot>('save_shell_terminal', { terminal });
+}
+
+export function clearShellHistory(): Promise<Snapshot> {
+  return invoke<Snapshot>('clear_shell_history');
 }
 
 /** The system folder picker; null when cancelled. */

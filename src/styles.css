@@ -71,6 +71,11 @@ select {
   overflow: hidden;
 }
 
+/* Windows clips the Acrylic blur to its own 8px rounded corners (window.rs). */
+[data-platform='windows'] .bar {
+  border-radius: 8px;
+}
+
 .input-row {
   display: flex;
   align-items: center;
@@ -747,6 +752,72 @@ textarea.query {
   color: #d97757;
   font-size: 18px;
   text-align: center;
+}
+
+/* ---- Shell ---- */
+
+.shell-mark {
+  flex: none;
+  width: 20px;
+  color: var(--focus);
+  font-size: 16px;
+  text-align: center;
+}
+
+.shell-input,
+.shell-command,
+.shell-output {
+  font-family: ui-monospace, 'SF Mono', Menlo, 'Cascadia Mono', Consolas, monospace;
+}
+
+.shell-input {
+  font-size: 14px;
+}
+
+.shell-command {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shell-run {
+  border-top: 1px solid var(--stroke);
+}
+
+.shell-output {
+  max-height: 340px;
+  margin: 0;
+  padding: 10px 18px;
+  overflow: auto;
+  font-size: 12.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.shell-status {
+  margin: 0;
+  padding: 0 18px 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.shell-run.done .shell-status {
+  color: #4ade80;
+}
+
+.shell-run.failed .shell-status,
+.shell-run.error .shell-status {
+  color: var(--notice);
+}
+
+.shell-cwd {
+  overflow: hidden;
+  max-width: 260px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .claude-project {

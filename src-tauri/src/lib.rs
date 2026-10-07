@@ -13,6 +13,7 @@ mod notes;
 mod query;
 mod secrets;
 mod settings;
+mod shell;
 mod shortcut;
 mod state;
 mod suggest;
@@ -59,7 +60,7 @@ pub fn run() {
                             }
                         });
                     } else {
-                        window::show_bar(app);
+                        window::toggle_bar(app);
                     }
                 })
                 .build(),
@@ -115,6 +116,12 @@ pub fn run() {
                 if let Err(err) = window::make_bar_panel(&main_window) {
                     log::error!("couldn't let the bar float over full-screen apps: {err}");
                 }
+                #[cfg(windows)]
+                if let Err(err) = window::make_bar_glass(&main_window) {
+                    log::error!("couldn't blur behind the bar: {err}");
+                }
+                #[cfg(windows)]
+                clipboard::set_owner_window(&main_window);
 
                 let watched = main_window.clone();
                 main_window.on_window_event(move |event| match event {
@@ -163,6 +170,13 @@ pub fn run() {
             commands::page_ready,
             commands::save_typing_result,
             commands::save_resume_seconds,
+            commands::shell_run,
+            commands::shell_stop,
+            commands::shell_open_terminal,
+            commands::shell_info,
+            commands::save_shell_program,
+            commands::save_shell_terminal,
+            commands::clear_shell_history,
             commands::pick_folder,
             commands::set_active_mode,
             commands::leave_notes,

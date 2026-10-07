@@ -65,6 +65,19 @@ pub fn show_bar(app: &AppHandle) {
     });
 }
 
+/// The summon shortcut: opens the bar, or closes it when it is already open, like Esc does.
+pub fn toggle_bar(app: &AppHandle) {
+    let open = app
+        .get_webview_window("main")
+        .and_then(|window| window.is_visible().ok())
+        .unwrap_or(false);
+    if open {
+        dismiss_bar(app);
+    } else {
+        show_bar(app);
+    }
+}
+
 /// Opens the bar straight into clipboard history.
 pub fn show_clipboard(app: &AppHandle) {
     show_bar(app);
@@ -165,6 +178,33 @@ fn glass() -> tauri::utils::config::WindowEffectsConfig {
         .effect(Effect::Acrylic)
         .state(EffectState::Active)
         .build()
+}
+
+/// The bar's effect in tauri.conf.json is macOS's HUD blur, which Windows ignores, leaving
+/// the tint over the bare desktop. Windows gets Acrylic instead, kept dark to match the
+/// theme, with the system's rounded corners clipping it (Windows rounds at 8px, so the page
+/// matches that radius there).
+#[cfg(windows)]
+pub fn make_bar_glass(window: &tauri::WebviewWindow) -> Result<(), String> {
+    use windows::Win32::Graphics::Dwm::{
+        DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND, DwmSetWindowAttribute,
+    };
+
+    window
+        .set_theme(Some(tauri::Theme::Dark))
+        .map_err(|err| err.to_string())?;
+    window.set_effects(glass()).map_err(|err| err.to_string())?;
+    let hwnd = window.hwnd().map_err(|err| err.to_string())?;
+    unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_WINDOW_CORNER_PREFERENCE,
+            &DWMWCP_ROUND as *const _ as *const _,
+            std::mem::size_of_val(&DWMWCP_ROUND) as u32,
+        )
+        .map_err(|err| err.to_string())?;
+    }
+    Ok(())
 }
 
 /// Shows a window built hidden once its page says it has drawn, or after a moment if it

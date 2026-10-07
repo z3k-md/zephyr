@@ -21,6 +21,10 @@
     saveClipboardSettings,
     saveOpenBehavior,
     saveResumeSeconds,
+    saveShellProgram,
+    saveShellTerminal,
+    clearShellHistory,
+    shellInfo,
     saveNotesShortcut,
     clearHistory,
     errorMessage,
@@ -50,6 +54,8 @@
     type Destination,
     type FileIndexStatus,
     type LocalServer,
+    type ShellInfo,
+    type ShellProgram,
     type Snapshot,
     type SuggestKind,
   } from '../types';
@@ -163,6 +169,7 @@
     void loadAi();
     void loadClip();
     void loadCli();
+    void loadShell();
     unlistens.push(
       await listen<unknown>('state-changed', (event) => {
         if (isSnapshot(event.payload)) snapshot.value = event.payload;
@@ -192,6 +199,7 @@
     { id: 'general', label: 'General', icon: 'gear', hue: 250 },
     { id: 'ai', label: 'AI', icon: 'sparkle', hue: 275 },
     { id: 'claude', label: 'Claude', icon: 'terminal', hue: 20 },
+    { id: 'shell', label: 'Shell', icon: 'prompt', hue: 130 },
     { id: 'sync', label: 'Sync', icon: 'sync', hue: 200 },
     { id: 'clipboard', label: 'Clipboard', icon: 'clipboard', hue: 160 },
     { id: 'notes', label: 'Notes', icon: 'note', hue: 45 },
@@ -704,6 +712,57 @@
     busy.value = true;
     try {
       apply(await saveResumeSeconds(Number((event.target as HTMLSelectElement).value)));
+    } catch (error) {
+      formError.value = errorMessage(error);
+    } finally {
+      busy.value = false;
+    }
+  }
+
+  const shell = ref<ShellInfo | null>(null);
+  const SHELLS: { id: ShellProgram; label: string }[] = [
+    { id: 'gitbash', label: 'Git Bash' },
+    { id: 'powershell', label: 'PowerShell' },
+    { id: 'wsl', label: 'WSL (bash in Linux)' },
+  ];
+
+  async function loadShell() {
+    try {
+      shell.value = await shellInfo();
+    } catch {
+      shell.value = null;
+    }
+  }
+
+  async function changeShell(event: Event) {
+    busy.value = true;
+    try {
+      apply(await saveShellProgram((event.target as HTMLSelectElement).value as ShellProgram));
+      await loadShell();
+    } catch (error) {
+      formError.value = errorMessage(error);
+    } finally {
+      busy.value = false;
+    }
+  }
+
+  async function changeTerminal(event: Event) {
+    busy.value = true;
+    try {
+      const value = (event.target as HTMLSelectElement).value as 'auto' | 'console';
+      apply(await saveShellTerminal(value));
+      await loadShell();
+    } catch (error) {
+      formError.value = errorMessage(error);
+    } finally {
+      busy.value = false;
+    }
+  }
+
+  async function forgetCommands() {
+    busy.value = true;
+    try {
+      apply(await clearShellHistory());
     } catch (error) {
       formError.value = errorMessage(error);
     } finally {
@@ -1436,6 +1495,48 @@
           />
           Notifications
         </label>
+      </section>
+
+      <section v-if="snapshot" v-show="!search && active === 'shell'" id="section-shell">
+        <h2>Shell</h2>
+        <p class="lede">
+          Type &gt; or !sh in the bar to run a command there. Ctrl+Enter opens it in a terminal
+          instead, for commands that ask for input.
+        </p>
+        <label v-if="shell?.hasWindowsTerminal" class="field">
+          <span>Ctrl+Enter opens commands in</span>
+          <select :value="snapshot.shell.terminal" :disabled="busy" @change="changeTerminal">
+            <option value="auto">Windows Terminal (a new tab)</option>
+            <option value="console">A console window</option>
+          </select>
+        </label>
+        <label v-if="shell?.available.length" class="field">
+          <span>Run commands with</span>
+          <select :value="snapshot.shell.program" :disabled="busy" @change="changeShell">
+            <option value="auto">Automatic (Git Bash if installed, otherwise PowerShell)</option>
+            <option
+              v-for="item in SHELLS.filter((entry) => shell?.available.includes(entry.id))"
+              :key="item.id"
+              :value="item.id"
+            >
+              {{ item.label }}
+            </option>
+          </select>
+        </label>
+        <p class="hint-text">
+          <template v-if="shell?.using">Commands run in {{ shell.using }}.</template>
+          <template v-else>No shell was found.</template>
+        </p>
+        <div class="field inline">
+          <span class="hint-text">{{ snapshot.shell.history.length }} recent commands saved</span>
+          <button
+            type="button"
+            :disabled="busy || !snapshot.shell.history.length"
+            @click="forgetCommands"
+          >
+            Forget recent commands
+          </button>
+        </div>
       </section>
 
       <section

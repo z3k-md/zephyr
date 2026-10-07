@@ -31,6 +31,7 @@
   import ApprovalCard from '../claude/ApprovalCard.vue';
   import DeviceCard from './DeviceCard.vue';
   import ClaudeView from '../claude/ClaudeView.vue';
+  import ShellView from '../shell/ShellView.vue';
   import {
     isSnapshot,
     type ClaudeApproval,
@@ -56,12 +57,13 @@
   // window) stick: every open lands back in them until Esc leaves. Esc to the main bar only
   // parks a workspace; a second Esc there clears it. Clipboard is a picker: it sticks until
   // something is picked.
-  type View = 'root' | 'claude' | 'clip' | 'typing' | 'ai';
-  const WORKSPACES = ['claude', 'ai', 'typing'];
+  type View = 'root' | 'claude' | 'clip' | 'typing' | 'ai' | 'shell';
+  const WORKSPACES = ['claude', 'ai', 'typing', 'shell'];
   const MODE_NAMES: Record<string, string> = {
     claude: 'Claude jobs',
     ai: 'Ask AI',
     typing: 'typing test',
+    shell: 'Shell',
     notes: 'Notes',
   };
   const view = ref<View>('root');
@@ -72,6 +74,11 @@
   const typingMode = computed(() => view.value === 'typing');
   const claudeMode = computed(() => view.value === 'claude');
   const aiMode = computed(() => view.value === 'ai');
+  const shellMode = computed(() => view.value === 'shell');
+  // Shell commands, from > or !sh; a command never runs on unscoped Enter.
+  const shellQuery = ref('');
+  const shellView = ref<InstanceType<typeof ShellView> | null>(null);
+  const SHELL_PREFIX = /^\s*(?:>|!(?:sh|shell)(?:\s|$))\s*/i;
   const CLIP_WIDTH = 860;
   const clipQuery = ref('');
   const clipView = ref<InstanceType<typeof ClipboardView> | null>(null);
@@ -237,6 +244,11 @@
         'bar-input',
         (event) => {
           const { query: text, destination, run: send } = event.payload;
+          // A link from a web page must never stage a shell command for the user to run.
+          if (SHELL_PREFIX.test(text)) {
+            notice.value = "Links can't open the shell";
+            return;
+          }
           const target = snapshot.value?.destinations.find(
             (item) =>
               !item.disabled &&
@@ -337,6 +349,18 @@
     }
   }
 
+  /** Enters a view carrying text; a view kept from earlier takes the new text too. */
+  function enterWith(next: 'claude' | 'shell', text: string) {
+    if (next === 'claude') {
+      claudeQuery.value = text;
+      if (claudeView.value && text) claudeView.value.text = text;
+    } else {
+      shellQuery.value = text;
+      if (shellView.value && text) shellView.value.text = text;
+    }
+    enter(next);
+  }
+
   /** Esc or Backspace out of a view: back to the main bar, with a workspace left parked. */
   function leave() {
     view.value = 'root';
@@ -356,6 +380,19 @@
     await nextTick();
     await nextTick();
     void aiView.value?.ask(question, fresh);
+  }
+
+  // A pasted line that reads like a command gets a "Run in shell" row; Enter still goes to
+  // the armed destination unless that row is picked.
+  const COMMAND_START =
+    /^(?:git|gh|ls|ll|cd|cat|echo|grep|rg|find|curl|wget|npm|npx|bun|bunx|pnpm|yarn|node|deno|python3?|py|pip3?|uv|cargo|rustup|go|make|docker|kubectl|ssh|scp|rsync|brew|winget|choco|scoop|sudo|chmod|chown|mkdir|rm|mv|cp|touch|tail|head|ps|kill|df|du|code|claude|wsl|pwsh|powershell|tar|unzip|ping|nslookup|ipconfig|ifconfig|[A-Z][a-z]+-[A-Z]\w+)$/;
+
+  function looksLikeCommand(text: string): boolean {
+    const line = text.trim().replace(/^\$\s+/, '');
+    if (!line || line.startsWith('!')) return false;
+    if (/^(?:\.{1,2}|~)\//.test(line)) return true;
+    const [first, ...rest] = line.split(/\s+/);
+    return rest.length > 0 && (COMMAND_START.test(first) || /\s(?:\||&&)\s/.test(line));
   }
 
   async function loadJobs() {
@@ -409,9 +446,12 @@
   }
 
   function openView(id: string) {
+    const typed = query.value;
     query.value = '';
     if (id === 'back') id = parked.value;
-    if (id === 'claude' || id === 'ai' || id === 'typing') {
+    if (id === 'shell') {
+      enterWith('shell', id === parked.value ? '' : typed.trim().replace(/^\$\s+/, ''));
+    } else if (id === 'claude' || id === 'ai' || id === 'typing') {
       enter(id);
     } else if (id === 'clip') {
       clipQuery.value = '';
@@ -473,11 +513,18 @@
       enter('typing');
       return;
     }
+    // > opens the shell at once; !sh and !shell wait for a space so !shop still works.
+    const shell = SHELL_PREFIX.exec(query.value);
+    if (shell && (query.value.trimStart().startsWith('>') || /\s$/.test(shell[0]))) {
+      const text = query.value.slice(shell[0].length);
+      query.value = '';
+      enterWith('shell', text);
+      return;
+    }
     const claude = /^!claude(?:\s+(.*))?$/i.exec(query.value);
     if (claude) {
-      claudeQuery.value = claude[1] ?? '';
       query.value = '';
-      enter('claude');
+      enterWith('claude', claude[1] ?? '');
       return;
     }
     const clip = /^!clip(?:\s+(.*))?$/i.exec(query.value);
@@ -540,7 +587,10 @@
       if (current !== generation || (!includeRemote && remoteApplied)) return;
       if (includeRemote) remoteApplied = true;
       const views = response.mode === 'recent' && !query.value.trim() ? viewRows() : [];
-      items.value = [...views, ...response.items];
+      const shellRow = looksLikeCommand(query.value)
+        ? [viewRow('shell', 'Run in shell', '> or !sh')]
+        : [];
+      items.value = [...views, ...response.items, ...shellRow];
       mode.value = response.mode;
       notice.value = response.notice;
       if (!userMoved) {
@@ -595,8 +645,18 @@
       typingView.value?.onKey(event);
       return;
     }
+    if (view.value === 'shell') {
+      shellView.value?.onKey(event);
+      return;
+    }
     if (view.value === 'ai') {
       aiView.value?.onKey(event);
+      return;
+    }
+    if (event.key === 'Enter' && /^!(?:sh|shell)$/i.test(query.value.trim())) {
+      event.preventDefault();
+      query.value = '';
+      enterWith('shell', '');
       return;
     }
     // !type then Enter opens the typing test too.
@@ -1069,6 +1129,14 @@
       ref="claudeView"
       :initial-query="claudeQuery"
       :settings="snapshot?.claude ?? null"
+      @exit="leave"
+    />
+    <ShellView
+      v-if="visited.shell"
+      v-show="shellMode"
+      ref="shellView"
+      :initial-query="shellQuery"
+      :settings="snapshot?.shell ?? null"
       @exit="leave"
     />
     <AiView v-if="visited.ai" v-show="aiMode" ref="aiView" @exit="leave" />
