@@ -59,6 +59,8 @@ pub struct Persisted {
     pub route_cmd: String,
     /// Where ⌥↵ sends the text: empty for a Claude job in the last project used.
     pub route_alt: String,
+    /// The shell for commands run from the bar (`>`), and the ones run so far.
+    pub shell: crate::shell::ShellSettings,
 }
 
 fn yes() -> bool {
@@ -131,6 +133,7 @@ impl Persisted {
             return_to_mode: true,
             route_cmd: String::new(),
             route_alt: String::new(),
+            shell: crate::shell::ShellSettings::default(),
         }
     }
 

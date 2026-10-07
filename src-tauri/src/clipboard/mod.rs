@@ -5,6 +5,8 @@
 pub mod crypto;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(windows)]
+mod windows;
 
 use std::collections::HashMap;
 use std::fs;
@@ -56,7 +58,9 @@ impl Default for ClipboardSettings {
                 "Bitwarden",
                 "Dashlane",
                 "Enpass",
+                "KeePass",
                 "KeePassXC",
+                "keeperpasswordmanager",
                 "Keychain Access",
                 "LastPass",
                 "NordPass",
@@ -169,10 +173,10 @@ pub trait Platform: Send + Sync {
 }
 
 /// For platforms whose capture isn't built yet: history stays empty.
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", windows)))]
 struct Unsupported;
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", windows)))]
 impl Platform for Unsupported {
     fn change_count(&self) -> i64 {
         0
@@ -200,10 +204,23 @@ fn platform() -> &'static dyn Platform {
         static MAC: macos::MacClipboard = macos::MacClipboard;
         &MAC
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
+    {
+        static WINDOWS: self::windows::WinClipboard = self::windows::WinClipboard;
+        &WINDOWS
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
     {
         static NONE: Unsupported = Unsupported;
         &NONE
+    }
+}
+
+/// Windows needs a window to own what Zephyr writes to the clipboard; the bar's will do.
+#[cfg(windows)]
+pub fn set_owner_window(window: &tauri::WebviewWindow) {
+    if let Ok(hwnd) = window.hwnd() {
+        self::windows::set_owner(hwnd);
     }
 }
 
@@ -434,10 +451,19 @@ impl History {
         let Some((name, id)) = source else {
             return false;
         };
-        self.settings
-            .ignored_apps
-            .iter()
-            .any(|ignored| ignored.eq_ignore_ascii_case(name) || ignored.eq_ignore_ascii_case(id))
+        // "KeePass.exe" and "KeePass" name the same Windows app.
+        let bare = |app: &str| {
+            let app = app.trim();
+            app.strip_suffix(".exe")
+                .or_else(|| app.strip_suffix(".EXE"))
+                .unwrap_or(app)
+                .to_lowercase()
+        };
+        let (name, id) = (bare(name), bare(id));
+        self.settings.ignored_apps.iter().any(|ignored| {
+            let ignored = bare(ignored);
+            ignored == name || ignored == id
+        })
     }
 }
 
@@ -952,6 +978,11 @@ mod tests {
         ))));
         assert!(!history.ignores(Some(&("Notes".into(), "com.apple.Notes".into()))));
         assert!(!history.ignores(None));
+        // Windows sources are (exe stem, exe name).
+        assert!(history.ignores(Some(&("KeePass".into(), "KeePass.exe".into()))));
+        let mut by_exe = fresh();
+        by_exe.settings.ignored_apps = vec!["Notepad.exe".into()];
+        assert!(by_exe.ignores(Some(&("notepad".into(), "notepad.exe".into()))));
     }
 
     #[test]

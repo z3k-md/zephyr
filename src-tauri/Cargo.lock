@@ -6315,6 +6315,7 @@ dependencies = [
  "objc2-core-graphics",
  "objc2-foundation",
  "objc2-vision",
+ "png 0.18.1",
  "reqwest",
  "serde",
  "serde_json",

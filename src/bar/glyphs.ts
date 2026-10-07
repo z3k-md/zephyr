@@ -22,6 +22,7 @@ export const GLYPHS: Record<string, string> = {
   sparkle:
     '<path d="M12 3.5 13.8 9a2 2 0 0 0 1.2 1.2l5.5 1.8-5.5 1.8a2 2 0 0 0-1.2 1.2L12 20.5 10.2 15a2 2 0 0 0-1.2-1.2L3.5 12 9 10.2A2 2 0 0 0 10.2 9z"/>',
   more: '<circle cx="6" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="18" cy="12" r="1"/>',
+  prompt: '<path d="m5 7.5 4.5 4.5L5 16.5M12 17h7"/>',
   sync: '<path d="M4.5 10a7.5 7.5 0 0 1 13.4-3.6L20 9M20 4.5V9h-4.5M19.5 14a7.5 7.5 0 0 1-13.4 3.6L4 15M4 19.5V15h4.5"/>',
   back: '<path d="M10 7 5 12l5 5M5 12h14"/>',
   keyboard:

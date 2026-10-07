@@ -238,6 +238,12 @@ const ZEPHYR: &[Setting] = &[
         &["claude code", "claude projects", "background agent"],
     ),
     zephyr(
+        "zephyr.shell",
+        "Zephyr Shell",
+        "shell",
+        &["terminal", "bash", "powershell", "command", "wsl"],
+    ),
+    zephyr(
         "zephyr.notes",
         "Zephyr Notes",
         "notes",
@@ -452,6 +458,7 @@ mod tests {
                         | "ai"
                         | "claude"
                         | "clipboard"
+                        | "shell"
                         | "notes"
                         | "destinations"
                         | "files"
