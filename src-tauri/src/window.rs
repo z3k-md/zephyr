@@ -65,6 +65,19 @@ pub fn show_bar(app: &AppHandle) {
     });
 }
 
+/// The summon shortcut: opens the bar, or closes it when it is already open, like Esc does.
+pub fn toggle_bar(app: &AppHandle) {
+    let open = app
+        .get_webview_window("main")
+        .and_then(|window| window.is_visible().ok())
+        .unwrap_or(false);
+    if open {
+        dismiss_bar(app);
+    } else {
+        show_bar(app);
+    }
+}
+
 /// Opens the bar straight into clipboard history.
 pub fn show_clipboard(app: &AppHandle) {
     show_bar(app);
