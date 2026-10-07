@@ -48,6 +48,8 @@ pub struct Persisted {
     /// (Claude, clipboard, typing); 0 always starts at the search box.
     #[serde(default = "default_resume_seconds")]
     pub resume_seconds: u32,
+    /// The shell for commands run from the bar (`>`), and the ones run so far.
+    pub shell: crate::shell::ShellSettings,
 }
 
 fn default_resume_seconds() -> u32 {
@@ -112,6 +114,7 @@ impl Persisted {
             typing_bests: Vec::new(),
             claude: crate::claude::ClaudeSettings::default(),
             resume_seconds: default_resume_seconds(),
+            shell: crate::shell::ShellSettings::default(),
         }
     }
 
