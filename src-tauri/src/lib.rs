@@ -115,6 +115,8 @@ pub fn run() {
                 if let Err(err) = window::make_bar_glass(&main_window) {
                     log::error!("couldn't blur behind the bar: {err}");
                 }
+                #[cfg(windows)]
+                clipboard::set_owner_window(&main_window);
 
                 let watched = main_window.clone();
                 main_window.on_window_event(move |event| match event {
