@@ -13,6 +13,7 @@ use crate::files;
 use crate::notes;
 use crate::query::{self, Decision, DispatchOutcome};
 use crate::settings::{self, Target};
+use crate::shell::{self, ShellEvent, ShellInfo};
 use crate::shortcut;
 use crate::state::{AppState, Persisted};
 use crate::suggest::{self, SuggestResponse};
@@ -800,6 +801,88 @@ pub fn save_resume_seconds(
 ) -> Result<Persisted, String> {
     let snapshot = state.update(|persisted| {
         persisted.resume_seconds = seconds.min(24 * 60 * 60);
+        Ok(())
+    })?;
+    publish(&app, snapshot)
+}
+
+/// Runs a command typed in the bar after `>`; output streams through `on_event`.
+#[tauri::command]
+pub fn shell_run(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    command: String,
+    dir: Option<String>,
+    on_event: Channel<ShellEvent>,
+) -> Result<(), String> {
+    let settings = state.snapshot()?.shell;
+    shell::run(&settings, &command, dir.as_deref(), move |event| {
+        let _ = on_event.send(event);
+    })?;
+    let snapshot = state.update(|persisted| {
+        persisted.shell.record(&command);
+        Ok(())
+    })?;
+    publish(&app, snapshot).map(|_| ())
+}
+
+#[tauri::command]
+pub fn shell_stop(id: u64) {
+    shell::stop(id);
+}
+
+#[tauri::command]
+pub fn shell_open_terminal(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    command: String,
+    dir: Option<String>,
+) -> Result<(), String> {
+    let settings = state.snapshot()?.shell;
+    shell::open_in_terminal(&settings, &command, dir.as_deref())?;
+    if !command.trim().is_empty() {
+        let snapshot = state.update(|persisted| {
+            persisted.shell.record(&command);
+            Ok(())
+        })?;
+        publish(&app, snapshot)?;
+    }
+    window::hide_bar(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn shell_info(state: State<'_, AppState>) -> Result<ShellInfo, String> {
+    Ok(shell::info(&state.snapshot()?.shell))
+}
+
+#[tauri::command]
+pub fn save_shell_program(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    program: String,
+) -> Result<Persisted, String> {
+    let snapshot = state.update(|persisted| persisted.shell.set_program(&program))?;
+    publish(&app, snapshot)
+}
+
+#[tauri::command]
+pub fn save_shell_terminal(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    terminal: String,
+) -> Result<Persisted, String> {
+    let snapshot = state.update(|persisted| persisted.shell.set_terminal(&terminal))?;
+    publish(&app, snapshot)
+}
+
+#[tauri::command]
+pub fn clear_shell_history(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Persisted, String> {
+    let snapshot = state.update(|persisted| {
+        persisted.shell.history.clear();
         Ok(())
     })?;
     publish(&app, snapshot)

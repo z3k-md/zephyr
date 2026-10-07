@@ -24,6 +24,7 @@
   } from '../api';
   import ClipboardView from './ClipboardView.vue';
   import TypingView from '../typing/TypingView.vue';
+  import ShellView from '../shell/ShellView.vue';
   import ApprovalCard from '../claude/ApprovalCard.vue';
   import ClaudeView from '../claude/ClaudeView.vue';
   import {
@@ -59,6 +60,11 @@
   const claudeMode = ref(false);
   const claudeQuery = ref('');
   const claudeView = ref<InstanceType<typeof ClaudeView> | null>(null);
+  // Shell commands, from > or !sh; a command never runs on unscoped Enter.
+  const shellMode = ref(false);
+  const shellQuery = ref('');
+  const shellView = ref<InstanceType<typeof ShellView> | null>(null);
+  const SHELL_PREFIX = /^\s*(?:>|!(?:sh|shell)(?:\s|$))\s*/i;
   const approvals = ref<ClaudeApproval[]>([]);
   const jobs = ref<ClaudeJob[]>([]);
 
@@ -201,7 +207,7 @@
         } else {
           resetForSummon();
         }
-        if (!clipMode.value && !typingMode.value && !claudeMode.value) void focusInput();
+        if (!anyView()) void focusInput();
       })
     );
     unlistens.push(
@@ -215,6 +221,11 @@
         'bar-input',
         (event) => {
           const { query: text, destination, run: send } = event.payload;
+          // A link from a web page must never stage a shell command for the user to run.
+          if (SHELL_PREFIX.test(text)) {
+            notice.value = "Links can't open the shell";
+            return;
+          }
           const target = snapshot.value?.destinations.find(
             (item) =>
               !item.disabled &&
@@ -286,11 +297,28 @@
     actionsOpen.value = false;
   });
 
-  watch([clipMode, typingMode, claudeMode], async () => {
+  watch([clipMode, typingMode, claudeMode, shellMode], async () => {
     await nextTick();
     syncHeight();
-    if (!clipMode.value && !typingMode.value && !claudeMode.value) void focusInput();
+    if (!anyView()) void focusInput();
   });
+
+  function anyView(): boolean {
+    return clipMode.value || typingMode.value || claudeMode.value || shellMode.value;
+  }
+
+  // A pasted line that reads like a command gets a "Run in shell" row; Enter still goes to
+  // the armed destination unless that row is picked.
+  const COMMAND_START =
+    /^(?:git|gh|ls|ll|cd|cat|echo|grep|rg|find|curl|wget|npm|npx|bun|bunx|pnpm|yarn|node|deno|python3?|py|pip3?|uv|cargo|rustup|go|make|docker|kubectl|ssh|scp|rsync|brew|winget|choco|scoop|sudo|chmod|chown|mkdir|rm|mv|cp|touch|tail|head|ps|kill|df|du|code|claude|wsl|pwsh|powershell|tar|unzip|ping|nslookup|ipconfig|ifconfig|[A-Z][a-z]+-[A-Z]\w+)$/;
+
+  function looksLikeCommand(text: string): boolean {
+    const line = text.trim().replace(/^\$\s+/, '');
+    if (!line || line.startsWith('!')) return false;
+    if (/^(?:\.{1,2}|~)\//.test(line)) return true;
+    const [first, ...rest] = line.split(/\s+/);
+    return rest.length > 0 && (COMMAND_START.test(first) || /\s(?:\||&&)\s/.test(line));
+  }
 
   async function loadJobs() {
     try {
@@ -340,8 +368,12 @@
   }
 
   function openView(id: string) {
+    const typed = query.value;
     query.value = '';
-    if (id === 'claude') {
+    if (id === 'shell') {
+      shellQuery.value = typed.trim().replace(/^\$\s+/, '');
+      shellMode.value = true;
+    } else if (id === 'claude') {
       claudeQuery.value = '';
       claudeMode.value = true;
     } else if (id === 'clip') {
@@ -383,6 +415,14 @@
       typingMode.value = true;
       return;
     }
+    // > opens the shell at once; !sh and !shell wait for a space so !shop still works.
+    const shell = SHELL_PREFIX.exec(query.value);
+    if (shell && (query.value.trimStart().startsWith('>') || /\s$/.test(shell[0]))) {
+      shellQuery.value = query.value.slice(shell[0].length);
+      query.value = '';
+      shellMode.value = true;
+      return;
+    }
     const claude = /^!claude(?:\s+(.*))?$/i.exec(query.value);
     if (claude) {
       claudeQuery.value = claude[1] ?? '';
@@ -415,6 +455,7 @@
     clipMode.value = false;
     typingMode.value = false;
     claudeMode.value = false;
+    shellMode.value = false;
     void loadApprovals();
     clearAnswer();
     query.value = '';
@@ -434,7 +475,7 @@
     const height = Math.ceil(root.value.getBoundingClientRect().height);
     const width = clipMode.value
       ? CLIP_WIDTH
-      : typingMode.value || claudeMode.value
+      : typingMode.value || claudeMode.value || shellMode.value
         ? TYPING_WIDTH
         : undefined;
     void setBarHeight(height, width).catch(() => undefined);
@@ -458,7 +499,10 @@
       if (current !== generation || (!includeRemote && remoteApplied)) return;
       if (includeRemote) remoteApplied = true;
       const views = response.mode === 'recent' && !query.value.trim() ? viewRows() : [];
-      items.value = [...views, ...response.items];
+      const shellRow = looksLikeCommand(query.value)
+        ? [view('shell', 'Run in shell', '> or !sh')]
+        : [];
+      items.value = [...views, ...response.items, ...shellRow];
       mode.value = response.mode;
       notice.value = response.notice;
       if (!userMoved) {
@@ -491,6 +535,10 @@
       claudeView.value?.onKey(event);
       return;
     }
+    if (shellMode.value) {
+      shellView.value?.onKey(event);
+      return;
+    }
     if (clipMode.value) {
       clipView.value?.onKey(event);
       return;
@@ -500,6 +548,13 @@
       return;
     }
     // !type then Enter opens the typing test too.
+    if (event.key === 'Enter' && /^!(?:sh|shell)$/i.test(query.value.trim())) {
+      event.preventDefault();
+      query.value = '';
+      shellQuery.value = '';
+      shellMode.value = true;
+      return;
+    }
     if (event.key === 'Enter' && /^!type$/i.test(query.value.trim())) {
       event.preventDefault();
       query.value = '';
@@ -930,8 +985,15 @@
       :queued="approvals.length"
       @answer="answerApproval"
     />
+    <ShellView
+      v-if="shellMode"
+      ref="shellView"
+      :initial-query="shellQuery"
+      :settings="snapshot?.shell ?? null"
+      @exit="shellMode = false"
+    />
     <ClaudeView
-      v-if="claudeMode"
+      v-else-if="claudeMode"
       ref="claudeView"
       :initial-query="claudeQuery"
       :settings="snapshot?.claude ?? null"

@@ -13,6 +13,7 @@ mod notes;
 mod query;
 mod secrets;
 mod settings;
+mod shell;
 mod shortcut;
 mod state;
 mod suggest;
@@ -162,6 +163,13 @@ pub fn run() {
             commands::page_ready,
             commands::save_typing_result,
             commands::save_resume_seconds,
+            commands::shell_run,
+            commands::shell_stop,
+            commands::shell_open_terminal,
+            commands::shell_info,
+            commands::save_shell_program,
+            commands::save_shell_terminal,
+            commands::clear_shell_history,
             commands::pick_folder,
             commands::claude_jobs,
             commands::claude_approvals,

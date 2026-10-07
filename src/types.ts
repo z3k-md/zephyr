@@ -70,7 +70,33 @@ export interface Snapshot {
   typingBests: TypingBest[];
   claude: ClaudeSettings;
   resumeSeconds: number;
+  shell: ShellSettings;
 }
+
+export type ShellProgram = 'auto' | 'powershell' | 'gitbash' | 'wsl';
+
+export interface ShellSettings {
+  program: ShellProgram;
+  /** Commands run from the bar, newest first. */
+  history: string[];
+  /** Windows: 'auto' sends Enter to Windows Terminal when installed, 'console' to a console. */
+  terminal: 'auto' | 'console';
+}
+
+export interface ShellInfo {
+  /** Shells found on this PC; empty on macOS, which always uses the login shell. */
+  available: ShellProgram[];
+  using: string | null;
+  /** Where Enter sends a command, e.g. "Windows Terminal". */
+  terminal: string;
+  hasWindowsTerminal: boolean;
+}
+
+export type ShellEvent =
+  | { kind: 'started'; id: number; shell: string }
+  | { kind: 'output'; text: string }
+  | { kind: 'exit'; code: number | null; stopped: boolean; millis: number }
+  | { kind: 'error'; message: string };
 
 export type ClaudeProfile = 'edit' | 'auto' | 'plan';
 
