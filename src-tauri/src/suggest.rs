@@ -13,7 +13,7 @@ use crate::notes;
 use crate::query::{self, Parsed};
 use crate::settings::{self, Setting, Target};
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Suggestion {
     pub label: String,
@@ -29,9 +29,18 @@ pub struct Suggestion {
     pub path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note_id: Option<String>,
+    /// The list section the row belongs to: apps, answer, recent, web, files, settings,
+    /// notes or destinations.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub section: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub subtitle: String,
+    /// `app:<id>`, `dest:<id>` or `glyph:<name>`.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub icon: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SuggestResponse {
     pub mode: String,
@@ -39,6 +48,13 @@ pub struct SuggestResponse {
     pub notice: Option<String>,
     /// Row Enter acts on before the user moves the selection.
     pub preselect: Option<usize>,
+    /// Where free text goes for an unscoped query: the bang's destination, `url`, or the
+    /// armed destination.
+    pub target: Option<String>,
+    /// The typed text without any bang.
+    pub text: String,
+    /// Destinations to offer under "Search with", best first.
+    pub search_with: Vec<String>,
 }
 
 /// Local results (apps, history) come back without waiting on the network unless
@@ -82,6 +98,8 @@ pub async fn gather(
             preselect: (!items.is_empty() && !parsed.query.is_empty()).then_some(0),
             items,
             notice,
+            text: parsed.query.clone(),
+            ..Default::default()
         };
     }
     if settings_scoped {
@@ -100,17 +118,21 @@ pub async fn gather(
             preselect: (!items.is_empty() && !parsed.query.is_empty()).then_some(0),
             items,
             notice,
+            text: parsed.query.clone(),
+            ..Default::default()
         };
     }
     if notes_scoped {
-        return notes_response(&parsed.query);
+        return SuggestResponse {
+            text: parsed.query.clone(),
+            ..notes_response(&parsed.query)
+        };
     }
     if parsed.bang.as_deref() == Some("type") {
         return SuggestResponse {
             mode: "search".into(),
-            items: Vec::new(),
             notice: Some("Press Enter to start a typing test".into()),
-            preselect: None,
+            ..Default::default()
         };
     }
     if files_scoped {
@@ -134,6 +156,8 @@ pub async fn gather(
             preselect: (!items.is_empty() && !parsed.query.is_empty()).then_some(0),
             items,
             notice,
+            text: parsed.query.clone(),
+            ..Default::default()
         };
     }
     if let Some(trigger) = &parsed.bang
@@ -143,7 +167,8 @@ pub async fn gather(
             mode: "search".into(),
             items: history_items(history, &parsed.query, destinations, now, 8),
             notice: Some(format!("No destination !{trigger}")),
-            preselect: None,
+            text: parsed.query.clone(),
+            ..Default::default()
         };
     }
 
@@ -197,35 +222,74 @@ pub async fn gather(
         items.push(Suggestion {
             label: answer.value.clone(),
             query: answer.value.clone(),
-            destination_id: String::new(),
             kind: "answer".into(),
-            hint: answer.hint.into(),
-            app_id: None,
-            setting_id: None,
-            path: None,
-            note_id: None,
+            hint: "Copy".into(),
+            section: "answer".into(),
+            subtitle: parsed.query.clone(),
+            icon: match answer.hint {
+                "Conversion" => "glyph:conversion",
+                "Time" => "glyph:clock",
+                _ => "glyph:calculator",
+            }
+            .into(),
+            ..Default::default()
         });
     }
-    items.extend(history_items(history, &parsed.query, destinations, now, 4));
-    items.extend(other_apps);
+    // An app match keeps the apps together at the top; otherwise recent searches lead.
+    if preferred.is_some() {
+        items.extend(other_apps);
+        items.extend(history_items(history, &parsed.query, destinations, now, 4));
+    } else {
+        items.extend(history_items(history, &parsed.query, destinations, now, 4));
+        items.extend(other_apps);
+    }
     items.truncate(8 - incidental.len());
     items.extend(incidental);
 
+    let is_url = parsed.bang.is_none() && query::looks_like_url(&parsed.query);
     let destination = resolve_destination(&parsed, armed_id, destinations);
+    // Suggestions only help when free text is going to a search: not under an app match,
+    // an inline answer, or a link.
     if include_remote
         && let Some(destination) = destination
         && !parsed.query.is_empty()
+        && preferred.is_none()
+        && answer.is_none()
+        && !is_url
     {
         let remote = fetch_remote(destination, &parsed.query).await;
         merge_remote(&mut items, remote, destination);
     }
     items.truncate(8);
+    let target = if parsed.bang.is_some() {
+        destination.map(|destination| destination.id.clone())
+    } else if is_url {
+        Some("url".to_string())
+    } else {
+        destination::enabled(destinations, armed_id).map(|destination| destination.id.clone())
+    };
     SuggestResponse {
         mode: "search".into(),
         items,
         notice: None,
         preselect: (preferred.is_some() || answer.is_some()).then_some(0),
+        target,
+        text: parsed.query.clone(),
+        search_with: searchable(destinations),
     }
+}
+
+/// Enabled destinations that take the typed text, in settings order. Fixed links (no
+/// `{query}`) would drop the text, so they aren't offered.
+fn searchable(destinations: &[Destination]) -> Vec<String> {
+    destinations
+        .iter()
+        .filter(|destination| !destination.disabled)
+        .filter(|destination| {
+            destination.is_ai() || crate::template::uses_input(&destination.url_template)
+        })
+        .map(|destination| destination.id.clone())
+        .collect()
 }
 
 /// `!note` lists recent notes; with text it finds notes and offers to start one with it.
@@ -235,29 +299,21 @@ fn notes_response(query: &str) -> SuggestResponse {
     let lower = query.to_lowercase();
     let note_rows = found.iter().take(7).map(|note| Suggestion {
         label: note.title.clone(),
-        query: String::new(),
-        destination_id: String::new(),
         kind: "note".into(),
-        hint: if note.snippet.is_empty() {
-            "Note".into()
-        } else {
-            note.snippet.clone()
-        },
-        app_id: None,
-        setting_id: None,
-        path: None,
+        section: "notes".into(),
+        subtitle: note.snippet.clone(),
+        icon: "glyph:note".into(),
         note_id: Some(note.id.clone()),
+        ..Default::default()
     });
     let create = (!query.is_empty()).then(|| Suggestion {
         label: format!("New note: {query}"),
         query: query.to_string(),
-        destination_id: String::new(),
         kind: "noteNew".into(),
         hint: "Create".into(),
-        app_id: None,
-        setting_id: None,
-        path: None,
-        note_id: None,
+        section: "notes".into(),
+        icon: "glyph:plus".into(),
+        ..Default::default()
     });
     let title_match = found
         .iter()
@@ -276,48 +332,54 @@ fn notes_response(query: &str) -> SuggestResponse {
         preselect: (!items.is_empty() && !query.is_empty()).then_some(0),
         items,
         notice,
+        ..Default::default()
     }
 }
 
 fn app_item(app: &App) -> Suggestion {
     Suggestion {
         label: app.name.clone(),
-        query: String::new(),
-        destination_id: String::new(),
         kind: "app".into(),
         hint: "App".into(),
+        section: "apps".into(),
+        icon: format!("app:{}", app.id),
         app_id: Some(app.id.clone()),
-        setting_id: None,
-        path: None,
-        note_id: None,
+        ..Default::default()
     }
 }
 
 fn setting_item(setting: &Setting) -> Suggestion {
     Suggestion {
         label: setting.title.to_string(),
-        query: String::new(),
-        destination_id: String::new(),
         kind: "setting".into(),
         hint: setting.hint().into(),
-        app_id: None,
+        section: "settings".into(),
+        icon: if matches!(setting.target, Target::Zephyr(_)) {
+            "glyph:sliders"
+        } else {
+            "glyph:gear"
+        }
+        .into(),
         setting_id: Some(setting.id.to_string()),
-        path: None,
-        note_id: None,
+        ..Default::default()
     }
 }
 
 fn file_item(hit: &Hit) -> Suggestion {
     Suggestion {
         label: hit.name.clone(),
-        query: String::new(),
-        destination_id: String::new(),
         kind: "file".into(),
-        hint: hit.location(),
-        app_id: None,
-        setting_id: None,
+        hint: if hit.dir { "Folder" } else { "File" }.into(),
+        section: "files".into(),
+        subtitle: hit.location(),
+        icon: if hit.dir {
+            "glyph:folder"
+        } else {
+            "glyph:file"
+        }
+        .into(),
         path: Some(hit.path.clone()),
-        note_id: None,
+        ..Default::default()
     }
 }
 
@@ -338,26 +400,24 @@ fn palette(destinations: &[Destination], prefix: &str) -> SuggestResponse {
         .into_iter()
         .map(|destination| Suggestion {
             label: destination.name.clone(),
-            query: String::new(),
             destination_id: destination.id.clone(),
             kind: "destination".into(),
-            app_id: None,
-            setting_id: None,
-            path: None,
-            note_id: None,
+            section: "destinations".into(),
+            icon: format!("dest:{}", destination.id),
             hint: destination
                 .triggers
                 .iter()
                 .map(|trigger| format!("!{trigger}"))
                 .collect::<Vec<_>>()
                 .join(" "),
+            ..Default::default()
         })
         .collect();
     SuggestResponse {
         mode: "destinations".into(),
         items,
         notice,
-        preselect: None,
+        ..Default::default()
     }
 }
 
@@ -365,8 +425,7 @@ fn recent(history: &[HistoryEntry], destinations: &[Destination], now: i64) -> S
     SuggestResponse {
         mode: "recent".into(),
         items: history_items(history, "", destinations, now, 8),
-        notice: None,
-        preselect: None,
+        ..Default::default()
     }
 }
 
@@ -382,13 +441,16 @@ fn history_items(
         .map(|entry| Suggestion {
             label: entry.query.clone(),
             query: entry.query,
-            destination_id: entry.destination_id.clone(),
             kind: "history".into(),
             hint: destination_name(destinations, &entry.destination_id),
-            app_id: None,
-            setting_id: None,
-            path: None,
-            note_id: None,
+            section: "recent".into(),
+            icon: if entry.destination_id == "url" {
+                "glyph:link".into()
+            } else {
+                format!("dest:{}", entry.destination_id)
+            },
+            destination_id: entry.destination_id,
+            ..Default::default()
         })
         .collect()
 }
@@ -404,11 +466,9 @@ fn merge_remote(items: &mut Vec<Suggestion>, remote: Vec<String>, destination: &
             label,
             destination_id: destination.id.clone(),
             kind: "remote".into(),
-            hint: destination.name.clone(),
-            app_id: None,
-            setting_id: None,
-            path: None,
-            note_id: None,
+            section: "web".into(),
+            icon: "glyph:search".into(),
+            ..Default::default()
         });
     }
 }
@@ -594,6 +654,100 @@ mod tests {
             catalog,
             false,
         ))
+    }
+
+    fn local_full(
+        input: &str,
+        apps: &[App],
+        history: &[HistoryEntry],
+        armed: &str,
+        include_remote: bool,
+    ) -> SuggestResponse {
+        static NO_FILES: std::sync::LazyLock<crate::files::FileIndex> =
+            std::sync::LazyLock::new(crate::files::FileIndex::default);
+        let catalog = Catalog {
+            apps,
+            settings: SETTINGS,
+            files: &NO_FILES,
+            launches: &[],
+            file_opens: &[],
+            overrides: &[],
+            now: 1_000_000,
+        };
+        tauri::async_runtime::block_on(gather(
+            input,
+            armed,
+            &crate::destination::builtins(),
+            history,
+            catalog,
+            include_remote,
+        ))
+    }
+
+    fn searched(query: &str, destination: &str) -> HistoryEntry {
+        HistoryEntry {
+            query: query.into(),
+            destination_id: destination.into(),
+            uses: 1,
+            last_used: 1_000_000,
+        }
+    }
+
+    #[test]
+    fn says_where_free_text_goes() {
+        assert_eq!(
+            local_full("cats !w", &[], &[], "google", false).target.as_deref(),
+            Some("wikipedia")
+        );
+        assert_eq!(
+            local_full("example.com", &[], &[], "google", false).target.as_deref(),
+            Some("url")
+        );
+        let plain = local_full("cats", &[], &[], "pubmed", false);
+        assert_eq!(plain.target.as_deref(), Some("pubmed"));
+        assert_eq!(plain.text, "cats");
+        assert!(plain.search_with.contains(&"google".to_string()));
+    }
+
+    #[test]
+    fn an_app_match_keeps_apps_above_recent_searches() {
+        let apps = [
+            App {
+                id: "code".into(),
+                name: "Visual Studio Code".into(),
+            },
+            App {
+                id: "vscodium".into(),
+                name: "VSCodium".into(),
+            },
+        ];
+        let history = [searched("vs code shortcuts", "google")];
+        let response = local_full("vs", &apps, &history, "google", false);
+        let kinds: Vec<&str> = response.items.iter().map(|item| item.kind.as_str()).collect();
+        let first_history = kinds.iter().position(|kind| *kind == "history");
+        let last_app = kinds.iter().rposition(|kind| *kind == "app");
+        if let (Some(history), Some(app)) = (first_history, last_app) {
+            assert!(app < history, "{kinds:?}");
+        }
+        assert_eq!(response.items[0].section, "apps");
+        assert!(response.items[0].icon.starts_with("app:"));
+    }
+
+    #[test]
+    fn links_never_fetch_suggestions() {
+        let response = local_full("example.com", &[], &[], "google", true);
+        assert!(response.items.iter().all(|item| item.kind != "remote"));
+    }
+
+    #[test]
+    fn rows_carry_their_section() {
+        let history = [searched("crispr review", "pubmed")];
+        let response = local_full("crispr", &[], &history, "google", false);
+        let row = response.items.iter().find(|item| item.kind == "history").unwrap();
+        assert_eq!((row.section.as_str(), row.icon.as_str()), ("recent", "dest:pubmed"));
+        let answer = local_full("12 * 7", &[], &[], "google", false);
+        assert_eq!(answer.items[0].section, "answer");
+        assert_eq!(answer.items[0].subtitle, "12 * 7");
     }
 
     #[test]
