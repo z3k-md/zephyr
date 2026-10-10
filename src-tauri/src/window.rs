@@ -14,6 +14,83 @@ pub fn suppressing_blur() -> bool {
     SUPPRESS_BLUR.load(Ordering::SeqCst)
 }
 
+/// Set while the user Ctrl+drags the bar, so only their moves are remembered, not
+/// `place_bar`'s.
+static DRAGGING: AtomicBool = AtomicBool::new(false);
+static MOVE_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// Ctrl+mousedown on the bar: the OS moves the window until the button is released.
+pub fn start_bar_drag(app: &AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or("Main window is missing")?;
+    DRAGGING.store(true, Ordering::SeqCst);
+    log::info!("moving the bar");
+    #[cfg(windows)]
+    {
+        // Tauri's start_dragging didn't move this window, so Windows' own move loop runs
+        // instead, on the UI thread that owns the mouse capture.
+        let result = app.run_on_main_thread(move || {
+            if let Err(err) = drag_on_windows(&window) {
+                log::error!("couldn't move the bar: {err}");
+            }
+        });
+        result.map_err(|err| err.to_string())
+    }
+    #[cfg(not(windows))]
+    window.start_dragging().map_err(|err| {
+        log::error!("couldn't move the bar: {err}");
+        err.to_string()
+    })
+}
+
+/// Hands the mouse to Windows' window-move loop, which follows it until the button is up.
+#[cfg(windows)]
+fn drag_on_windows(window: &tauri::WebviewWindow) -> Result<(), String> {
+    use windows::Win32::Foundation::{LPARAM, WPARAM};
+    use windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
+    use windows::Win32::UI::WindowsAndMessaging::{SendMessageW, WM_SYSCOMMAND};
+    // SC_MOVE plus HTCAPTION: move by dragging, as if the title bar were held.
+    const SC_DRAGMOVE: usize = 0xF012;
+    let hwnd = window.hwnd().map_err(|err| err.to_string())?;
+    unsafe {
+        let _ = ReleaseCapture();
+        SendMessageW(
+            hwnd,
+            WM_SYSCOMMAND,
+            Some(WPARAM(SC_DRAGMOVE)),
+            Some(LPARAM(0)),
+        );
+    }
+    Ok(())
+}
+
+/// Remembers where a drag left the bar, once it has stopped moving for a moment.
+pub fn bar_moved(app: &AppHandle, position: PhysicalPosition<i32>) {
+    if !DRAGGING.load(Ordering::SeqCst) {
+        return;
+    }
+    let generation = MOVE_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(300));
+        if MOVE_GENERATION.load(Ordering::SeqCst) != generation {
+            return;
+        }
+        let state = app.state::<crate::state::AppState>();
+        let saved = state.update(|persisted| {
+            persisted.bar_position = Some(crate::state::BarPosition {
+                x: position.x,
+                y: position.y,
+            });
+            Ok(())
+        });
+        if let Err(err) = saved {
+            log::error!("couldn't remember where the bar is: {err}");
+        }
+    });
+}
+
 pub fn show_bar(app: &AppHandle) {
     crate::apps::AppIndex::refresh_if_stale(crate::apps::index());
     crate::files::index().refresh_if_stale();
@@ -27,6 +104,7 @@ pub fn show_bar(app: &AppHandle) {
     SUPPRESS_BLUR.store(true, Ordering::SeqCst);
 
     if !was_visible {
+        DRAGGING.store(false, Ordering::SeqCst);
         #[cfg(target_os = "macos")]
         previous_app::remember();
         if let Err(err) = place_bar(&window) {
@@ -372,14 +450,37 @@ mod previous_app {
     }
 }
 
+/// Opens the bar where the user last dragged it, pulled fully onto that screen, or centered
+/// near the top of the screen with the cursor when there is no such spot or its monitor is
+/// gone.
 fn place_bar(window: &tauri::WebviewWindow) -> Result<(), String> {
-    let cursor = window.cursor_position().map_err(|err| err.to_string())?;
     let monitors = window.available_monitors().map_err(|err| err.to_string())?;
-    let monitor = monitors
-        .iter()
-        .find(|monitor| contains(monitor, cursor))
-        .or_else(|| monitors.first())
-        .ok_or("No monitor is available")?;
+    let saved = window
+        .app_handle()
+        .state::<crate::state::AppState>()
+        .snapshot()
+        .ok()
+        .and_then(|snapshot| snapshot.bar_position);
+    let on_saved_screen = saved.and_then(|spot| {
+        // The monitor under the bar's top-left corner, nudged inside it.
+        let corner = PhysicalPosition::new(spot.x as f64 + 24.0, spot.y as f64 + 12.0);
+        monitors
+            .iter()
+            .find(|monitor| contains(monitor, corner))
+            .map(|monitor| (monitor, spot))
+    });
+    let (monitor, spot) = match on_saved_screen {
+        Some((monitor, spot)) => (monitor, Some(spot)),
+        None => {
+            let cursor = window.cursor_position().map_err(|err| err.to_string())?;
+            let monitor = monitors
+                .iter()
+                .find(|monitor| contains(monitor, cursor))
+                .or_else(|| monitors.first())
+                .ok_or("No monitor is available")?;
+            (monitor, None)
+        }
+    };
 
     let work = monitor.work_area();
     let scale = monitor.scale_factor();
@@ -391,17 +492,41 @@ fn place_bar(window: &tauri::WebviewWindow) -> Result<(), String> {
     let width = (BAR_WIDTH * scale)
         .round()
         .clamp(1.0, work.size.width as f64) as u32;
-    let current_height = window.outer_size().map(|size| size.height).unwrap_or(120);
-    let x = work.position.x + ((work.size.width as i32 - width as i32) / 2).max(0);
-    let y = work.position.y + (work.size.height as i32 / 6);
+    let height = window
+        .outer_size()
+        .map(|size| size.height)
+        .unwrap_or(120)
+        .max(48);
+    let area = (
+        work.position.x,
+        work.position.y,
+        work.size.width as i32,
+        work.size.height as i32,
+    );
+    let (x, y) = match spot {
+        Some(spot) => clamp_into((spot.x, spot.y), area, width as i32, height as i32),
+        None => (
+            area.0 + ((area.2 - width as i32) / 2).max(0),
+            area.1 + area.3 / 6,
+        ),
+    };
 
     window
-        .set_size(PhysicalSize::new(width, current_height.max(48)))
+        .set_size(PhysicalSize::new(width, height))
         .map_err(|err| err.to_string())?;
     window
         .set_position(PhysicalPosition::new(x, y))
         .map_err(|err| err.to_string())?;
     Ok(())
+}
+
+/// Moves a `width` x `height` box at `spot` the least needed to sit inside `area`
+/// (x, y, width, height). A box taller than the area keeps its top edge on screen.
+fn clamp_into(spot: (i32, i32), area: (i32, i32, i32, i32), width: i32, height: i32) -> (i32, i32) {
+    let (left, top, area_width, area_height) = area;
+    let x = spot.0.clamp(left, (left + area_width - width).max(left));
+    let y = spot.1.clamp(top, (top + area_height - height).max(top));
+    (x, y)
 }
 
 fn contains(monitor: &tauri::Monitor, cursor: tauri::PhysicalPosition<f64>) -> bool {
@@ -453,4 +578,22 @@ fn focus_windows(window: &tauri::WebviewWindow) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::clamp_into;
+
+    #[test]
+    fn a_dragged_bar_is_pulled_back_on_screen() {
+        let area = (0, 0, 1920, 1040);
+        assert_eq!(clamp_into((300, 200), area, 680, 400), (300, 200));
+        assert_eq!(clamp_into((1700, 900), area, 680, 400), (1240, 640));
+        assert_eq!(clamp_into((-50, -20), area, 680, 400), (0, 0));
+        // A second monitor to the left, and a bar taller than the screen.
+        assert_eq!(
+            clamp_into((-3000, 100), (-2560, 0, 2560, 1400), 680, 1600),
+            (-2560, 0)
+        );
+    }
 }

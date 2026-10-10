@@ -24,6 +24,20 @@ pub fn canonical_shortcut(input: &str) -> Result<String, String> {
 
 static CLIPBOARD_ID: AtomicU32 = AtomicU32::new(0);
 static NOTES_ID: AtomicU32 = AtomicU32::new(0);
+static CAPTURE_ID: AtomicU32 = AtomicU32::new(0);
+static SNAPSHOT_ID: AtomicU32 = AtomicU32::new(0);
+
+#[cfg(debug_assertions)]
+pub fn is_capture(shortcut: &Shortcut) -> bool {
+    let id = CAPTURE_ID.load(Ordering::SeqCst);
+    id != 0 && shortcut.id() == id
+}
+
+#[cfg(debug_assertions)]
+pub fn is_snapshot(shortcut: &Shortcut) -> bool {
+    let id = SNAPSHOT_ID.load(Ordering::SeqCst);
+    id != 0 && shortcut.id() == id
+}
 
 /// Optional shortcuts besides the summon one.
 #[derive(Default, Clone, Copy)]
@@ -40,10 +54,25 @@ pub fn register(app: &AppHandle, shortcut: &str, extras: Extras<'_>) -> Result<(
     let _ = shortcuts.unregister_all();
     CLIPBOARD_ID.store(0, Ordering::SeqCst);
     NOTES_ID.store(0, Ordering::SeqCst);
+    CAPTURE_ID.store(0, Ordering::SeqCst);
+    SNAPSHOT_ID.store(0, Ordering::SeqCst);
     shortcuts
         .register(parsed)
         .map_err(|err| format!("Couldn't register {shortcut}: {err}"))?;
-    for (wanted, slot) in [(extras.clipboard, &CLIPBOARD_ID), (extras.notes, &NOTES_ID)] {
+    // Bug captures are a development tool; release builds don't have them at all.
+    #[cfg(debug_assertions)]
+    let (capture, snapshot) = (
+        Some(crate::capture::SHORTCUT),
+        Some(crate::capture::SNAPSHOT_SHORTCUT),
+    );
+    #[cfg(not(debug_assertions))]
+    let (capture, snapshot): (Option<&str>, Option<&str>) = (None, None);
+    for (wanted, slot) in [
+        (extras.clipboard, &CLIPBOARD_ID),
+        (extras.notes, &NOTES_ID),
+        (capture, &CAPTURE_ID),
+        (snapshot, &SNAPSHOT_ID),
+    ] {
         let Some(wanted) = wanted.filter(|value| !value.is_empty()) else {
             continue;
         };

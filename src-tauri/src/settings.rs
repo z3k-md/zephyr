@@ -120,10 +120,17 @@ pub fn open_system(
 ) -> Result<(), String> {
     match target {
         Target::Uri(uri) => open_uri(uri),
+        // Through Explorer, like launching an app: it shows the UAC prompt itself for tools
+        // that need elevation (regedit), and a declined prompt is just nothing happening.
+        // Opening them directly from the bar failed with "cancelled by the user" (1223).
         Target::System(file) => {
             let root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
             let path = std::path::PathBuf::from(root).join("System32").join(file);
-            open_uri(&path.to_string_lossy())
+            std::process::Command::new("explorer.exe")
+                .arg(path)
+                .spawn()
+                .map(|_| ())
+                .map_err(|err| err.to_string())
         }
         Target::Command(program, args) => std::process::Command::new(program)
             .args(args)

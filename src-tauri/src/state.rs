@@ -61,6 +61,15 @@ pub struct Persisted {
     pub route_alt: String,
     /// The shell for commands run from the bar (`>`), and the ones run so far.
     pub shell: crate::shell::ShellSettings,
+    /// Where the user Ctrl+dragged the bar, in physical pixels; none opens it centered on the
+    /// screen with the cursor.
+    pub bar_position: Option<BarPosition>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BarPosition {
+    pub x: i32,
+    pub y: i32,
 }
 
 fn yes() -> bool {
@@ -134,6 +143,7 @@ impl Persisted {
             route_cmd: String::new(),
             route_alt: String::new(),
             shell: crate::shell::ShellSettings::default(),
+            bar_position: None,
         }
     }
 

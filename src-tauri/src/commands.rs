@@ -57,6 +57,24 @@ pub async fn suggest(
     .await)
 }
 
+/// Connects to the destination's suggestion service when the bar opens, so the first
+/// keystroke's suggestions aren't slow.
+#[tauri::command]
+pub async fn warm_suggestions(
+    state: State<'_, AppState>,
+    destination_id: String,
+) -> Result<(), String> {
+    let destination = state
+        .snapshot()?
+        .destinations
+        .into_iter()
+        .find(|destination| destination.id == destination_id);
+    if let Some(destination) = destination {
+        suggest::warm(&destination).await;
+    }
+    Ok(())
+}
+
 fn catalog<'a>(installed: &'a [apps::App], snapshot: &'a Persisted) -> Catalog<'a> {
     Catalog {
         apps: installed,
@@ -898,6 +916,39 @@ pub fn clear_shell_history(
         Ok(())
     })?;
     publish(&app, snapshot)
+}
+
+/// One entry for the running bug capture's log. Release builds have no captures, so there
+/// it does nothing.
+#[tauri::command]
+pub fn capture_event(kind: String, data: serde_json::Value) {
+    #[cfg(debug_assertions)]
+    crate::capture::record(&kind, data);
+    #[cfg(not(debug_assertions))]
+    let _ = (kind, data);
+}
+
+#[tauri::command]
+pub fn capture_recording() -> bool {
+    #[cfg(debug_assertions)]
+    return crate::capture::recording();
+    #[cfg(not(debug_assertions))]
+    false
+}
+
+/// Ctrl+mousedown on the bar: the window follows the mouse until the button comes up.
+#[tauri::command]
+pub fn start_bar_drag(app: AppHandle) -> Result<(), String> {
+    window::start_bar_drag(&app)
+}
+
+/// An app's icon as a PNG `data:` URL at `size` pixels, or `None` to keep the generic glyph.
+#[tauri::command]
+pub async fn app_icon(app_id: String, size: u32) -> Option<String> {
+    tauri::async_runtime::spawn_blocking(move || crate::icons::app_icon(&app_id, size))
+        .await
+        .ok()
+        .flatten()
 }
 
 /// Shows the system folder picker; `None` when cancelled.

@@ -42,6 +42,30 @@ export function launchApp(appId: string): Promise<DispatchOutcome> {
   return invoke<DispatchOutcome>('launch_app', { appId });
 }
 
+/** Opens the connection to a destination's suggestion service before the first keystroke. */
+export function warmSuggestions(destinationId: string): Promise<void> {
+  return invoke('warm_suggestions', { destinationId });
+}
+
+/** Adds an entry to the running bug capture's log (Ctrl+Alt+R in dev builds). */
+export function captureEvent(kind: string, data: unknown): Promise<void> {
+  return invoke('capture_event', { kind, data });
+}
+
+export function captureRecording(): Promise<boolean> {
+  return invoke<boolean>('capture_recording');
+}
+
+/** Moves the bar with the mouse until the button is released (Ctrl+drag). */
+export function startBarDrag(): Promise<void> {
+  return invoke('start_bar_drag');
+}
+
+/** An app's icon as a PNG data URL at `size` pixels, or null when it has none to offer. */
+export function appIcon(appId: string, size: number): Promise<string | null> {
+  return invoke<string | null>('app_icon', { appId, size });
+}
+
 export function openSetting(settingId: string): Promise<DispatchOutcome> {
   return invoke<DispatchOutcome>('open_setting', { settingId });
 }

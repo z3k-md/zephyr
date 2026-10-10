@@ -1,6 +1,9 @@
 mod ai;
 mod answer;
 mod apps;
+// Bug recordings and snapshots exist only in dev builds; installed copies don't contain them.
+#[cfg(debug_assertions)]
+mod capture;
 mod claude;
 mod clipboard;
 mod commands;
@@ -8,6 +11,7 @@ mod deeplink;
 mod destination;
 mod files;
 mod history;
+mod icons;
 mod logger;
 mod notes;
 mod query;
@@ -45,6 +49,14 @@ pub fn run() {
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, pressed, event| {
                     if event.state != ShortcutState::Pressed {
+                        return;
+                    }
+                    #[cfg(debug_assertions)]
+                    if shortcut::is_capture(pressed) {
+                        capture::toggle(app);
+                        return;
+                    } else if shortcut::is_snapshot(pressed) {
+                        capture::snapshot(app);
                         return;
                     }
                     if shortcut::is_clipboard(pressed) {
@@ -99,6 +111,9 @@ pub fn run() {
             secrets::init(app.path().app_data_dir()?);
             sync::init(app.path().app_data_dir()?);
             notes::init(config_dir.join("notes"));
+            icons::init(app.path().app_cache_dir()?.join("icons"));
+            #[cfg(debug_assertions)]
+            capture::init(app.path().app_data_dir()?.join("captures"));
             clipboard::start(
                 app.path().app_data_dir()?.join("clipboard"),
                 snapshot.clipboard.clone(),
@@ -132,6 +147,9 @@ pub fn run() {
                     WindowEvent::Focused(false) if !window::suppressing_blur() => {
                         let _ = watched.hide();
                         let _ = watched.emit("bar-hidden", ());
+                    }
+                    WindowEvent::Moved(position) => {
+                        window::bar_moved(watched.app_handle(), *position);
                     }
                     _ => {}
                 });
@@ -170,6 +188,11 @@ pub fn run() {
             commands::page_ready,
             commands::save_typing_result,
             commands::save_resume_seconds,
+            commands::app_icon,
+            commands::start_bar_drag,
+            commands::warm_suggestions,
+            commands::capture_event,
+            commands::capture_recording,
             commands::shell_run,
             commands::shell_stop,
             commands::shell_open_terminal,
