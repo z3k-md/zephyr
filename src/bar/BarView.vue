@@ -24,6 +24,10 @@
     revealFile,
     setBarHeight,
     suggest,
+    startBarDrag,
+    warmSuggestions,
+    captureEvent,
+    captureRecording,
   } from '../api';
   import ClipboardView from './ClipboardView.vue';
   import TypingView from '../typing/TypingView.vue';
@@ -85,10 +89,8 @@
   const shellQuery = ref('');
   const shellView = ref<InstanceType<typeof ShellView> | null>(null);
   const SHELL_PREFIX = /^\s*(?:>|!(?:sh|shell)(?:\s|$))\s*/i;
-  const CLIP_WIDTH = 860;
   const clipQuery = ref('');
   const clipView = ref<InstanceType<typeof ClipboardView> | null>(null);
-  const TYPING_WIDTH = 760;
   const typingView = ref<InstanceType<typeof TypingView> | null>(null);
   const aiView = ref<InstanceType<typeof AiView> | null>(null);
   // Background Claude jobs, from !claude; pending permission requests show above everything.
@@ -167,6 +169,96 @@
     () => primaryLabel(selectedItem.value, rowCtx.value) ?? `Search ${armed.value?.name ?? ''}`
   );
 
+  // Type-ahead: the rest of what Enter would act on, drawn faintly after the cursor. Enter
+  // still sends only what was typed; Right arrow or End takes the completion.
+  const caretAtEnd = ref(true);
+  const ghost = computed(() => {
+    const typed = query.value;
+    if (!typed.trim() || !caretAtEnd.value || mode.value === 'destinations') return '';
+    if (typed.startsWith('!') || typed.startsWith('>')) return '';
+    const lower = typed.toLowerCase();
+    const target = selectedItem.value;
+    let candidates: string[];
+    if (target?.kind === 'app') {
+      candidates = [target.label];
+    } else if (target?.kind === 'history' || target?.kind === 'remote') {
+      candidates = [target.query];
+    } else {
+      const history = [...(snapshot.value?.history ?? [])]
+        .filter((entry) => entry.destinationId === armedId.value)
+        .sort((a, b) => b.uses - a.uses || b.lastUsed - a.lastUsed)
+        .map((entry) => entry.query);
+      const remote = items.value
+        .filter((item) => item.kind === 'history' || item.kind === 'remote')
+        .map((item) => item.query);
+      candidates = [...history, ...remote];
+    }
+    const match = candidates.find(
+      (candidate) => candidate.length > typed.length && candidate.toLowerCase().startsWith(lower)
+    );
+    return match ? match.slice(typed.length) : '';
+  });
+
+  /** The completion only shows while the cursor sits at the end of text that fits the box. */
+  function trackCaret() {
+    const input = inputEl.value;
+    if (!input) return;
+    const end = input.value.length;
+    caretAtEnd.value =
+      input.selectionStart === end &&
+      input.selectionEnd === end &&
+      input.scrollWidth <= input.clientWidth;
+  }
+
+  /** Ctrl+drag anywhere on the bar moves it; plain clicks and drags work as before. */
+  function dragWithCtrl(event: MouseEvent) {
+    if (event.button !== 0 || !event.ctrlKey || event.altKey || event.shiftKey) return;
+    event.preventDefault();
+    event.stopPropagation();
+    void startBarDrag().catch((error) => {
+      console.error('Ctrl+drag failed', error);
+      notice.value = `Couldn't move the bar: ${errorMessage(error)}`;
+    });
+  }
+
+  // Bug captures (Ctrl+Alt+R and Ctrl+Alt+S, dev builds only): while one runs, the bar logs
+  // what it does. A release bundle never listens for captures or sends them anything.
+  const capturing = ref(false);
+  function trace(kind: string, data: unknown) {
+    if (import.meta.env.DEV && capturing.value) {
+      void captureEvent(kind, data).catch(() => undefined);
+    }
+  }
+  if (import.meta.env.DEV) {
+    void captureRecording()
+      .then((on) => (capturing.value = on))
+      .catch(() => undefined);
+    void listen<boolean>('capture-state', (event) => {
+      capturing.value = event.payload;
+      // Everything a snapshot needs to explain its one frame, and where a recording begins.
+      if (event.payload) {
+        trace('start', {
+          text: query.value,
+          completion: ghost.value,
+          mode: mode.value,
+          view: view.value,
+          armed: armed.value?.name ?? null,
+          selected: selected.value,
+          notice: notice.value,
+          rows: items.value.map((item) => ({
+            section: item.section,
+            kind: item.kind,
+            label: item.label,
+            hint: item.hint,
+          })),
+        });
+      }
+    }).then((unlisten) => unlistens.push(unlisten));
+    watch(query, (text) => trace('text', { text }));
+    watch(selected, (index) => trace('selected', { index, label: items.value[index]?.label }));
+    watch(notice, (text) => text && trace('notice', { text }));
+  }
+
   const isMac = navigator.userAgent.includes('Mac');
   const actionKey = isMac ? '⌘K' : 'Ctrl+K';
 
@@ -236,6 +328,8 @@
 
     unlistens.push(
       await listen('bar-shown', () => {
+        // Opens the connection to the suggestion service before the first keystroke.
+        void warmSuggestions(armedId.value).catch(() => undefined);
         void loadApprovals();
         void loadJobs();
         void loadDevices();
@@ -522,16 +616,17 @@
       return;
     }
     actionsOpen.value = false;
-    selected.value = -1;
+    // The highlight stays put until this text's results replace it, so it doesn't blink.
     userMoved = false;
     notice.value = null;
     scheduleSuggest();
   });
 
-  watch(armedId, () => {
+  watch(armedId, (id) => {
     selected.value = -1;
     userMoved = false;
     scheduleSuggest();
+    void warmSuggestions(id).catch(() => undefined);
   });
 
   /** Clears the main bar's text and selection; views and the parked workspace are untouched. */
@@ -548,12 +643,14 @@
     inputEl.value?.select();
   }
 
+  // Every view is the bar's one fixed size, so the window (and its blur) always matches the
+  // panel exactly. Views used to widen the window without widening the panel.
   function syncHeight() {
     if (!root.value) return;
-    const height = Math.ceil(root.value.getBoundingClientRect().height);
-    const width =
-      view.value === 'clip' ? CLIP_WIDTH : view.value === 'root' ? undefined : TYPING_WIDTH;
-    void setBarHeight(height, width).catch(() => undefined);
+    const rect = root.value.getBoundingClientRect();
+    const height = Math.ceil(rect.height);
+    trace('size', { height, width: Math.ceil(rect.width) });
+    void setBarHeight(height).catch(() => undefined);
   }
 
   // Local results (apps, history) land on the keystroke; remote suggestions follow after a
@@ -568,11 +665,51 @@
     }, 120);
   }
 
+  /** Web suggestions by destination and text, so going back to a text shows them at once. */
+  const remembered = new Map<string, Suggestion[]>();
+
+  /** The web rows to keep up until this text's own arrive: only ones that still match. */
+  function stillMatching(typed: string, destinationId: string): Suggestion[] {
+    const prefix = typed.trim().toLowerCase();
+    if (!prefix) return [];
+    return (lastResponse.value?.items ?? []).filter(
+      (item) =>
+        item.kind === 'remote' &&
+        item.destinationId === destinationId &&
+        item.query.toLowerCase().startsWith(prefix)
+    );
+  }
+
   async function loadSuggestions(current: number, includeRemote: boolean) {
     try {
-      const response = await suggest(query.value, armedId.value, includeRemote);
-      if (current !== generation || (!includeRemote && remoteApplied)) return;
+      const typed = query.value;
+      const destinationId = armedId.value;
+      const asked = performance.now();
+      trace('fetch', { text: typed, remote: includeRemote, generation: current });
+      let response = await suggest(typed, destinationId, includeRemote);
+      const stale = current !== generation || (!includeRemote && remoteApplied);
+      trace('fetched', {
+        text: typed,
+        remote: includeRemote,
+        ms: Math.round(performance.now() - asked),
+        rows: response.items.length,
+        stale,
+      });
+      if (stale) return;
       if (includeRemote) remoteApplied = true;
+      // Until this text's web suggestions arrive, keep the ones seen for it before
+      // (backspacing), or the current ones that still match, so the list doesn't collapse.
+      const key = `${destinationId}\n${typed.trim().toLowerCase()}`;
+      if (includeRemote) {
+        remembered.set(
+          key,
+          response.items.filter((item) => item.kind === 'remote')
+        );
+        if (remembered.size > 200) remembered.delete(remembered.keys().next().value ?? '');
+      } else {
+        const carried = remembered.get(key) ?? stillMatching(typed, destinationId);
+        if (carried.length) response = { ...response, items: [...response.items, ...carried] };
+      }
       // Keep the row the user moved to selected when late results reshuffle the list.
       const kept = userMoved && selectedItem.value ? rowKey(selectedItem.value) : null;
       lastResponse.value = response;
@@ -591,6 +728,16 @@
         pendingMove = 0;
         moveSelection(delta);
       }
+      trace('results', {
+        text: typed,
+        remote: includeRemote,
+        selected: selected.value,
+        rows: items.value.map((item) => ({
+          section: item.section,
+          kind: item.kind,
+          label: item.label,
+        })),
+      });
       await nextTick();
       syncHeight();
     } catch (error) {
@@ -600,6 +747,13 @@
   }
 
   function onKey(event: KeyboardEvent) {
+    trace('key', {
+      key: event.key,
+      ctrl: event.ctrlKey,
+      alt: event.altKey,
+      shift: event.shiftKey,
+      meta: event.metaKey,
+    });
     if (event.isComposing) return;
     // A pending Claude permission request: never plain Enter, only these keys.
     // A computer asking to join sync, when no Claude request is ahead of it.
@@ -694,6 +848,23 @@
       }
       // Anything else goes back to typing.
       actionsOpen.value = false;
+    }
+
+    // Right arrow or End at the end of the text takes the suggested completion.
+    if (
+      (event.key === 'ArrowRight' || event.key === 'End') &&
+      ghost.value &&
+      !event.shiftKey &&
+      !modifier &&
+      !event.altKey
+    ) {
+      event.preventDefault();
+      query.value += ghost.value;
+      void nextTick(() => {
+        inputEl.value?.setSelectionRange(query.value.length, query.value.length);
+        trackCaret();
+      });
+      return;
     }
 
     if (event.key === 'Escape') {
@@ -919,11 +1090,6 @@
     selected.value = (selected.value + delta + items.value.length) % items.value.length;
   }
 
-  function arm(destination: Destination) {
-    armedId.value = destination.id;
-    inputEl.value?.focus();
-  }
-
   async function sendTo(destination: Destination) {
     if (!query.value.trim()) {
       armedId.value = destination.id;
@@ -1090,13 +1256,8 @@
 </script>
 
 <template>
-  <div
-    ref="root"
-    class="bar"
-    :class="{ wide: clipMode, 'typing-wide': view !== 'root' && !clipMode }"
-    role="dialog"
-    aria-label="Zephyr"
-  >
+  <div ref="root" class="bar" role="dialog" aria-label="Zephyr" @mousedown.capture="dragWithCtrl">
+    <span v-if="capturing" class="capture-dot" title="Recording · Ctrl+Alt+R stops" />
     <ApprovalCard
       v-if="approvals.length"
       :approval="approvals[0]"
@@ -1145,38 +1306,45 @@
           <circle cx="11" cy="11" r="6.5" />
           <path d="M16 16.5 20 20.5" />
         </svg>
-        <input
-          ref="inputEl"
-          v-model="query"
-          class="query"
-          type="text"
-          role="combobox"
-          aria-autocomplete="list"
-          aria-controls="results"
-          :aria-expanded="items.length > 0"
-          :aria-activedescendant="selected >= 0 ? `result-${selected}` : undefined"
-          placeholder="Search, open an app, or ! for a destination"
-          spellcheck="false"
-          autocomplete="off"
-          autocapitalize="off"
-        />
+        <div class="query-wrap">
+          <!-- The typed text is invisible here; it only pushes the completion into place. -->
+          <span v-if="ghost" class="query ghost" aria-hidden="true"
+            ><span class="ghost-typed">{{ query }}</span
+            >{{ ghost }}</span
+          >
+          <input
+            ref="inputEl"
+            v-model="query"
+            class="query"
+            type="text"
+            role="combobox"
+            aria-autocomplete="both"
+            aria-controls="results"
+            :aria-expanded="items.length > 0"
+            :aria-activedescendant="selected >= 0 ? `result-${selected}` : undefined"
+            placeholder="Search, open an app, or ! for a destination"
+            spellcheck="false"
+            autocomplete="off"
+            autocapitalize="off"
+            @input="trackCaret"
+            @keyup="trackCaret"
+            @click="trackCaret"
+            @select="trackCaret"
+          />
+        </div>
+        <!-- Where Enter sends the text; Tab cycles it and Ctrl+1–8 pick one by number. -->
+        <button
+          v-if="armed"
+          class="chip active armed-pill"
+          type="button"
+          title="Tab cycles · Ctrl+1–8 picks"
+          @mousedown.prevent
+          @click="cycleArmed(false)"
+        >
+          {{ armed.name }}
+        </button>
         <button class="text-button" type="button" @mousedown.prevent @click="openSettings">
           Settings
-        </button>
-      </div>
-
-      <div v-if="strip.length" class="strip" aria-label="Destinations">
-        <button
-          v-for="(destination, index) in strip"
-          :key="destination.id"
-          type="button"
-          class="chip"
-          :class="{ active: destination.id === armedId }"
-          @mousedown.prevent
-          @click="arm(destination)"
-        >
-          {{ destination.name }}
-          <kbd>Ctrl+{{ index + 1 }}</kbd>
         </button>
       </div>
 

@@ -79,7 +79,7 @@ pub async fn gather(
         return palette(destinations, parsed.bang.as_deref().unwrap_or(""));
     }
     if input.trim().is_empty() {
-        return recent(history, destinations, now);
+        return recent(history, destinations, &catalog, now);
     }
     if scoped {
         let items: Vec<Suggestion> = if parsed.query.is_empty() {
@@ -198,9 +198,18 @@ pub async fn gather(
     let incidental: Vec<Suggestion> = if offer_apps {
         let opened = files::incidental(catalog.file_opens, &parsed.query, now, 2);
         let mut rows: Vec<Suggestion> = opened.iter().map(file_item).collect();
+        // A system tool that is also an installed app (Registry Editor) shows once, as the app.
+        let shown_app = |title: &str| {
+            preferred.is_some_and(|app| app.name.eq_ignore_ascii_case(title))
+                || other_apps
+                    .iter()
+                    .any(|item| item.label.eq_ignore_ascii_case(title))
+        };
         rows.extend(
-            settings::incidental(catalog.settings, &parsed.query, 2 - rows.len())
+            settings::incidental(catalog.settings, &parsed.query, 2)
                 .into_iter()
+                .filter(|setting| !shown_app(setting.title))
+                .take(2 - rows.len())
                 .map(setting_item),
         );
         rows
@@ -421,10 +430,25 @@ fn palette(destinations: &[Destination], prefix: &str) -> SuggestResponse {
     }
 }
 
-fn recent(history: &[HistoryEntry], destinations: &[Destination], now: i64) -> SuggestResponse {
+/// The empty bar: apps you've opened from Zephyr, most used first, then recent searches.
+fn recent(
+    history: &[HistoryEntry],
+    destinations: &[Destination],
+    catalog: &Catalog<'_>,
+    now: i64,
+) -> SuggestResponse {
+    let launched = |app: &&apps::App| catalog.launches.iter().any(|entry| entry.app_id == app.id);
+    let mut items: Vec<Suggestion> = catalog
+        .recent(12)
+        .into_iter()
+        .filter(launched)
+        .take(4)
+        .map(app_item)
+        .collect();
+    items.extend(history_items(history, "", destinations, now, 5));
     SuggestResponse {
         mode: "recent".into(),
-        items: history_items(history, "", destinations, now, 8),
+        items,
         ..Default::default()
     }
 }
@@ -493,6 +517,12 @@ fn destination_name(destinations: &[Destination], id: &str) -> String {
         .find(|destination| destination.id == id)
         .map(|destination| destination.name.clone())
         .unwrap_or_else(|| id.to_string())
+}
+
+/// Opens the connection to a destination's suggestion service ahead of the first keystroke;
+/// the first real fetch otherwise pays for DNS and TLS (1.25 s in a capture, vs ~60 ms after).
+pub async fn warm(destination: &Destination) {
+    let _ = fetch_remote(destination, "").await;
 }
 
 async fn fetch_remote(destination: &Destination, query: &str) -> Vec<String> {
@@ -581,7 +611,8 @@ fn string_list(value: Option<&Value>, query: &str) -> Vec<String> {
             continue;
         };
         let text = text.trim();
-        if text.is_empty() || text.eq_ignore_ascii_case(query) {
+        // A suggestion that is just the typed text repeats what Enter already does.
+        if text.is_empty() || text.eq_ignore_ascii_case(query.trim()) {
             continue;
         }
         if items
