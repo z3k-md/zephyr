@@ -1,3 +1,24 @@
+# [2.5.0](https://github.com/z3k-md/zephyr/compare/v2.4.0...v2.5.0) (2026-10-10)
+
+
+### Bug Fixes
+
+* accept ~ in project folders on Windows and add a folder picker ([e23bde6](https://github.com/z3k-md/zephyr/commit/e23bde646c09127aa4409251074473da68d6adc4))
+* blur behind the bar on Windows with Acrylic and rounded corners ([aeb53b6](https://github.com/z3k-md/zephyr/commit/aeb53b606bd3f827556cab70929b404b34c23f9e))
+
+
+### Features
+
+* fixed-size bar, real app icons, type-ahead and Ctrl+drag ([e3562d1](https://github.com/z3k-md/zephyr/commit/e3562d17ffe6f9a6397d71f8a29efde6cbf9d3dd))
+* glass dropdown menus in Settings ([4379222](https://github.com/z3k-md/zephyr/commit/4379222a89e856d7cf9aa5e8c02ad1436000c3d9))
+* record clipboard history on Windows ([0ed229b](https://github.com/z3k-md/zephyr/commit/0ed229b6c30b2e33d0a3cb3908fe103499db5b1a))
+* run shell commands from the bar ([9826762](https://github.com/z3k-md/zephyr/commit/9826762d19325443c69492246e85ad4fab1e9a4d))
+* sectioned launcher results with icons, a query row and Search with ([5943090](https://github.com/z3k-md/zephyr/commit/59430900d8ac6b81ad2040f4fe0e00d45096d879))
+* settings sidebar, search, toggles and cleaner fields ([2917ff1](https://github.com/z3k-md/zephyr/commit/2917ff18b08245f3faf206645a303724327cb6b1))
+* sign in with Google and sync device keys end to end encrypted ([ef4a96d](https://github.com/z3k-md/zephyr/commit/ef4a96d596f2e9a68da3ca962abafff70e587dc5))
+* sticky modes, Ask AI conversations and Enter routes ([44cd06f](https://github.com/z3k-md/zephyr/commit/44cd06f828876faeaa592c57facfe902c6adbec7))
+* the summon shortcut closes the bar when it is open ([38c60ea](https://github.com/z3k-md/zephyr/commit/38c60ea8e7e5d89ffc997395a33571e488c18189))
+
 # [2.4.0](https://github.com/z3k-md/zephyr/compare/v2.3.0...v2.4.0) (2026-10-06)
 
 
