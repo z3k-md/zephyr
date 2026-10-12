@@ -251,6 +251,24 @@ fn handle(app: &AppHandle, mut request: tiny_http::Request) {
                 .with_header(header),
         );
     };
+    // Bookmarks open through here so the Zephyr browser extension can see them and focus a
+    // tab already on that page. Without the extension this simply redirects.
+    if let Some(query) = request.url().strip_prefix("/zephyr/open?") {
+        let target = url::form_urlencoded::parse(query.as_bytes())
+            .find(|(key, _)| key == "u")
+            .map(|(_, value)| value.into_owned())
+            .filter(|url| url.starts_with("https://") || url.starts_with("http://"));
+        let Some(target) = target else {
+            return reply(request, 400, "{}".into());
+        };
+        let location = tiny_http::Header::from_bytes("Location", target.as_bytes());
+        let response = tiny_http::Response::empty(302);
+        let _ = match location {
+            Ok(location) => request.respond(response.with_header(location)),
+            Err(()) => request.respond(tiny_http::Response::empty(400)),
+        };
+        return;
+    }
     let Some(job_id) = request
         .url()
         .strip_prefix("/claude/permission/")
