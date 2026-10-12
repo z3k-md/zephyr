@@ -1,3 +1,20 @@
+# [2.6.0](https://github.com/z3k-md/zephyr/compare/v2.5.0...v2.6.0) (2026-10-12)
+
+
+### Bug Fixes
+
+* let the Mac build pass Clippy with Windows-only now playing and snap ([290977c](https://github.com/z3k-md/zephyr/commit/290977cadddf21e659611d5f90ea570b7c1fc877))
+
+
+### Features
+
+* browser bookmarks in the bar ([b365455](https://github.com/z3k-md/zephyr/commit/b36545556ff0ab9c884c8660056a0014017d4178))
+* **extension:** switch to a tab that is already open ([4431d33](https://github.com/z3k-md/zephyr/commit/4431d33af26f4042da258184b5151c8b5ff6db4f))
+* read what's playing from Windows' media controls ([0c5b2c3](https://github.com/z3k-md/zephyr/commit/0c5b2c3452e0dc5a77c29745d740e69b8c971865))
+* shut down, restart, sleep, lock and sign out from the bar ([f2f75b3](https://github.com/z3k-md/zephyr/commit/f2f75b3d24a0d8696161b1139d81fab3205cf340))
+* site icons for web destinations ([d499194](https://github.com/z3k-md/zephyr/commit/d4991945030e33d8d3548905825ddc6f8ed5100e))
+* snap grid for Ctrl+drag, themes, now playing and a recent-first empty bar ([c152586](https://github.com/z3k-md/zephyr/commit/c152586fd1370f83c8cbcea571b79be67796096d))
+
 # [2.5.0](https://github.com/z3k-md/zephyr/compare/v2.4.0...v2.5.0) (2026-10-10)
 
 
