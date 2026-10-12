@@ -21,6 +21,10 @@
     saveClipboardSettings,
     saveOpenBehavior,
     saveResumeSeconds,
+    saveTheme,
+    saveShowNowPlaying,
+    bookmarkSources,
+    saveBookmarkSources,
     saveShellProgram,
     saveShellTerminal,
     clearShellHistory,
@@ -56,6 +60,7 @@
     type FileIndexStatus,
     type LocalServer,
     type ShellInfo,
+    type BookmarkSource,
     type ShellProgram,
     type Snapshot,
     type SuggestKind,
@@ -171,6 +176,7 @@
     void loadClip();
     void loadCli();
     void loadShell();
+    void loadBookmarkSources();
     unlistens.push(
       await listen<unknown>('state-changed', (event) => {
         if (isSnapshot(event.payload)) snapshot.value = event.payload;
@@ -197,16 +203,19 @@
 
   // Sidebar sections; one shows at a time.
   const SECTIONS = [
-    { id: 'general', label: 'General', icon: 'gear', hue: 250 },
-    { id: 'ai', label: 'AI', icon: 'sparkle', hue: 275 },
-    { id: 'claude', label: 'Claude', icon: 'terminal', hue: 20 },
-    { id: 'shell', label: 'Shell', icon: 'prompt', hue: 130 },
-    { id: 'sync', label: 'Sync', icon: 'sync', hue: 200 },
-    { id: 'clipboard', label: 'Clipboard', icon: 'clipboard', hue: 160 },
-    { id: 'notes', label: 'Notes', icon: 'note', hue: 45 },
-    { id: 'destinations', label: 'Destinations', icon: 'link', hue: 300 },
-    { id: 'files', label: 'Files', icon: 'folder', hue: 215 },
-    { id: 'history', label: 'History', icon: 'clock', hue: 340 },
+    { id: 'general', label: 'General', icon: 'gear' },
+    { id: 'appearance', label: 'Appearance', icon: 'grid' },
+    { id: 'ai', label: 'AI', icon: 'sparkle' },
+    { id: 'claude', label: 'Claude', icon: 'terminal' },
+    { id: 'shell', label: 'Shell', icon: 'prompt' },
+    { id: 'sync', label: 'Sync', icon: 'sync' },
+    { id: 'clipboard', label: 'Clipboard', icon: 'clipboard' },
+    { id: 'notes', label: 'Notes', icon: 'note' },
+    { id: 'destinations', label: 'Destinations', icon: 'link' },
+    { id: 'bookmarks', label: 'Bookmarks', icon: 'bookmark' },
+    { id: 'nowplaying', label: 'Now playing', icon: 'music' },
+    { id: 'files', label: 'Files', icon: 'folder' },
+    { id: 'history', label: 'History', icon: 'clock' },
   ];
   const active = ref('general');
   const search = ref('');
@@ -710,6 +719,64 @@
     return targets;
   });
 
+  // Matches the palettes in styles.css; the preview shows each one's tint and accent.
+  const THEMES = [
+    { id: 'violet', name: 'Violet', tint: '#16111f', accent: '#a78bfa' },
+    { id: 'graphite', name: 'Graphite', tint: '#18181b', accent: '#d4d4d8' },
+    { id: 'ocean', name: 'Ocean', tint: '#0c1424', accent: '#60a5fa' },
+    { id: 'forest', name: 'Forest', tint: '#0a1b19', accent: '#2dd4bf' },
+    { id: 'ember', name: 'Ember', tint: '#20130c', accent: '#fb923c' },
+  ];
+
+  // Browser profiles Zephyr reads bookmarks from; each can be left out.
+  const bookmarkProfiles = ref<BookmarkSource[] | null>(null);
+
+  async function loadBookmarkSources() {
+    try {
+      bookmarkProfiles.value = await bookmarkSources();
+    } catch {
+      bookmarkProfiles.value = [];
+    }
+  }
+
+  async function toggleBookmarkSource(id: string) {
+    if (!snapshot.value) return;
+    const disabled = snapshot.value.bookmarksDisabled ?? [];
+    const next = disabled.includes(id) ? disabled.filter((item) => item !== id) : [...disabled, id];
+    busy.value = true;
+    try {
+      apply(await saveBookmarkSources(next));
+      await loadBookmarkSources();
+    } catch (error) {
+      formError.value = errorMessage(error);
+    } finally {
+      busy.value = false;
+    }
+  }
+
+  async function chooseTheme(id: string) {
+    busy.value = true;
+    try {
+      apply(await saveTheme(id));
+    } catch (error) {
+      formError.value = errorMessage(error);
+    } finally {
+      busy.value = false;
+    }
+  }
+
+  async function toggleNowPlaying() {
+    if (!snapshot.value) return;
+    busy.value = true;
+    try {
+      apply(await saveShowNowPlaying(!snapshot.value.showNowPlaying));
+    } catch (error) {
+      formError.value = errorMessage(error);
+    } finally {
+      busy.value = false;
+    }
+  }
+
   async function changeResume(event: Event) {
     busy.value = true;
     try {
@@ -1031,12 +1098,12 @@
           :class="{ active: !search && active === section.id }"
           @click="open(section.id)"
         >
-          <span class="nav-icon" :style="{ '--hue': section.hue }" aria-hidden="true">
+          <span class="nav-icon" aria-hidden="true">
             <svg
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
-              stroke-width="1.9"
+              stroke-width="1.7"
               stroke-linecap="round"
               stroke-linejoin="round"
               v-html="GLYPHS[section.icon]"
@@ -1151,6 +1218,76 @@
           <button type="button" @click="updates">Check for updates</button>
           <span v-if="updateMessage" class="hint-text">{{ updateMessage }}</span>
         </div>
+      </section>
+
+      <section v-if="snapshot" v-show="!search && active === 'appearance'" id="section-appearance">
+        <h2>Appearance</h2>
+        <p class="lede">
+          The color every Zephyr window is tinted with, over the blur of what's behind it.
+        </p>
+        <div class="themes" role="radiogroup" aria-label="Theme">
+          <button
+            v-for="theme in THEMES"
+            :key="theme.id"
+            type="button"
+            class="theme"
+            role="radio"
+            :aria-checked="snapshot.theme === theme.id"
+            :class="{ chosen: snapshot.theme === theme.id }"
+            :disabled="busy"
+            @click="chooseTheme(theme.id)"
+          >
+            <span class="theme-swatch" :style="{ background: theme.tint }" aria-hidden="true">
+              <span class="theme-row" />
+              <span class="theme-row selected" :style="{ background: `${theme.accent}26` }" />
+              <span class="theme-row" />
+              <span class="theme-dot" :style="{ background: theme.accent }" />
+            </span>
+            {{ theme.name }}
+          </button>
+        </div>
+      </section>
+
+      <section v-if="snapshot" v-show="!search && active === 'bookmarks'" id="section-bookmarks">
+        <h2>Bookmarks</h2>
+        <p class="lede">
+          Bookmarks from your browsers show in the bar, read-only. Type a bookmark's exact name
+          (like "music") and Enter opens it; other matches show below without taking Enter. !bm
+          searches only bookmarks.
+        </p>
+        <p v-if="!bookmarkProfiles" class="hint-text">Looking for browsers…</p>
+        <p v-else-if="!bookmarkProfiles.length" class="hint-text">
+          No Chrome, Edge, Brave, Vivaldi or Arc bookmarks were found.
+        </p>
+        <label v-for="profile in bookmarkProfiles ?? []" :key="profile.id" class="check">
+          <input
+            type="checkbox"
+            :checked="profile.enabled"
+            :disabled="busy"
+            @change="toggleBookmarkSource(profile.id)"
+          />
+          {{ profile.label }}
+          <span class="hint-text">{{ profile.count }} bookmarks</span>
+        </label>
+      </section>
+
+      <section v-if="snapshot" v-show="!search && active === 'nowplaying'" id="section-nowplaying">
+        <h2>Now playing</h2>
+        <p class="lede">
+          While music or a video plays, in any app or browser tab, the bar's footer shows it with a
+          play/pause button, and stays a couple of minutes after you pause. Click the title to
+          switch to what's playing. In the bar, Ctrl+Space plays or pauses, and with nothing typed,
+          Ctrl+Shift+→ and Ctrl+Shift+← skip ahead and back.
+        </p>
+        <label class="check">
+          <input
+            type="checkbox"
+            :checked="snapshot.showNowPlaying"
+            :disabled="busy"
+            @change="toggleNowPlaying"
+          />
+          Show now playing in the bar
+        </label>
       </section>
 
       <section v-if="snapshot" v-show="!search && active === 'ai'" id="section-ai">

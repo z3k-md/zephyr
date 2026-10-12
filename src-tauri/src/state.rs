@@ -64,6 +64,23 @@ pub struct Persisted {
     /// Where the user Ctrl+dragged the bar, in physical pixels; none opens it centered on the
     /// screen with the cursor.
     pub bar_position: Option<BarPosition>,
+    /// The color palette every window uses; one of [`THEMES`].
+    #[serde(default = "default_theme")]
+    pub theme: String,
+    /// A shutdown, restart, sleep, lock or sign-out set for later from the bar.
+    pub power: Option<crate::power::Schedule>,
+    /// Browser profiles whose bookmarks stay out of the bar, by source id (`chrome/Default`).
+    pub bookmarks_disabled: Vec<String>,
+    /// Whether the bar's footer shows the song or video playing, with its controls.
+    #[serde(default = "yes")]
+    pub show_now_playing: bool,
+}
+
+/// The palettes Settings > Appearance offers; the first is the default.
+pub const THEMES: &[&str] = &["violet", "graphite", "ocean", "forest", "ember"];
+
+fn default_theme() -> String {
+    THEMES[0].into()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -144,6 +161,10 @@ impl Persisted {
             route_alt: String::new(),
             shell: crate::shell::ShellSettings::default(),
             bar_position: None,
+            theme: default_theme(),
+            power: None,
+            bookmarks_disabled: Vec::new(),
+            show_now_playing: true,
         }
     }
 

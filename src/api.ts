@@ -16,6 +16,11 @@ import type {
   LocalServer,
   Note,
   NoteSummary,
+  BookmarkSource,
+  MediaControl,
+  NowPlaying,
+  PowerAction,
+  PowerPreview,
   ShellEvent,
   ShellInfo,
   ShellProgram,
@@ -57,6 +62,11 @@ export function captureRecording(): Promise<boolean> {
 }
 
 /** Moves the bar with the mouse until the button is released (Ctrl+drag). */
+/** Makes the snap grid's window before the first Ctrl+drag. */
+export function prepareGrid(): Promise<void> {
+  return invoke('prepare_grid');
+}
+
 export function startBarDrag(): Promise<void> {
   return invoke('start_bar_drag');
 }
@@ -339,6 +349,10 @@ export function saveResumeSeconds(seconds: number): Promise<Snapshot> {
   return invoke<Snapshot>('save_resume_seconds', { seconds });
 }
 
+export function saveTheme(theme: string): Promise<Snapshot> {
+  return invoke<Snapshot>('save_theme', { theme });
+}
+
 /** Runs a shell command in `dir` (home when null); the run's id arrives in its `started` event. */
 export function shellRun(
   command: string,
@@ -468,4 +482,59 @@ export function formatShortcut(shortcut: string): string {
       (part) => SHORTCUT_LABELS[part.toLowerCase()] ?? part.charAt(0).toUpperCase() + part.slice(1)
     )
     .join('+');
+}
+
+/** A web destination's site icon as a data URL, or null to keep its letter tile. */
+export function siteIcon(destinationId: string): Promise<string | null> {
+  return invoke<string | null>('site_icon', { destinationId });
+}
+
+/** What typed text like "shutdown in 30m" would do, or null. */
+export function powerPreview(query: string): Promise<PowerPreview | null> {
+  return invoke<PowerPreview | null>('power_preview', { query });
+}
+
+/** Runs a power action now, or schedules it for `at` (unix seconds). */
+export function powerRun(action: PowerAction, at: number | null): Promise<void> {
+  return invoke('power_run', { action, at });
+}
+
+export function powerCancel(): Promise<void> {
+  return invoke('power_cancel');
+}
+
+/** Opens a web address in the default browser and closes the bar. */
+export function openUrl(url: string): Promise<void> {
+  return invoke('open_url', { url });
+}
+
+export function bookmarkSources(): Promise<BookmarkSource[]> {
+  return invoke<BookmarkSource[]>('bookmark_sources');
+}
+
+export function saveBookmarkSources(disabled: string[]): Promise<Snapshot> {
+  return invoke<Snapshot>('save_bookmark_sources', { disabled });
+}
+
+/** A site's icon by address, as a data URL, or null. */
+export function siteIconUrl(url: string): Promise<string | null> {
+  return invoke<string | null>('site_icon_url', { url });
+}
+
+/** What's playing now; later changes arrive as `nowplaying` events. */
+export function nowPlaying(): Promise<NowPlaying | null> {
+  return invoke<NowPlaying | null>('now_playing');
+}
+
+export function nowPlayingControl(control: MediaControl): Promise<void> {
+  return invoke('now_playing_control', { control });
+}
+
+/** Switches to the app or browser tab playing; true when it could. */
+export function nowPlayingFocus(): Promise<boolean> {
+  return invoke<boolean>('now_playing_focus');
+}
+
+export function saveShowNowPlaying(show: boolean): Promise<Snapshot> {
+  return invoke<Snapshot>('save_show_now_playing', { show });
 }

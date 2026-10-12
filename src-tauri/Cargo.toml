@@ -48,6 +48,7 @@ tauri-plugin-dialog = "2"
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 hkdf = "0.12"
 data-encoding = "2"
+tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
@@ -70,6 +71,9 @@ tauri-nspanel = "2.1"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
+    "Foundation",
+    "Media_Control",
+    "Storage_Streams",
     "Win32_Foundation",
     "Win32_Graphics_Dwm",
     "Win32_Graphics_Gdi",

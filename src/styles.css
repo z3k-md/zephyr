@@ -31,6 +31,37 @@
   -webkit-font-smoothing: antialiased;
 }
 
+/* Settings > Appearance palettes. Each swaps the glass tint, the selection fill and the
+   accent; text, borders and fills stay neutral so every palette reads the same way. The
+   default (violet) is the :root block above. */
+:root[data-theme='graphite'] {
+  --glass: linear-gradient(180deg, rgba(24, 24, 27, 0.86) 0%, rgba(12, 12, 14, 0.92) 100%);
+  --glass-strong: linear-gradient(180deg, rgba(22, 22, 25, 0.95) 0%, rgba(10, 10, 12, 0.97) 100%);
+  --select: rgba(255, 255, 255, 0.1);
+  --focus: #d4d4d8;
+}
+
+:root[data-theme='ocean'] {
+  --glass: linear-gradient(180deg, rgba(12, 20, 36, 0.86) 0%, rgba(6, 10, 19, 0.92) 100%);
+  --glass-strong: linear-gradient(180deg, rgba(11, 18, 32, 0.95) 0%, rgba(5, 9, 17, 0.97) 100%);
+  --select: rgba(147, 197, 253, 0.14);
+  --focus: #60a5fa;
+}
+
+:root[data-theme='forest'] {
+  --glass: linear-gradient(180deg, rgba(10, 27, 25, 0.86) 0%, rgba(5, 14, 13, 0.92) 100%);
+  --glass-strong: linear-gradient(180deg, rgba(9, 24, 22, 0.95) 0%, rgba(4, 12, 11, 0.97) 100%);
+  --select: rgba(94, 234, 212, 0.13);
+  --focus: #2dd4bf;
+}
+
+:root[data-theme='ember'] {
+  --glass: linear-gradient(180deg, rgba(32, 19, 12, 0.86) 0%, rgba(17, 10, 6, 0.92) 100%);
+  --glass-strong: linear-gradient(180deg, rgba(28, 17, 11, 0.95) 0%, rgba(15, 9, 5, 0.97) 100%);
+  --select: rgba(253, 186, 116, 0.14);
+  --focus: #fb923c;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -463,6 +494,8 @@ section > button {
 .item-icon .app-image {
   width: 100%;
   height: 100%;
+  border-radius: 4px;
+  object-fit: contain;
 }
 
 .item-icon .glyph {
@@ -510,7 +543,7 @@ section > button {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 8px 16px 8px 48px;
+  padding: 11px 16px 11px 48px;
   font-size: 12px;
   background: rgba(0, 0, 0, 0.18);
   border-top: 1px solid var(--stroke);
@@ -859,7 +892,7 @@ section > button {
   margin-bottom: 6px;
   padding: 3px 10px;
   border-radius: 999px;
-  background: rgba(167, 139, 250, 0.18);
+  background: color-mix(in srgb, var(--focus) 18%, transparent);
   color: var(--focus);
   font-size: 12px;
 }
@@ -910,6 +943,122 @@ textarea.query {
 
 .footer .dim {
   opacity: 0.55;
+}
+
+/* Ctrl held on the bar: a move cursor everywhere and a hint in the footer. */
+.bar.moving,
+.bar.moving * {
+  cursor: move !important;
+}
+
+.move-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--fg);
+}
+
+.move-hint svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: var(--focus);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* What's playing, at the footer's right; the key hints give way when space is short. */
+.bar > .footer > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.now-playing {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  max-width: 55%;
+  /* Two lines and a bigger cover fit in the footer's padding, so it keeps its height. */
+  margin: -5px 0;
+}
+
+.now-playing button {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 4px;
+  color: inherit;
+  font: inherit;
+  background: none;
+  border: 0;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.now-playing button:hover {
+  color: var(--fg);
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.now-playing-title {
+  gap: 7px;
+  min-width: 0;
+}
+
+.now-playing-cover {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  object-fit: cover;
+  border-radius: 4px;
+}
+
+.now-playing-cover.glyph {
+  width: 18px;
+  height: 18px;
+  margin: 4px;
+}
+
+.now-playing-cover.glyph,
+.now-playing-control svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.now-playing-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  text-align: left;
+}
+
+.now-playing-song,
+.now-playing-artist {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.now-playing-song {
+  color: var(--fg);
+  line-height: 15px;
+}
+
+.now-playing-artist {
+  font-size: 11px;
+  line-height: 14px;
+}
+
+.now-playing-control svg {
+  width: 14px;
+  height: 14px;
 }
 
 /* ---- Ask AI ---- */
@@ -1562,11 +1711,20 @@ textarea.query {
   border-color: var(--focus);
 }
 
+/* Every row spans the sidebar at one height, so hover and selection fills line up. */
+.settings-nav nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
 .nav-item {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 5px 8px;
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 10px;
   border: none;
   border-radius: 8px;
   background: transparent;
@@ -1586,27 +1744,24 @@ textarea.query {
   color: var(--fg);
 }
 
-/* A colored tile per section, like the launcher's row icons. */
+/* Plain grey line icons, the same set and weight as the launcher's rows; no colored tiles. */
 .nav-icon {
   display: grid;
   flex: none;
   place-items: center;
-  width: 26px;
-  height: 26px;
-  border-radius: 7px;
-  background: hsl(var(--hue) 55% 52% / 0.28);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
-  color: hsl(var(--hue) 90% 82%);
+  width: 18px;
+  height: 18px;
+  color: var(--muted);
 }
 
 .nav-icon svg {
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
 }
 
+.nav-item:hover .nav-icon,
 .nav-item.active .nav-icon {
-  background: hsl(var(--hue) 60% 55% / 0.45);
-  color: #fff;
+  color: var(--fg);
 }
 
 .settings-pane {
@@ -1715,8 +1870,8 @@ textarea.query {
 
 @keyframes reveal {
   from {
-    background: rgba(167, 139, 250, 0.22);
-    box-shadow: 0 0 0 6px rgba(167, 139, 250, 0.22);
+    background: color-mix(in srgb, var(--focus) 22%, transparent);
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--focus) 22%, transparent);
   }
   to {
     background: transparent;
@@ -2052,4 +2207,100 @@ textarea.query {
 
 .settings .notice {
   margin: 12px 0 0;
+}
+
+/* Settings > Appearance: a small preview of each palette, the chosen one outlined. */
+.themes {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(116px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.theme {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--stroke);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.theme:hover {
+  border-color: var(--stroke-strong);
+  color: var(--fg);
+}
+
+.theme.chosen {
+  border-color: var(--focus);
+  color: var(--fg);
+}
+
+.theme-swatch {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  height: 64px;
+  padding: 8px;
+  border: 1px solid var(--stroke);
+  border-radius: 6px;
+}
+
+.theme-row {
+  height: 8px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.theme-dot {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+/* ---- Snap grid (shown over the screen while the bar is Ctrl+dragged) ---- */
+
+html.grid-page,
+html.grid-page body,
+html.grid-page #app {
+  width: 100%;
+  height: 100%;
+  background: transparent;
+}
+
+.grid {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+}
+
+.grid line {
+  stroke: color-mix(in srgb, var(--focus) 35%, transparent);
+  stroke-width: 1;
+  stroke-dasharray: 6 6;
+}
+
+.grid line.top {
+  stroke-dasharray: 2 6;
+}
+
+.grid line.lit {
+  stroke: var(--focus);
+  stroke-width: 2;
+  stroke-dasharray: none;
+}
+
+.grid .landing {
+  fill: color-mix(in srgb, var(--focus) 10%, transparent);
+  stroke: var(--focus);
+  stroke-width: 2;
 }

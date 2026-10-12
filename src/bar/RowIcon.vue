@@ -1,6 +1,6 @@
 <script setup lang="ts">
   import { computed } from 'vue';
-  import { iconFor } from './appIcons';
+  import { iconFor, siteIconFor, siteIconForUrl } from './appIcons';
   import { GLYPHS } from './glyphs';
 
   const props = withDefaults(defineProps<{ icon?: string; label: string; size?: 20 | 16 }>(), {
@@ -16,9 +16,15 @@
   });
 
   // An installed app's own icon; the monogram stands in until it loads or if it has none.
-  const image = computed(() =>
-    props.icon.startsWith('app:') ? iconFor(props.icon.slice(4), props.size) : null
-  );
+  // A web destination's site icon (Google's G) takes over from its letter tile once fetched.
+  const image = computed(() => {
+    if (props.icon.startsWith('app:')) return iconFor(props.icon.slice(4), props.size);
+    if (props.icon.startsWith('site:')) return siteIconForUrl(props.icon.slice(5));
+    if (props.icon.startsWith('dest:') && props.icon !== 'dest:ai') {
+      return siteIconFor(props.icon.slice(5));
+    }
+    return null;
+  });
 
   const letter = computed(() => (props.label.match(/[\p{L}\p{N}]/u)?.[0] ?? '·').toUpperCase());
 

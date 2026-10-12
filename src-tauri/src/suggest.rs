@@ -6,6 +6,7 @@ use serde_json::Value;
 
 use crate::answer;
 use crate::apps::{self, App, Catalog};
+use crate::bookmarks::{self, Bookmark};
 use crate::destination::{self, Destination};
 use crate::files::{self, Hit};
 use crate::history::{self, HistoryEntry};
@@ -73,13 +74,20 @@ pub async fn gather(
     let settings_scoped = parsed.bang.as_deref().is_some_and(settings::is_scope);
     let files_scoped = parsed.bang.as_deref().is_some_and(files::is_scope);
     let notes_scoped = parsed.bang.as_deref().is_some_and(notes::is_scope);
+    let bookmarks_scoped = parsed.bang.as_deref().is_some_and(bookmarks::is_scope);
     let typing = parsed.bang.as_deref() == Some("type");
-    if parsed.only_bang && !scoped && !settings_scoped && !files_scoped && !notes_scoped && !typing
+    if parsed.only_bang
+        && !scoped
+        && !settings_scoped
+        && !files_scoped
+        && !notes_scoped
+        && !bookmarks_scoped
+        && !typing
     {
         return palette(destinations, parsed.bang.as_deref().unwrap_or(""));
     }
     if input.trim().is_empty() {
-        return recent(history, destinations, &catalog, now);
+        return recent(history, destinations, &catalog);
     }
     if scoped {
         let items: Vec<Suggestion> = if parsed.query.is_empty() {
@@ -113,6 +121,27 @@ pub async fn gather(
         .collect();
         let notice = (items.is_empty() && !parsed.query.is_empty())
             .then(|| format!("No setting matches {}", parsed.query));
+        return SuggestResponse {
+            mode: "search".into(),
+            preselect: (!items.is_empty() && !parsed.query.is_empty()).then_some(0),
+            items,
+            notice,
+            text: parsed.query.clone(),
+            ..Default::default()
+        };
+    }
+    if bookmarks_scoped {
+        let items: Vec<Suggestion> = bookmarks::search(&parsed.query, 8)
+            .iter()
+            .map(bookmark_item)
+            .collect();
+        let notice = if items.is_empty() && !parsed.query.is_empty() {
+            Some(format!("No bookmark matches {}", parsed.query))
+        } else if items.is_empty() {
+            Some("No browser bookmarks found".into())
+        } else {
+            None
+        };
         return SuggestResponse {
             mode: "search".into(),
             preselect: (!items.is_empty() && !parsed.query.is_empty()).then_some(0),
@@ -192,6 +221,26 @@ pub async fn gather(
         Vec::new()
     };
 
+    // A bookmark titled exactly what was typed ("music") opens on Enter, like an app name;
+    // other matches show below but never take Enter, so searching stays the default.
+    let exact_bookmark = (offer_apps && preferred.is_none())
+        .then(|| bookmarks::exact(&parsed.query))
+        .flatten();
+    let other_bookmarks: Vec<Suggestion> = if offer_apps && parsed.query.trim().len() >= 2 {
+        bookmarks::search(&parsed.query, 3)
+            .iter()
+            .filter(|found| {
+                exact_bookmark
+                    .as_ref()
+                    .is_none_or(|exact| exact.url != found.url)
+            })
+            .take(2)
+            .map(bookmark_item)
+            .collect()
+    } else {
+        Vec::new()
+    };
+
     // Files and settings never take Enter unscoped: at most two rows between them, below
     // everything else local. Files only come from ones opened before, so this never waits on
     // the index.
@@ -219,13 +268,16 @@ pub async fn gather(
 
     // A calculation or time question answers in the top row, unless an app already claims
     // Enter for this text.
-    let answer = (offer_apps && preferred.is_none())
+    let answer = (offer_apps && preferred.is_none() && exact_bookmark.is_none())
         .then(|| answer::inline(&parsed.query, chrono::Utc::now()))
         .flatten();
 
     let mut items = Vec::new();
     if let Some(app) = preferred {
         items.push(app_item(app));
+    }
+    if let Some(bookmark) = &exact_bookmark {
+        items.push(bookmark_item(bookmark));
     }
     if let Some(answer) = &answer {
         items.push(Suggestion {
@@ -252,6 +304,7 @@ pub async fn gather(
         items.extend(history_items(history, &parsed.query, destinations, now, 4));
         items.extend(other_apps);
     }
+    items.extend(other_bookmarks);
     items.truncate(8 - incidental.len());
     items.extend(incidental);
 
@@ -281,7 +334,8 @@ pub async fn gather(
         mode: "search".into(),
         items,
         notice: None,
-        preselect: (preferred.is_some() || answer.is_some()).then_some(0),
+        preselect: (preferred.is_some() || answer.is_some() || exact_bookmark.is_some())
+            .then_some(0),
         target,
         text: parsed.query.clone(),
         search_with: searchable(destinations),
@@ -374,6 +428,19 @@ fn setting_item(setting: &Setting) -> Suggestion {
     }
 }
 
+fn bookmark_item(bookmark: &Bookmark) -> Suggestion {
+    Suggestion {
+        label: bookmark.title.clone(),
+        query: bookmark.url.clone(),
+        kind: "bookmark".into(),
+        hint: bookmarks::host(&bookmark.url),
+        subtitle: bookmark.folder.clone(),
+        section: "bookmarks".into(),
+        icon: format!("site:{}", bookmark.url),
+        ..Default::default()
+    }
+}
+
 fn file_item(hit: &Hit) -> Suggestion {
     Suggestion {
         label: hit.name.clone(),
@@ -430,22 +497,38 @@ fn palette(destinations: &[Destination], prefix: &str) -> SuggestResponse {
     }
 }
 
-/// The empty bar: apps you've opened from Zephyr, most used first, then recent searches.
+/// The empty bar: the last three apps opened from Zephyr and the last two searches, newest
+/// first, with whichever kind you used last on top. The bar adds its commands below, and
+/// that is all that fits without scrolling.
 fn recent(
     history: &[HistoryEntry],
     destinations: &[Destination],
     catalog: &Catalog<'_>,
-    now: i64,
 ) -> SuggestResponse {
-    let launched = |app: &&apps::App| catalog.launches.iter().any(|entry| entry.app_id == app.id);
-    let mut items: Vec<Suggestion> = catalog
-        .recent(12)
-        .into_iter()
-        .filter(launched)
-        .take(4)
+    let mut launches: Vec<&apps::LaunchEntry> = catalog.launches.iter().collect();
+    launches.sort_by_key(|entry| std::cmp::Reverse(entry.last_used));
+    let apps: Vec<Suggestion> = launches
+        .iter()
+        .filter_map(|entry| catalog.apps.iter().find(|app| app.id == entry.app_id))
+        .take(3)
         .map(app_item)
         .collect();
-    items.extend(history_items(history, "", destinations, now, 5));
+
+    let mut searched: Vec<&HistoryEntry> = history.iter().collect();
+    searched.sort_by_key(|entry| std::cmp::Reverse(entry.last_used));
+    let searches: Vec<Suggestion> = searched
+        .into_iter()
+        .take(2)
+        .map(|entry| history_item(entry.clone(), destinations))
+        .collect();
+
+    let last_launch = launches.first().map(|entry| entry.last_used);
+    let last_search = history.iter().map(|entry| entry.last_used).max();
+    let items = if apps_lead(last_launch, last_search) {
+        [apps, searches].concat()
+    } else {
+        [searches, apps].concat()
+    };
     SuggestResponse {
         mode: "recent".into(),
         items,
@@ -462,21 +545,34 @@ fn history_items(
 ) -> Vec<Suggestion> {
     history::matching(history, query, now, limit)
         .into_iter()
-        .map(|entry| Suggestion {
-            label: entry.query.clone(),
-            query: entry.query,
-            kind: "history".into(),
-            hint: destination_name(destinations, &entry.destination_id),
-            section: "recent".into(),
-            icon: if entry.destination_id == "url" {
-                "glyph:link".into()
-            } else {
-                format!("dest:{}", entry.destination_id)
-            },
-            destination_id: entry.destination_id,
-            ..Default::default()
-        })
+        .map(|entry| history_item(entry, destinations))
         .collect()
+}
+
+fn history_item(entry: HistoryEntry, destinations: &[Destination]) -> Suggestion {
+    Suggestion {
+        label: entry.query.clone(),
+        query: entry.query,
+        kind: "history".into(),
+        hint: destination_name(destinations, &entry.destination_id),
+        section: "recent".into(),
+        icon: if entry.destination_id == "url" {
+            "glyph:link".into()
+        } else {
+            format!("dest:{}", entry.destination_id)
+        },
+        destination_id: entry.destination_id,
+        ..Default::default()
+    }
+}
+
+/// Whether the empty bar puts apps above searches: when an app was opened more recently than
+/// anything was searched.
+fn apps_lead(last_launch: Option<i64>, last_search: Option<i64>) -> bool {
+    match (last_launch, last_search) {
+        (Some(launch), Some(search)) => launch > search,
+        (launch, _) => launch.is_some(),
+    }
 }
 
 fn merge_remote(items: &mut Vec<Suggestion>, remote: Vec<String>, destination: &Destination) {
@@ -722,6 +818,63 @@ mod tests {
             uses: 1,
             last_used: 1_000_000,
         }
+    }
+
+    #[test]
+    fn the_empty_bar_leads_with_whatever_was_used_last() {
+        let apps: Vec<App> = ["Alpha", "Beta", "Gamma", "Delta"]
+            .iter()
+            .map(|name| App {
+                id: name.to_lowercase(),
+                name: (*name).into(),
+            })
+            .collect();
+        let launched = |id: &str, at: i64| apps::LaunchEntry {
+            app_id: id.into(),
+            uses: 9,
+            last_used: at,
+        };
+        // Delta is the most used but the oldest; the newest three show, newest first.
+        let launches = [
+            launched("delta", 10),
+            launched("alpha", 20),
+            launched("beta", 40),
+            launched("gamma", 30),
+        ];
+        let at = |query: &str, when: i64| HistoryEntry {
+            last_used: when,
+            ..searched(query, "google")
+        };
+        static NO_FILES: std::sync::LazyLock<crate::files::FileIndex> =
+            std::sync::LazyLock::new(crate::files::FileIndex::default);
+        let catalog = |launches| Catalog {
+            apps: &apps,
+            settings: SETTINGS,
+            files: &NO_FILES,
+            launches,
+            file_opens: &[],
+            overrides: &[],
+            now: 100,
+        };
+        let labels = |response: SuggestResponse| {
+            response
+                .items
+                .into_iter()
+                .map(|item| item.label)
+                .collect::<Vec<_>>()
+        };
+
+        let history = [at("old", 5), at("newest", 50), at("middle", 35)];
+        assert_eq!(
+            labels(recent(&history, &[], &catalog(&launches))),
+            ["newest", "middle", "Beta", "Gamma", "Alpha"]
+        );
+        let history = [at("before", 15)];
+        assert_eq!(
+            labels(recent(&history, &[], &catalog(&launches))),
+            ["Beta", "Gamma", "Alpha", "before"]
+        );
+        assert_eq!(labels(recent(&history, &[], &catalog(&[]))), ["before"]);
     }
 
     #[test]
