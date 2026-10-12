@@ -35,6 +35,60 @@ pub fn app_icon(app_id: &str, size: u32) -> Option<String> {
     Some(format!("data:image/png;base64,{}", STANDARD.encode(png)))
 }
 
+/// The site icon for a web destination (`https://www.google.com/search?q={query}` gives
+/// Google's) as a `data:` URL, fetched once per host and kept on disk. Asks Google's favicon
+/// service for a crisp 64 px image, then the site's own /favicon.ico.
+pub async fn site_icon(url_template: &str) -> Option<String> {
+    let host = url::Url::parse(&url_template.replace("{query}", ""))
+        .ok()?
+        .host_str()?
+        .to_string();
+    let key = hex(&Sha256::digest(format!("site\n{host}").as_bytes()));
+    let cached = DIR.get().map(|dir| dir.join(format!("{key}.site")));
+    if let Some(saved) = cached.as_ref().and_then(|path| std::fs::read(path).ok()) {
+        return Some(String::from_utf8_lossy(&saved).into_owned());
+    }
+    let client = reqwest::Client::builder()
+        .user_agent("Zephyr")
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .ok()?;
+    let sources = [
+        format!("https://www.google.com/s2/favicons?domain={host}&sz=64"),
+        format!("https://{host}/favicon.ico"),
+    ];
+    for source in sources {
+        let Ok(response) = client.get(&source).send().await else {
+            continue;
+        };
+        if !response.status().is_success() {
+            continue;
+        }
+        let kind = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("image/png")
+            .split(';')
+            .next()
+            .unwrap_or("image/png")
+            .trim()
+            .to_string();
+        let Ok(bytes) = response.bytes().await else {
+            continue;
+        };
+        if bytes.is_empty() || !kind.starts_with("image/") {
+            continue;
+        }
+        let url = format!("data:{kind};base64,{}", STANDARD.encode(&bytes));
+        if let Some(path) = &cached {
+            let _ = std::fs::write(path, &url);
+        }
+        return Some(url);
+    }
+    None
+}
+
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
