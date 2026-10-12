@@ -2,6 +2,9 @@
 //! its artwork, and play/pause, next and previous. Each platform lists its media sessions
 //! through [`Sessions`]; the choosing, the artwork cache and the events to the bar are shared.
 
+// Only Windows has a backend so far; elsewhere the shared watcher is built but unused.
+#![cfg_attr(not(windows), allow(dead_code))]
+
 #[cfg(windows)]
 mod win;
 
