@@ -25,34 +25,60 @@ pub fn start_bar_drag(app: &AppHandle) -> Result<(), String> {
         .get_webview_window("main")
         .ok_or("Main window is missing")?;
     DRAGGING.store(true, Ordering::SeqCst);
+    // The move loop hands focus around, and the bar hides when it loses focus, so it closed
+    // the moment it was dropped. Losing focus doesn't count until the move is over.
+    SUPPRESS_BLUR.store(true, Ordering::SeqCst);
     log::info!("moving the bar");
     #[cfg(windows)]
     {
         // Tauri's start_dragging didn't move this window, so Windows' own move loop runs
-        // instead, on the UI thread that owns the mouse capture.
+        // instead, on the UI thread that owns the mouse capture. It returns on drop.
+        let handle = app.clone();
         let result = app.run_on_main_thread(move || {
-            if let Err(err) = drag_on_windows(&window) {
+            if let Err(err) = drag_on_windows(&handle, &window) {
                 log::error!("couldn't move the bar: {err}");
             }
+            log::info!("bar dropped");
+            force_foreground(&window);
+            let _ = window.set_focus();
+            settle_after_move();
         });
         result.map_err(|err| err.to_string())
     }
     #[cfg(not(windows))]
-    window.start_dragging().map_err(|err| {
-        log::error!("couldn't move the bar: {err}");
-        err.to_string()
-    })
+    {
+        let result = window.start_dragging().map_err(|err| {
+            log::error!("couldn't move the bar: {err}");
+            err.to_string()
+        });
+        settle_after_move();
+        result
+    }
+}
+
+/// Lets focus loss hide the bar again a moment after a move, once the focus has settled.
+fn settle_after_move() {
+    let generation = SHOW_GENERATION.load(Ordering::SeqCst);
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(400));
+        if SHOW_GENERATION.load(Ordering::SeqCst) == generation {
+            SUPPRESS_BLUR.store(false, Ordering::SeqCst);
+        }
+    });
 }
 
 /// Hands the mouse to Windows' window-move loop, which follows it until the button is up.
+/// The bar moves freely; a grid shows over the screen meanwhile, with an outline where the
+/// bar would snap, and on drop it lands there.
 #[cfg(windows)]
-fn drag_on_windows(window: &tauri::WebviewWindow) -> Result<(), String> {
+fn drag_on_windows(app: &AppHandle, window: &tauri::WebviewWindow) -> Result<(), String> {
     use windows::Win32::Foundation::{LPARAM, WPARAM};
     use windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
     use windows::Win32::UI::WindowsAndMessaging::{SendMessageW, WM_SYSCOMMAND};
     // SC_MOVE plus HTCAPTION: move by dragging, as if the title bar were held.
     const SC_DRAGMOVE: usize = 0xF012;
     let hwnd = window.hwnd().map_err(|err| err.to_string())?;
+    grid::begin(app, hwnd);
     unsafe {
         let _ = ReleaseCapture();
         SendMessageW(
@@ -62,6 +88,182 @@ fn drag_on_windows(window: &tauri::WebviewWindow) -> Result<(), String> {
             Some(LPARAM(0)),
         );
     }
+    if let Some((x, y)) = grid::end() {
+        let _ = window.set_position(PhysicalPosition::new(x, y));
+    }
+    Ok(())
+}
+
+/// The snap grid shown over the screen while the bar is dragged: its own transparent,
+/// click-through window under the bar, made ahead of time (see [`prepare_grid`]) so the
+/// drag never waits for it.
+#[cfg(windows)]
+mod grid {
+    use std::sync::Mutex;
+
+    use tauri::{AppHandle, Emitter, Manager};
+    use windows::Win32::Foundation::{HWND, RECT};
+    use windows::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromRect,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindowRect, SW_HIDE, SWP_NOACTIVATE, SWP_SHOWWINDOW, SetWindowPos, ShowWindow,
+    };
+
+    #[derive(Default)]
+    struct Drag {
+        app: Option<AppHandle>,
+        bar: isize,
+        grid: isize,
+        /// The work area the grid covers: x, y, width, height.
+        area: (i32, i32, i32, i32),
+        /// Where the bar lands on drop, when a guide is within reach.
+        snap: Option<(i32, i32)>,
+    }
+
+    static DRAG: Mutex<Option<Drag>> = Mutex::new(None);
+
+    /// The work area of the screen `rect` is mostly on.
+    pub fn work_area(rect: &RECT) -> Option<(i32, i32, i32, i32)> {
+        let monitor = unsafe { MonitorFromRect(rect, MONITOR_DEFAULTTONEAREST) };
+        let mut info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        unsafe { GetMonitorInfoW(monitor, &mut info) }
+            .as_bool()
+            .then(|| {
+                let work = info.rcWork;
+                (
+                    work.left,
+                    work.top,
+                    work.right - work.left,
+                    work.bottom - work.top,
+                )
+            })
+    }
+
+    fn place(grid: isize, bar: isize, area: (i32, i32, i32, i32)) {
+        unsafe {
+            // Right under the bar, so the bar stays on top of its own guides.
+            let _ = SetWindowPos(
+                HWND(grid as _),
+                Some(HWND(bar as _)),
+                area.0,
+                area.1,
+                area.2,
+                area.3,
+                SWP_NOACTIVATE | SWP_SHOWWINDOW,
+            );
+        }
+    }
+
+    pub fn begin(app: &AppHandle, bar: HWND) {
+        let mut rect = RECT::default();
+        if unsafe { GetWindowRect(bar, &mut rect) }.is_err() {
+            return;
+        }
+        let area = work_area(&rect).unwrap_or_default();
+        let grid = app
+            .get_webview_window("grid")
+            .and_then(|window| window.hwnd().ok())
+            .map(|hwnd| hwnd.0 as isize)
+            .unwrap_or(0);
+        if grid != 0 {
+            let _ = app.emit_to("grid", "grid-preview", serde_json::Value::Null);
+            place(grid, bar.0 as isize, area);
+        }
+        if let Ok(mut drag) = DRAG.lock() {
+            *drag = Some(Drag {
+                app: Some(app.clone()),
+                bar: bar.0 as isize,
+                grid,
+                area,
+                snap: None,
+            });
+        }
+    }
+
+    /// From the move loop: where the bar is about to be. Moves the grid along when the bar
+    /// changes screens, and shows where it would snap.
+    pub fn moving(rect: &RECT) {
+        let Ok(mut guard) = DRAG.lock() else {
+            return;
+        };
+        let Some(drag) = guard.as_mut() else {
+            return;
+        };
+        let Some(area) = work_area(rect) else {
+            return;
+        };
+        if area != drag.area {
+            drag.area = area;
+            if drag.grid != 0 {
+                place(drag.grid, drag.bar, area);
+            }
+        }
+        let (width, height) = (rect.right - rect.left, rect.bottom - rect.top);
+        let (x, y) = super::snap_position((rect.left, rect.top), area, width, height);
+        drag.snap = ((x, y) != (rect.left, rect.top)).then_some((x, y));
+        if let Some(app) = &drag.app {
+            // Relative to the grid window, in physical pixels; the page scales them.
+            let preview = drag.snap.map(|(x, y)| {
+                serde_json::json!({
+                    "x": x - area.0,
+                    "y": y - area.1,
+                    "width": width,
+                    "height": height,
+                })
+            });
+            let _ = app.emit_to(
+                "grid",
+                "grid-preview",
+                preview.unwrap_or(serde_json::Value::Null),
+            );
+        }
+    }
+
+    /// The drop: hides the grid and says where the bar should land, if it snapped.
+    pub fn end() -> Option<(i32, i32)> {
+        let drag = DRAG.lock().ok()?.take()?;
+        if drag.grid != 0 {
+            unsafe {
+                let _ = ShowWindow(HWND(drag.grid as _), SW_HIDE);
+            }
+        }
+        drag.snap
+    }
+}
+
+/// Makes the snap grid's window ahead of the first drag (when Ctrl is first held on the
+/// bar). It's built off the main thread, hidden, transparent and click-through.
+#[cfg(windows)]
+pub fn prepare_grid(app: &AppHandle) -> Result<(), String> {
+    if app.get_webview_window("grid").is_some() {
+        return Ok(());
+    }
+    let window =
+        WebviewWindowBuilder::new(app, "grid", WebviewUrl::App("index.html?view=grid".into()))
+            .title("Zephyr grid")
+            .background_color(WINDOW_BACKGROUND)
+            .transparent(true)
+            .decorations(false)
+            .shadow(false)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .resizable(false)
+            .focusable(false)
+            .focused(false)
+            .visible(false)
+            .build()
+            .map_err(|err| err.to_string())?;
+    window
+        .set_ignore_cursor_events(true)
+        .map_err(|err| err.to_string())
+}
+
+#[cfg(not(windows))]
+pub fn prepare_grid(_app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
@@ -529,6 +731,83 @@ fn clamp_into(spot: (i32, i32), area: (i32, i32, i32, i32), width: i32, height: 
     (x, y)
 }
 
+/// Where a dragged bar pulls to when it comes near: its center on the screen's center or
+/// thirds across, and on the half or thirds down, plus the spot it opens at by default (top
+/// edge a sixth of the way down). Elsewhere it moves freely. `area` is (x, y, width,
+/// height) of the screen's work area; returns the snapped top-left.
+fn snap_position(
+    spot: (i32, i32),
+    area: (i32, i32, i32, i32),
+    width: i32,
+    height: i32,
+) -> (i32, i32) {
+    let (left, top, area_width, area_height) = area;
+    // About 24 px on a 1080p-class screen, scaled with the screen.
+    let reach = (area_height / 45).max(12);
+    let nearest = |value: i32, targets: &[i32]| {
+        targets
+            .iter()
+            .copied()
+            .filter(|target| (value - target).abs() <= reach)
+            .min_by_key(|target| (value - target).abs())
+            .unwrap_or(value)
+    };
+    let center_x = spot.0 + width / 2;
+    let across = [
+        left + area_width / 3,
+        left + area_width / 2,
+        left + area_width * 2 / 3,
+    ];
+    let x = nearest(center_x, &across) - width / 2;
+    let center_y = spot.1 + height / 2;
+    let down = [
+        top + area_height / 3,
+        top + area_height / 2,
+        top + area_height * 2 / 3,
+    ];
+    let snapped_center = nearest(center_y, &down);
+    let y = if snapped_center != center_y {
+        snapped_center - height / 2
+    } else {
+        // The default spot is by the top edge, not the center.
+        nearest(spot.1, &[top + area_height / 6])
+    };
+    (x, y)
+}
+
+/// Makes Windows' move loop snap the bar while the user drags it (see [`snap_position`]).
+#[cfg(windows)]
+pub fn install_snapping(window: &tauri::WebviewWindow) {
+    use windows::Win32::UI::Shell::SetWindowSubclass;
+    if let Ok(hwnd) = window.hwnd() {
+        unsafe {
+            let _ = SetWindowSubclass(hwnd, Some(snap_while_moving), 0x5a50, 0);
+        }
+    }
+}
+
+#[cfg(windows)]
+unsafe extern "system" fn snap_while_moving(
+    hwnd: windows::Win32::Foundation::HWND,
+    message: u32,
+    wparam: windows::Win32::Foundation::WPARAM,
+    lparam: windows::Win32::Foundation::LPARAM,
+    _id: usize,
+    _data: usize,
+) -> windows::Win32::Foundation::LRESULT {
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::UI::Shell::DefSubclassProc;
+    use windows::Win32::UI::WindowsAndMessaging::WM_MOVING;
+
+    // The bar follows the mouse untouched (pulling it onto guides mid-drag made it jumpy);
+    // the grid just shows where it would land, and the drop puts it there.
+    if message == WM_MOVING && DRAGGING.load(Ordering::SeqCst) && lparam.0 != 0 {
+        let rect = unsafe { &*(lparam.0 as *const RECT) };
+        grid::moving(rect);
+    }
+    unsafe { DefSubclassProc(hwnd, message, wparam, lparam) }
+}
+
 fn contains(monitor: &tauri::Monitor, cursor: tauri::PhysicalPosition<f64>) -> bool {
     let position = monitor.position();
     let size = monitor.size();
@@ -582,7 +861,27 @@ fn focus_windows(window: &tauri::WebviewWindow) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::clamp_into;
+    use super::{clamp_into, snap_position};
+
+    #[test]
+    fn a_dragged_bar_snaps_near_center_and_thirds_and_moves_freely_elsewhere() {
+        // A 1920x1040 work area and an 850x600 bar.
+        let area = (0, 0, 1920, 1040);
+        let (w, h) = (850, 600);
+        // Within reach of dead center across: x snaps to 535 (center 960).
+        assert_eq!(snap_position((550, 100), area, w, h).0, 535);
+        // Center down at 2/3 (693): y snaps to 393.
+        assert_eq!(snap_position((800, 380), area, w, h), (800, 393));
+        // The default spot, top edge at a sixth (173).
+        assert_eq!(snap_position((800, 180), area, w, h).1, 173);
+        // Far from every line: left alone.
+        assert_eq!(snap_position((700, 120), area, w, h), (700, 120));
+        // A second screen to the left snaps to its own center.
+        assert_eq!(
+            snap_position((-1730, 100), (-2560, 0, 2560, 1400), w, h).0,
+            -1280 - w / 2
+        );
+    }
 
     #[test]
     fn a_dragged_bar_is_pulled_back_on_screen() {

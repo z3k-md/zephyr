@@ -2,6 +2,7 @@
   import { computed } from 'vue';
   import BarView from './bar/BarView.vue';
   import NotesView from './notes/NotesView.vue';
+  import GridView from './grid/GridView.vue';
   import SettingsView from './settings/SettingsView.vue';
 
   const view = new URLSearchParams(window.location.search).get('view');
@@ -13,7 +14,8 @@
 </script>
 
 <template>
-  <NotesView v-if="view === 'notes'" />
+  <GridView v-if="view === 'grid'" />
+  <NotesView v-else-if="view === 'notes'" />
   <SettingsView v-else-if="isSettings" />
   <BarView v-else />
 </template>

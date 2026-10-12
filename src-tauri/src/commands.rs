@@ -836,6 +836,154 @@ pub fn save_resume_seconds(
     publish(&app, snapshot)
 }
 
+/// What typed text like "shutdown in 30m" would do, for the bar's Power row.
+#[tauri::command]
+pub fn power_preview(query: String) -> Option<crate::power::Preview> {
+    crate::power::preview(&query, chrono::Local::now())
+}
+
+/// Runs a power action now, or schedules it for `at` (unix seconds).
+#[tauri::command]
+pub fn power_run(
+    app: AppHandle,
+    action: crate::power::Action,
+    at: Option<i64>,
+) -> Result<(), String> {
+    if at.is_none() {
+        window::hide_bar(&app);
+    }
+    crate::power::run(&app, action, at)
+}
+
+#[tauri::command]
+pub fn power_cancel(app: AppHandle) {
+    crate::power::cancel(&app);
+}
+
+/// Opens a web address (a bookmark) in the default browser and closes the bar.
+#[tauri::command]
+pub fn open_url(app: AppHandle, url: String) -> Result<(), String> {
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return Err("Only web addresses open from here".into());
+    }
+    // The Zephyr browser extension switches to a tab already on the page, with no new tab.
+    // When it isn't connected, the page opens through Zephyr's local hand-off link, which the
+    // extension can still catch (or which simply redirects without it).
+    let found = crate::browser::focus(&url);
+    if found == Some(true) {
+        window::hide_bar(&app);
+        return Ok(());
+    }
+    let port = crate::claude::hook::port();
+    let target = if port > 0 && found.is_none() {
+        format!(
+            "http://127.0.0.1:{port}/zephyr/open?u={}",
+            urlencoding::encode(&url)
+        )
+    } else {
+        url
+    };
+    app.opener()
+        .open_url(&target, None::<&str>)
+        .map_err(|err| err.to_string())?;
+    window::hide_bar(&app);
+    Ok(())
+}
+
+/// The browser profiles with bookmarks, for Settings > Bookmarks.
+#[tauri::command]
+pub async fn bookmark_sources() -> Vec<crate::bookmarks::Source> {
+    tauri::async_runtime::spawn_blocking(crate::bookmarks::sources)
+        .await
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+pub fn save_bookmark_sources(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    disabled: Vec<String>,
+) -> Result<Persisted, String> {
+    crate::bookmarks::configure(&disabled);
+    let snapshot = state.update(|persisted| {
+        persisted.bookmarks_disabled = disabled;
+        Ok(())
+    })?;
+    publish(&app, snapshot)
+}
+
+/// A site's icon by address (a bookmark), as a `data:` URL.
+#[tauri::command]
+pub async fn site_icon_url(url: String) -> Option<String> {
+    crate::icons::site_icon(&url).await
+}
+
+/// Switches the palette; every window repaints from the published snapshot.
+#[tauri::command]
+pub fn save_theme(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    theme: String,
+) -> Result<Persisted, String> {
+    if !crate::state::THEMES.contains(&theme.as_str()) {
+        return Err(format!("Unknown theme {theme}"));
+    }
+    let snapshot = state.update(|persisted| {
+        persisted.theme = theme;
+        Ok(())
+    })?;
+    publish(&app, snapshot)
+}
+
+/// What's playing now, for a bar that just opened; later changes come as `nowplaying` events.
+#[tauri::command]
+pub fn now_playing() -> Option<crate::nowplaying::NowPlaying> {
+    crate::nowplaying::snapshot()
+}
+
+/// Presses play/pause, next or previous on what's playing.
+#[tauri::command]
+pub fn now_playing_control(control: String) -> Result<(), String> {
+    let control = match control.as_str() {
+        "toggle" => crate::nowplaying::Control::Toggle,
+        "next" => crate::nowplaying::Control::Next,
+        "previous" => crate::nowplaying::Control::Previous,
+        other => return Err(format!("Unknown media control {other}")),
+    };
+    crate::nowplaying::control(control);
+    Ok(())
+}
+
+/// Switches to the app or browser tab playing the song, hiding the bar when it could.
+#[tauri::command]
+pub async fn now_playing_focus(app: AppHandle) -> Result<bool, String> {
+    let Some(playing) = crate::nowplaying::snapshot() else {
+        return Ok(false);
+    };
+    let focused = tauri::async_runtime::spawn_blocking(move || {
+        crate::nowplaying::focus_source(&playing.source_app, &playing.title)
+    })
+    .await
+    .map_err(|err| err.to_string())?;
+    if focused {
+        crate::window::hide_bar(&app);
+    }
+    Ok(focused)
+}
+
+#[tauri::command]
+pub fn save_show_now_playing(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    show: bool,
+) -> Result<Persisted, String> {
+    let snapshot = state.update(|persisted| {
+        persisted.show_now_playing = show;
+        Ok(())
+    })?;
+    publish(&app, snapshot)
+}
+
 /// Runs a command typed in the bar after `>`; output streams through `on_event`.
 #[tauri::command]
 pub fn shell_run(
@@ -936,10 +1084,37 @@ pub fn capture_recording() -> bool {
     false
 }
 
+/// Makes the snap grid's window when Ctrl is first held on the bar, before any drag.
+#[tauri::command]
+pub async fn prepare_grid(app: AppHandle) -> Result<(), String> {
+    window::prepare_grid(&app)
+}
+
 /// Ctrl+mousedown on the bar: the window follows the mouse until the button comes up.
 #[tauri::command]
 pub fn start_bar_drag(app: AppHandle) -> Result<(), String> {
     window::start_bar_drag(&app)
+}
+
+/// A web destination's site icon as a `data:` URL, or `None` to keep its letter tile.
+#[tauri::command]
+pub async fn site_icon(
+    state: State<'_, AppState>,
+    destination_id: String,
+) -> Result<Option<String>, String> {
+    let template = state
+        .snapshot()?
+        .destinations
+        .into_iter()
+        .find(|destination| {
+            destination.id == destination_id
+                && destination.kind == crate::destination::DestinationKind::Web
+        })
+        .map(|destination| destination.url_template);
+    Ok(match template {
+        Some(template) => crate::icons::site_icon(&template).await,
+        None => None,
+    })
 }
 
 /// An app's icon as a PNG `data:` URL at `size` pixels, or `None` to keep the generic glyph.

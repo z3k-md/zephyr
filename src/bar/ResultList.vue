@@ -3,8 +3,20 @@
   import { rowKey, type Group } from './rows';
   import type { Suggestion } from '../types';
 
-  defineProps<{ groups: Group[]; selected: number }>();
+  const props = defineProps<{
+    groups: Group[];
+    selected: number;
+    /** Destination names by id, for the monogram on rows that search a destination. */
+    names?: Record<string, string>;
+  }>();
   const emit = defineEmits<{ choose: [index: number]; hover: [index: number] }>();
+
+  // A row that searches a destination wears that destination's letter and color. Keyed on
+  // the typed text instead, its color changed with every keypress.
+  function iconLabel(row: Suggestion): string {
+    const id = row.icon?.startsWith('dest:') ? row.icon.slice(5) : '';
+    return (id && (props.names?.[id] ?? id)) || row.label;
+  }
 
   // WebKit sends a synthetic mousemove when the list scrolls under a still pointer; only a
   // real move selects, and a click only runs the row the pointer actually moved onto.
@@ -46,7 +58,7 @@
           @click="onClick(group.start + offset, row)"
           @mousemove="onMove($event, group.start + offset, row)"
         >
-          <RowIcon :icon="row.icon" :label="row.label" :size="20" />
+          <RowIcon :icon="row.icon" :label="iconLabel(row)" :size="20" />
           <span class="item-text">
             <span class="label">{{ row.label }}</span>
             <span v-if="row.subtitle" class="item-sub">{{ row.subtitle }}</span>

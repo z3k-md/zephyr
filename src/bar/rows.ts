@@ -1,4 +1,4 @@
-// Turns a suggest response into the bar's sectioned list: the query row, jump-in rows and
+// Turns a suggest response into the bar's sectioned list: the query row, command rows and
 // section headers. Pure functions, so the bar only wires them up.
 
 import { CTRL, MOD, shortcutKeys } from '../keys';
@@ -29,9 +29,11 @@ const SECTION_TITLES: Record<string, string> = {
   settings: 'Settings',
   notes: 'Notes',
   destinations: 'Destinations',
-  jump: 'Jump in',
+  jump: 'Commands',
   searchWith: 'Search with',
   shell: 'Shell',
+  power: 'Power',
+  bookmarks: 'Bookmarks',
 };
 
 function destination(ctx: RowCtx, id: string): Destination | undefined {
@@ -112,7 +114,8 @@ export function buildRows(
   ctx: RowCtx
 ): { rows: Suggestion[]; preselect: number | null } {
   if (response.mode === 'recent' && !response.text) {
-    return { rows: [...jumpRows(ctx), ...response.items], preselect: null };
+    // Recent apps and searches lead (the suggester orders them); commands sit below.
+    return { rows: [...response.items, ...jumpRows(ctx)], preselect: null };
   }
   const rows = [...response.items];
   let preselect = response.preselect;

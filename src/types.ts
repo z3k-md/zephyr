@@ -75,7 +75,34 @@ export interface Snapshot {
   routeCmd: string;
   routeAlt: string;
   shell: ShellSettings;
+  /** The color palette, e.g. violet or ocean. */
+  theme: string;
+  /** A power action set for later from the bar. */
+  power: PowerSchedule | null;
+  /** Browser profiles whose bookmarks stay out of the bar. */
+  bookmarksDisabled: string[];
+  /** Whether the bar's footer shows the song or video playing. */
+  showNowPlaying: boolean;
 }
+
+/** The song or video playing on this computer. */
+export interface NowPlaying {
+  title: string;
+  artist: string;
+  album: string;
+  /** The app playing it (an AppUserModelID on Windows, such as Spotify.exe or Chrome). */
+  sourceApp: string;
+  playing: boolean;
+  positionMs: number | null;
+  durationMs: number | null;
+  /** The cover as a data: URL. */
+  artwork: string | null;
+  updatedAt: number;
+  /** When the app was last seen playing, in ms since the epoch. */
+  lastPlayedAt: number | null;
+}
+
+export type MediaControl = 'toggle' | 'next' | 'previous';
 
 export type ShellProgram = 'auto' | 'powershell' | 'gitbash' | 'wsl';
 
@@ -257,7 +284,10 @@ export interface Suggestion {
     | 'view'
     | 'query'
     | 'searchWith'
-    | 'more';
+    | 'more'
+    | 'power'
+    | 'bookmark'
+    | 'powerPending';
   hint: string;
   appId?: string;
   settingId?: string;
@@ -271,6 +301,8 @@ export interface Suggestion {
   icon?: string;
   /** Keycaps shown instead of the hint. */
   keys?: string[];
+  /** For power rows: what Enter runs. */
+  power?: PowerPreview;
 }
 
 export interface NoteSummary {
@@ -345,4 +377,32 @@ export interface SyncPending {
   name: string;
   platform: string;
   words: string;
+}
+
+export type PowerAction = 'shutdown' | 'restart' | 'sleep' | 'lock' | 'sign_out';
+
+export interface PowerSchedule {
+  action: PowerAction;
+  /** Unix seconds. */
+  at: number;
+}
+
+export interface PowerPreview {
+  action: PowerAction;
+  label: string;
+  at: number | null;
+  cancel: boolean;
+  confirm: boolean;
+  /** The text names the action outright, so Enter may take the row. */
+  exact: boolean;
+}
+
+/** A browser profile Zephyr reads bookmarks from. */
+export interface BookmarkSource {
+  /** e.g. chrome/Default */
+  id: string;
+  /** e.g. "Chrome · Zach" */
+  label: string;
+  count: number;
+  enabled: boolean;
 }

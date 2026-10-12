@@ -1,6 +1,8 @@
 mod ai;
 mod answer;
 mod apps;
+mod bookmarks;
+mod browser;
 // Bug recordings and snapshots exist only in dev builds; installed copies don't contain them.
 #[cfg(debug_assertions)]
 mod capture;
@@ -14,6 +16,8 @@ mod history;
 mod icons;
 mod logger;
 mod notes;
+mod nowplaying;
+mod power;
 mod query;
 mod secrets;
 mod settings;
@@ -121,6 +125,10 @@ pub fn run() {
 
             app.manage(state);
             claude::init(app.handle(), app.path().app_data_dir()?.join("claude"));
+            power::resume(app.handle());
+            browser::start();
+            nowplaying::start(app.handle());
+            bookmarks::configure(&snapshot.bookmarks_disabled);
 
             if let Err(err) = tray::init(app) {
                 log::error!("tray setup failed: {err}");
@@ -136,6 +144,8 @@ pub fn run() {
                     log::error!("couldn't blur behind the bar: {err}");
                 }
                 #[cfg(windows)]
+                window::install_snapping(&main_window);
+                #[cfg(windows)]
                 clipboard::set_owner_window(&main_window);
 
                 let watched = main_window.clone();
@@ -145,6 +155,7 @@ pub fn run() {
                         let _ = watched.hide();
                     }
                     WindowEvent::Focused(false) if !window::suppressing_blur() => {
+                        log::debug!("the bar lost focus, hiding it");
                         let _ = watched.hide();
                         let _ = watched.emit("bar-hidden", ());
                     }
@@ -188,8 +199,22 @@ pub fn run() {
             commands::page_ready,
             commands::save_typing_result,
             commands::save_resume_seconds,
+            commands::save_theme,
+            commands::now_playing,
+            commands::now_playing_control,
+            commands::now_playing_focus,
+            commands::save_show_now_playing,
+            commands::power_preview,
+            commands::power_run,
+            commands::power_cancel,
+            commands::open_url,
+            commands::bookmark_sources,
+            commands::save_bookmark_sources,
+            commands::site_icon_url,
             commands::app_icon,
+            commands::site_icon,
             commands::start_bar_drag,
+            commands::prepare_grid,
             commands::warm_suggestions,
             commands::capture_event,
             commands::capture_recording,

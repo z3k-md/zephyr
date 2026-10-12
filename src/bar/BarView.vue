@@ -25,9 +25,14 @@
     setBarHeight,
     suggest,
     startBarDrag,
+    prepareGrid,
     warmSuggestions,
     captureEvent,
     captureRecording,
+    powerPreview,
+    powerRun,
+    powerCancel,
+    openUrl,
   } from '../api';
   import ClipboardView from './ClipboardView.vue';
   import TypingView from '../typing/TypingView.vue';
@@ -35,6 +40,8 @@
   import ApprovalCard from '../claude/ApprovalCard.vue';
   import DeviceCard from './DeviceCard.vue';
   import ResultList from './ResultList.vue';
+  import NowPlayingStrip from './NowPlayingStrip.vue';
+  import { useNowPlaying } from './nowPlaying';
   import { buildRows, groups, primaryLabel, rowKey, type RowCtx } from './rows';
   import ClaudeView from '../claude/ClaudeView.vue';
   import ShellView from '../shell/ShellView.vue';
@@ -47,6 +54,7 @@
     type Snapshot,
     type Suggestion,
     type SuggestResponse,
+    type PowerPreview,
   } from '../types';
 
   const root = ref<HTMLElement | null>(null);
@@ -54,7 +62,7 @@
   const snapshot = ref<Snapshot | null>(null);
   const query = ref('');
   const armedId = ref('google');
-  // The last suggest reply and the text it was for; the rows are built from it, so jump-in
+  // The last suggest reply and the text it was for; the rows are built from it, so command
   // rows and job counts stay current without asking again.
   const lastResponse = ref<SuggestResponse | null>(null);
   const lastQuery = ref('');
@@ -129,6 +137,10 @@
       .slice(0, 8)
   );
 
+  const destinationNames = computed(() =>
+    Object.fromEntries((snapshot.value?.destinations ?? []).map((item) => [item.id, item.name]))
+  );
+
   const armed = computed(() =>
     snapshot.value?.destinations.find((destination) => destination.id === armedId.value)
   );
@@ -142,9 +154,122 @@
     strip: strip.value.map((destination) => destination.id),
   }));
 
+  // Power commands ("shutdown in 30m"): what the typed text would do, a pending schedule with
+  // its countdown, and the first Enter of a shutdown, restart or sign-out waiting for its
+  // second.
+  const powerRow = ref<PowerPreview | null>(null);
+  const confirmArm = ref('');
+  const clock = ref(Date.now());
+  window.setInterval(() => (clock.value = Date.now()), 15000);
+
+  function untilText(at: number): string {
+    const left = Math.max(0, at - Math.floor(clock.value / 1000));
+    const hours = Math.floor(left / 3600);
+    const minutes = Math.ceil((left % 3600) / 60);
+    const span = hours ? `${hours}h${minutes ? ` ${minutes}m` : ''}` : `${minutes || 1}m`;
+    if (left < 3600) return `in ${span}`;
+    const time = new Date(at * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    return `at ${time}, in ${span}`;
+  }
+
+  const POWER_ICONS: Record<string, string> = {
+    shutdown: 'glyph:power',
+    restart: 'glyph:restart',
+    sleep: 'glyph:moon',
+    lock: 'glyph:lock',
+    sign_out: 'glyph:signout',
+  };
+  const POWER_LABELS: Record<string, string> = {
+    shutdown: 'Shut down',
+    restart: 'Restart',
+    sleep: 'Sleep',
+    lock: 'Lock',
+    sign_out: 'Sign out',
+  };
+  const POWER_NAMES: Record<string, string> = {
+    shutdown: 'Shutting down',
+    restart: 'Restarting',
+    sleep: 'Sleeping',
+    lock: 'Locking',
+    sign_out: 'Signing out',
+  };
+
+  function powerRows(): Suggestion[] {
+    const rows: Suggestion[] = [];
+    const pending = snapshot.value?.power;
+    if (pending) {
+      rows.push({
+        kind: 'powerPending',
+        label: `${POWER_NAMES[pending.action] ?? 'Scheduled'} ${untilText(pending.at)}`,
+        query: '',
+        destinationId: '',
+        hint: 'Enter cancels',
+        section: 'power',
+        icon: POWER_ICONS[pending.action] ?? 'glyph:power',
+      });
+    }
+    const preview = powerRow.value;
+    if (preview && !(preview.cancel && !pending)) {
+      const key = `${preview.action}:${preview.at ?? 'now'}`;
+      rows.push({
+        kind: 'power',
+        label: preview.label,
+        query: '',
+        destinationId: '',
+        hint:
+          confirmArm.value === key
+            ? 'Enter again to confirm'
+            : preview.cancel
+              ? 'Cancel'
+              : preview.at
+                ? 'Schedule'
+                : 'Run',
+        section: 'power',
+        icon: POWER_ICONS[preview.action] ?? 'glyph:power',
+        power: preview,
+      });
+      // Under a plain "shutdown", a few timers, so it's clear they exist. They're cancelable
+      // from the top of the bar, so they skip the second Enter.
+      if (!preview.at && !preview.cancel && preview.action !== 'lock') {
+        const now = Math.floor(Date.now() / 1000);
+        for (const [seconds, words] of [
+          [300, '5 minutes'],
+          [900, '15 minutes'],
+          [3600, '1 hour'],
+        ] as const) {
+          rows.push({
+            kind: 'power',
+            label: `${POWER_LABELS[preview.action]} in ${words}`,
+            query: '',
+            destinationId: '',
+            hint: 'Schedule',
+            section: 'power',
+            icon: 'glyph:clock',
+            power: {
+              ...preview,
+              label: `${POWER_LABELS[preview.action]} in ${words}`,
+              at: now + seconds,
+              confirm: false,
+              exact: false,
+            },
+          });
+        }
+      }
+    }
+    return rows;
+  }
+
   const built = computed(() => {
     if (!lastResponse.value) return { rows: [] as Suggestion[], preselect: null };
     const result = buildRows(lastResponse.value, rowCtx.value);
+    // Power rows lead; a command named outright ("shutdown") takes Enter.
+    const power = powerRows();
+    if (power.length) {
+      result.rows.unshift(...power);
+      const named = power.findIndex((row) => row.kind === 'power' && row.power?.exact);
+      result.preselect =
+        named >= 0 ? named : result.preselect === null ? null : result.preselect + power.length;
+    }
     if (looksLikeCommand(lastQuery.value)) {
       result.rows.push({
         label: 'Run in shell',
@@ -165,9 +290,16 @@
     selected.value >= 0 ? items.value[selected.value] : undefined
   );
 
-  const enterLabel = computed(
-    () => primaryLabel(selectedItem.value, rowCtx.value) ?? `Search ${armed.value?.name ?? ''}`
-  );
+  const enterLabel = computed(() => {
+    const item = selectedItem.value;
+    if (item?.kind === 'powerPending') return 'Cancel it';
+    if (item?.kind === 'bookmark') return `Open ${item.label}`;
+    if (item?.kind === 'power' && item.power) {
+      const key = `${item.power.action}:${item.power.at ?? 'now'}`;
+      return confirmArm.value === key ? `Confirm: ${item.power.label}` : item.power.label;
+    }
+    return primaryLabel(item, rowCtx.value) ?? `Search ${armed.value?.name ?? ''}`;
+  });
 
   // Type-ahead: the rest of what Enter would act on, drawn faintly after the cursor. Enter
   // still sends only what was typed; Right arrow or End takes the completion.
@@ -307,6 +439,12 @@
     return list;
   });
 
+  // What's playing, in the footer where the shortcut otherwise sits.
+  const media = useNowPlaying();
+  const playingNow = computed(() =>
+    snapshot.value?.showNowPlaying === false ? null : media.shown.value
+  );
+
   const shortcutLabel = computed(() =>
     snapshot.value
       ? formatShortcut(snapshot.value.summonShortcut)
@@ -328,6 +466,7 @@
 
     unlistens.push(
       await listen('bar-shown', () => {
+        media.tick();
         // Opens the connection to the suggestion service before the first keystroke.
         void warmSuggestions(armedId.value).catch(() => undefined);
         void loadApprovals();
@@ -425,7 +564,12 @@
     window.addEventListener('keydown', onKey, true);
     window.addEventListener('keydown', trackModifiers, true);
     window.addEventListener('keyup', trackModifiers, true);
-    window.addEventListener('blur', () => (held.value = ''));
+    window.addEventListener('blur', () => {
+      held.value = '';
+      movable.value = false;
+    });
+    // A drop lands outside the page's key events, so the pointer corrects what's held.
+    window.addEventListener('mousemove', trackModifiers, true);
     if (root.value) {
       observer = new ResizeObserver(() => syncHeight());
       observer.observe(root.value);
@@ -440,6 +584,7 @@
     window.removeEventListener('keydown', onKey, true);
     window.removeEventListener('keydown', trackModifiers, true);
     window.removeEventListener('keyup', trackModifiers, true);
+    window.removeEventListener('mousemove', trackModifiers, true);
     observer?.disconnect();
     window.clearTimeout(suggestTimer);
     for (const unlisten of unlistens) unlisten();
@@ -616,6 +761,7 @@
       return;
     }
     actionsOpen.value = false;
+    confirmArm.value = '';
     // The highlight stays put until this text's results replace it, so it doesn't blink.
     userMoved = false;
     notice.value = null;
@@ -686,7 +832,12 @@
       const destinationId = armedId.value;
       const asked = performance.now();
       trace('fetch', { text: typed, remote: includeRemote, generation: current });
-      let response = await suggest(typed, destinationId, includeRemote);
+      const [answer, power] = await Promise.all([
+        suggest(typed, destinationId, includeRemote),
+        includeRemote ? Promise.resolve(powerRow.value) : powerPreview(typed).catch(() => null),
+      ]);
+      let response = answer;
+      if (!includeRemote && current === generation) powerRow.value = power;
       const stale = current !== generation || (!includeRemote && remoteApplied);
       trace('fetched', {
         text: typed,
@@ -782,6 +933,25 @@
         return;
       }
     }
+    // What's playing: Ctrl+Space plays or pauses anywhere in the bar; with nothing typed,
+    // Ctrl+Shift+→/← skip (with text they still select by word).
+    if (playingNow.value && event.ctrlKey && !event.altKey && !event.metaKey) {
+      if (event.code === 'Space' && !event.shiftKey) {
+        event.preventDefault();
+        if (!event.repeat) media.press('toggle');
+        return;
+      }
+      if (
+        event.shiftKey &&
+        view.value === 'root' &&
+        !query.value &&
+        (event.key === 'ArrowRight' || event.key === 'ArrowLeft')
+      ) {
+        event.preventDefault();
+        if (!event.repeat) media.press(event.key === 'ArrowRight' ? 'next' : 'previous');
+        return;
+      }
+    }
     if (view.value === 'claude') {
       claudeView.value?.onKey(event);
       return;
@@ -864,6 +1034,14 @@
         inputEl.value?.setSelectionRange(query.value.length, query.value.length);
         trackCaret();
       });
+      return;
+    }
+
+    // Esc backs out of a shutdown waiting for its second Enter before it closes anything.
+    if (event.key === 'Escape' && confirmArm.value) {
+      event.preventDefault();
+      confirmArm.value = '';
+      notice.value = null;
       return;
     }
 
@@ -1006,8 +1184,17 @@
 
   // Holding ⌘ or ⌥ previews where Enter would go.
   const held = ref<'' | 'cmd' | 'alt'>('');
-  function trackModifiers(event: KeyboardEvent) {
+  // Ctrl alone means "drag to move": the cursor and the footer say so while it's held.
+  const movable = ref(false);
+  let gridReady = false;
+  function trackModifiers(event: KeyboardEvent | MouseEvent) {
     held.value = event.altKey ? 'alt' : event.metaKey || event.ctrlKey ? 'cmd' : '';
+    movable.value = event.ctrlKey && !event.altKey && !event.shiftKey && !event.metaKey;
+    // The grid's window is made the first time Ctrl is held, so the drag never waits on it.
+    if (movable.value && !gridReady) {
+      gridReady = true;
+      void prepareGrid().catch(() => (gridReady = false));
+    }
   }
   const cmdLabel = computed(() => routeFor('cmd').label);
   const altLabel = computed(() => routeFor('alt').label);
@@ -1113,6 +1300,24 @@
         await copyText(item.label);
         return;
       }
+      if (item.kind === 'powerPending' || (item.kind === 'power' && item.power?.cancel)) {
+        await cancelPower();
+        return;
+      }
+      if (item.kind === 'power' && item.power) {
+        await runPower(item.power);
+        return;
+      }
+      if (item.kind === 'bookmark') {
+        try {
+          await openUrl(item.query);
+          query.value = '';
+          notice.value = null;
+        } catch (error) {
+          notice.value = errorMessage(error);
+        }
+        return;
+      }
       if (item.kind === 'note' || item.kind === 'noteNew') {
         await openNote(item);
         return;
@@ -1164,6 +1369,34 @@
   function chooseAt(index: number) {
     selected.value = index;
     void accept();
+  }
+
+  /** Shut down, restart and sign out take a second Enter; sleep and lock go at once. */
+  async function runPower(preview: PowerPreview) {
+    const key = `${preview.action}:${preview.at ?? 'now'}`;
+    if (preview.confirm && !preview.at && confirmArm.value !== key) {
+      confirmArm.value = key;
+      notice.value = `Press Enter again to ${preview.label.toLowerCase()}, or Esc to back out`;
+      return;
+    }
+    confirmArm.value = '';
+    try {
+      await powerRun(preview.action, preview.at);
+      query.value = '';
+      notice.value = preview.at ? `${preview.label}. Open Zephyr to cancel it.` : null;
+    } catch (error) {
+      notice.value = errorMessage(error);
+    }
+  }
+
+  async function cancelPower() {
+    try {
+      await powerCancel();
+      query.value = '';
+      notice.value = 'Cancelled';
+    } catch (error) {
+      notice.value = errorMessage(error);
+    }
   }
 
   async function launch(appId: string) {
@@ -1256,7 +1489,14 @@
 </script>
 
 <template>
-  <div ref="root" class="bar" role="dialog" aria-label="Zephyr" @mousedown.capture="dragWithCtrl">
+  <div
+    ref="root"
+    class="bar"
+    :class="{ moving: movable }"
+    role="dialog"
+    aria-label="Zephyr"
+    @mousedown.capture="dragWithCtrl"
+  >
     <span v-if="capturing" class="capture-dot" title="Recording · Ctrl+Alt+R stops" />
     <ApprovalCard
       v-if="approvals.length"
@@ -1371,6 +1611,7 @@
         v-else-if="items.length"
         :groups="sections"
         :selected="selected"
+        :names="destinationNames"
         @choose="chooseAt"
         @hover="hover"
       />
@@ -1381,7 +1622,9 @@
 
       <footer class="footer">
         <span>
-          <span :class="{ dim: held }">↵ {{ enterLabel }}</span>
+          <!-- Only dims while a held key previews another Enter route; with no text there is
+               none, and dimming then just made the footer flash on every Ctrl press. -->
+          <span :class="{ dim: held && query.trim() }">↵ {{ enterLabel }}</span>
           <template v-if="query.trim()">
             ·
             <span :class="{ lit: held === 'cmd' }"
@@ -1396,7 +1639,22 @@
           <template v-if="actions.length && !actionsOpen"> · {{ actionKey }} actions</template>
           <template v-if="actionsOpen"> · Esc back</template>
         </span>
-        <span>{{ shortcutLabel }}</span>
+        <span v-if="movable" class="move-hint">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 3v18M3 12h18M12 3 9.5 5.5M12 3l2.5 2.5M12 21l-2.5-2.5M12 21l2.5-2.5" />
+            <path d="M3 12l2.5-2.5M3 12l2.5 2.5M21 12l-2.5-2.5M21 12l-2.5 2.5" />
+          </svg>
+          Drag to move
+        </span>
+        <NowPlayingStrip
+          v-else-if="playingNow"
+          :track="playingNow"
+          @toggle="media.press('toggle')"
+          @next="media.press('next')"
+          @previous="media.press('previous')"
+          @focus="media.focus()"
+        />
+        <span v-else>{{ shortcutLabel }}</span>
       </footer>
     </template>
   </div>
