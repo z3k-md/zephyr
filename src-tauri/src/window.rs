@@ -735,6 +735,7 @@ fn clamp_into(spot: (i32, i32), area: (i32, i32, i32, i32), width: i32, height: 
 /// thirds across, and on the half or thirds down, plus the spot it opens at by default (top
 /// edge a sixth of the way down). Elsewhere it moves freely. `area` is (x, y, width,
 /// height) of the screen's work area; returns the snapped top-left.
+#[cfg_attr(not(windows), allow(dead_code))]
 fn snap_position(
     spot: (i32, i32),
     area: (i32, i32, i32, i32),
