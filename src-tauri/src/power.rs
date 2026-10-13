@@ -333,13 +333,57 @@ pub fn commands_for(action: Action, delay: Option<i64>) -> Vec<Vec<String>> {
             Action::Restart => vec![event("restart")],
             Action::SignOut => vec![event("log out")],
             Action::Sleep => vec![owned(&["pmset", "sleepnow"])],
-            Action::Lock => vec![owned(&[
-                "osascript",
-                "-e",
-                "tell application \"System Events\" to keystroke \"q\" using {control down, command down}",
-            ])],
+            // Locked in-process, which needs no permission (see `lock_screen`).
+            Action::Lock => vec![owned(&[LOCK_IN_PROCESS])],
         }
     }
+}
+
+/// Stands in for a command: lock the screen from inside Zephyr.
+const LOCK_IN_PROCESS: &str = "zephyr:lock";
+
+/// The login framework's own "lock now", the one the menu bar's Lock Screen uses. Unlike
+/// pressing ⌃⌘Q through System Events, it needs neither Automation nor Accessibility.
+#[cfg(target_os = "macos")]
+fn sac_lock() -> Option<extern "C" fn() -> i32> {
+    const LOGIN: &std::ffi::CStr =
+        c"/System/Library/PrivateFrameworks/login.framework/Versions/Current/login";
+    // SAFETY: dlopen and dlsym take valid C strings; the symbol has this signature.
+    unsafe {
+        let handle = libc::dlopen(LOGIN.as_ptr(), libc::RTLD_LAZY);
+        if handle.is_null() {
+            return None;
+        }
+        let symbol = libc::dlsym(handle, c"SACLockScreenImmediate".as_ptr());
+        (!symbol.is_null())
+            .then(|| std::mem::transmute::<*mut libc::c_void, extern "C" fn() -> i32>(symbol))
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn lock_screen() -> Result<(), String> {
+    if let Some(lock) = sac_lock()
+        && lock() == 0
+    {
+        return Ok(());
+    }
+    // Older or changed systems: the keyboard shortcut, which does need permissions.
+    let status = std::process::Command::new("osascript")
+        .args([
+            "-e",
+            "tell application \"System Events\" to keystroke \"q\" using {control down, command down}",
+        ])
+        .status()
+        .map_err(|err| err.to_string())?;
+    status
+        .success()
+        .then_some(())
+        .ok_or_else(|| format!("osascript failed ({status})"))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn lock_screen() -> Result<(), String> {
+    Err("Locking from Zephyr isn't supported here".into())
 }
 
 /// While testing, `ZEPHYR_POWER_DRY_RUN=1` logs the commands instead of running them.
@@ -347,6 +391,10 @@ fn execute(commands: &[Vec<String>]) -> Result<(), String> {
     for command in commands {
         if std::env::var_os("ZEPHYR_POWER_DRY_RUN").is_some() {
             log::info!("power (dry run): {}", command.join(" "));
+            continue;
+        }
+        if command[0] == LOCK_IN_PROCESS {
+            lock_screen()?;
             continue;
         }
         let mut process = std::process::Command::new(&command[0]);
@@ -597,5 +645,16 @@ mod tests {
         // Sleep and lock on a timer are Zephyr's to run.
         assert!(commands_for(Action::Sleep, Some(60)).is_empty());
         assert!(commands_for(Action::Lock, Some(60)).is_empty());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_permission_free_lock_is_there() {
+        // Only looks the function up; calling it would lock this Mac.
+        assert!(sac_lock().is_some());
+        assert_eq!(
+            commands_for(Action::Lock, None),
+            [[LOCK_IN_PROCESS.to_string()]]
+        );
     }
 }
