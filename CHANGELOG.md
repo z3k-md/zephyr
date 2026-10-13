@@ -1,3 +1,16 @@
+# [2.7.0](https://github.com/z3k-md/zephyr/compare/v2.6.0...v2.7.0) (2026-10-13)
+
+
+### Bug Fixes
+
+* run git for Claude jobs without flashing a console on Windows ([a47c59f](https://github.com/z3k-md/zephyr/commit/a47c59f800139543e4fdf248d903c3fb1ab33973))
+
+
+### Features
+
+* launch installed Steam games by name ([e761a0f](https://github.com/z3k-md/zephyr/commit/e761a0f2735af04414c6ce0acecb65eb576600d9))
+* update card with download progress and an install countdown ([eb3256e](https://github.com/z3k-md/zephyr/commit/eb3256ec050d95302b6e59e4ce6425f2284f47b1))
+
 # [2.6.0](https://github.com/z3k-md/zephyr/compare/v2.5.0...v2.6.0) (2026-10-12)
 
 
