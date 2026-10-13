@@ -157,7 +157,35 @@ fn extract(app_id: &str, size: u32) -> Option<Vec<u8>> {
     }
 }
 
-#[cfg(not(windows))]
+/// The app bundle's icon as Finder draws it (asset catalogs and .icns alike), rendered at
+/// `size` pixels. `app_id` is the bundle's path.
+#[cfg(target_os = "macos")]
+fn extract(app_id: &str, size: u32) -> Option<Vec<u8>> {
+    use objc2::AnyThread;
+    use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSWorkspace};
+    use objc2_foundation::{NSDictionary, NSPoint, NSRect, NSSize, NSString};
+
+    if !std::path::Path::new(app_id).exists() {
+        return None;
+    }
+    objc2::rc::autoreleasepool(|_| {
+        let image = NSWorkspace::sharedWorkspace().iconForFile(&NSString::from_str(app_id));
+        let side = f64::from(size);
+        image.setSize(NSSize::new(side, side));
+        let mut rect = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(side, side));
+        // SAFETY: `rect` outlives the call, and no hints are passed.
+        let cg = unsafe { image.CGImageForProposedRect_context_hints(&mut rect, None, None) }?;
+        let rep = NSBitmapImageRep::initWithCGImage(NSBitmapImageRep::alloc(), &cg);
+        rep.setSize(NSSize::new(side, side));
+        // SAFETY: an empty properties dictionary is valid for PNG.
+        let png = unsafe {
+            rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new())
+        }?;
+        Some(png.to_vec())
+    })
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 fn extract(_app_id: &str, _size: u32) -> Option<Vec<u8>> {
     None
 }
@@ -207,5 +235,14 @@ mod tests {
         // File Explorer is on every PC under this id.
         let png = extract("Microsoft.Windows.Explorer", 32).expect("an icon");
         assert!(png.starts_with(b"\x89PNG"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn extracts_an_icon_for_an_app_bundle() {
+        // Finder is on every Mac at this path.
+        let png = extract("/System/Library/CoreServices/Finder.app", 64).expect("an icon");
+        assert!(png.starts_with(b"\x89PNG"));
+        assert!(extract("/Applications/Nothing Here.app", 64).is_none());
     }
 }
