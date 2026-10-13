@@ -1,5 +1,6 @@
 <script setup lang="ts">
   import { computed, onMounted, onUnmounted, ref } from 'vue';
+  import { getVersion } from '@tauri-apps/api/app';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { updateInstallNow, updateLater, updateStatus } from '../api';
   import type { UpdateStatus } from '../types';
@@ -9,11 +10,16 @@
 
   const status = ref<UpdateStatus | null>(null);
   const now = ref(Date.now());
+  /** The version running now, shown beside the one being installed. */
+  const running = ref('');
   let unlisten: UnlistenFn | null = null;
   let clock = 0;
 
   onMounted(async () => {
     document.documentElement.classList.add('update-page');
+    void getVersion()
+      .then((version) => (running.value = version))
+      .catch(() => undefined);
     unlisten = await listen<UpdateStatus>('update-status', (event) => {
       status.value = event.payload;
     });
@@ -34,7 +40,9 @@
     const current = status.value;
     if (!current) return 'Zephyr update';
     if (current.phase === 'failed') return 'Update failed';
-    return `Zephyr ${current.version}`;
+    return running.value
+      ? `Zephyr ${running.value} → ${current.version}`
+      : `Zephyr ${current.version}`;
   });
 
   /** 0 to 1 for the bar; null when the size isn't known yet. */

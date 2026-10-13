@@ -1,5 +1,6 @@
 <script setup lang="ts">
   import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+  import { getVersion } from '@tauri-apps/api/app';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import {
     aiDetectLocal,
@@ -69,6 +70,10 @@
   } from '../types';
 
   const snapshot = ref<Snapshot | null>(null);
+  const appVersion = ref('');
+  void getVersion()
+    .then((version) => (appVersion.value = version))
+    .catch(() => undefined);
   const status = ref<string | null>(null);
   const formError = ref<string | null>(null);
   const listening = ref(false);
@@ -1249,6 +1254,7 @@
           </select>
         </label>
         <div class="field">
+          <span>Zephyr {{ appVersion || '…' }}{{ isDev ? ' (dev build)' : '' }}</span>
           <button type="button" @click="updates">Check for updates</button>
           <button v-if="isDev" type="button" @click="rehearse">Rehearse an update (dev)</button>
           <span v-if="updateMessage" class="hint-text">{{ updateMessage }}</span>
