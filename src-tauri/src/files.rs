@@ -68,6 +68,21 @@ impl Config {
     }
 }
 
+/// Folders macOS guards with a permission prompt, left out of the walk until allowed.
+pub fn protected_folders() -> Vec<PathBuf> {
+    if !cfg!(target_os = "macos") {
+        return Vec::new();
+    }
+    home()
+        .map(|home| {
+            ["Desktop", "Documents", "Downloads"]
+                .iter()
+                .map(|name| home.join(name))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 pub fn home() -> Option<PathBuf> {
     std::env::home_dir().filter(|path| path.is_absolute())
 }

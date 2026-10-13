@@ -25,6 +25,9 @@
     saveResumeSeconds,
     saveTheme,
     saveShowNowPlaying,
+    saveBugCapture,
+    permissionRequest,
+    revealCaptures,
     saveSteamGames,
     bookmarkSources,
     saveBookmarkSources,
@@ -49,6 +52,7 @@
     saveSettings,
   } from '../api';
   import SyncSection from './SyncSection.vue';
+  import PermissionsSection from './PermissionsSection.vue';
   import SelectMenu from './SelectMenu.vue';
   import { GLYPHS } from '../bar/glyphs';
   import {
@@ -223,6 +227,9 @@
     { id: 'nowplaying', label: 'Now playing', icon: 'music' },
     { id: 'files', label: 'Files', icon: 'folder' },
     { id: 'history', label: 'History', icon: 'clock' },
+    ...(navigator.userAgent.includes('Mac')
+      ? [{ id: 'permissions', label: 'Permissions', icon: 'shield' }]
+      : []),
   ];
   const active = ref('general');
   const search = ref('');
@@ -795,6 +802,26 @@
     }
   }
 
+  async function toggleBugCapture() {
+    if (!snapshot.value) return;
+    busy.value = true;
+    try {
+      apply(await saveBugCapture(!snapshot.value.bugCapture));
+    } catch (error) {
+      formError.value = errorMessage(error);
+    } finally {
+      busy.value = false;
+    }
+  }
+
+  async function showCaptures() {
+    try {
+      await revealCaptures();
+    } catch (error) {
+      formError.value = errorMessage(error);
+    }
+  }
+
   async function toggleNowPlaying() {
     if (!snapshot.value) return;
     busy.value = true;
@@ -1010,8 +1037,15 @@
     }
   }
 
+  // On a Mac this is the Permissions page's Allow: it clears a stale grant and opens the
+  // Accessibility list; the page then shows it turning on.
   async function allowPasting() {
-    clipPasteAllowed.value = await clipRequestPastePermission();
+    if (!navigator.userAgent.includes('Mac')) {
+      clipPasteAllowed.value = await clipRequestPastePermission();
+      return;
+    }
+    await permissionRequest('accessibility').catch(() => undefined);
+    open('permissions');
   }
 
   async function loadAi() {
@@ -1259,6 +1293,21 @@
           <button v-if="isDev" type="button" @click="rehearse">Rehearse an update (dev)</button>
           <span v-if="updateMessage" class="hint-text">{{ updateMessage }}</span>
         </div>
+        <h3>Bug reports</h3>
+        <label class="check">
+          <input
+            type="checkbox"
+            :checked="snapshot.bugCapture"
+            :disabled="busy"
+            @change="toggleBugCapture"
+          />
+          {{ isMacOs ? '⌃⌥R' : 'Ctrl+Alt+R' }} records the bar, {{ isMacOs ? '⌃⌥S' : 'Ctrl+Alt+S' }}
+          takes a snapshot
+        </label>
+        <div class="field inline">
+          <span class="hint-text">Only Zephyr's bar is captured, never other apps.</span>
+          <button type="button" @click="showCaptures">Show captures</button>
+        </div>
       </section>
 
       <section v-if="snapshot" v-show="!search && active === 'appearance'" id="section-appearance">
@@ -1293,8 +1342,8 @@
         <h2>Bookmarks</h2>
         <p class="lede">
           Bookmarks from your browsers show in the bar, read-only. Type a bookmark's exact name
-          (like "music") and Enter opens it; other matches show below without taking Enter. !bm
-          searches only bookmarks.
+          (like "music") and Enter opens it; other matches show below without taking Enter. Type
+          "bookmarks" in the bar to search only bookmarks.
         </p>
         <p v-if="!bookmarkProfiles" class="hint-text">Looking for browsers…</p>
         <p v-else-if="!bookmarkProfiles.length" class="hint-text">
@@ -1510,6 +1559,11 @@
       </section>
 
       <SyncSection v-if="snapshot" v-show="!search && active === 'sync'" />
+      <PermissionsSection
+        v-if="snapshot && SECTIONS.some((section) => section.id === 'permissions')"
+        v-show="!search && active === 'permissions'"
+        :active="!search && active === 'permissions'"
+      />
 
       <section v-if="snapshot" v-show="!search && active === 'claude'" id="section-claude">
         <h2>Claude</h2>
@@ -1680,8 +1734,8 @@
       <section v-if="snapshot" v-show="!search && active === 'shell'" id="section-shell">
         <h2>Shell</h2>
         <p class="lede">
-          Type &gt; or !sh in the bar to run a command there. Ctrl+Enter opens it in a terminal
-          instead, for commands that ask for input.
+          Type &gt; in the bar, or pick Shell, to run a command there. Ctrl+Enter opens it in a
+          terminal instead, for commands that ask for input.
         </p>
         <label v-if="shell?.hasWindowsTerminal" class="field">
           <span>Ctrl+Enter opens commands in</span>
@@ -1737,9 +1791,6 @@
           <div class="destination-row">
             <div>
               <strong>{{ destination.name }}</strong>
-              <span class="hint-text">{{
-                destination.triggers.map((trigger) => `!${trigger}`).join(' ')
-              }}</span>
               <span v-if="destination.builtin" class="badge">Built-in</span>
             </div>
             <div class="row-actions">

@@ -3,8 +3,6 @@ mod answer;
 mod apps;
 mod bookmarks;
 mod browser;
-// Bug recordings and snapshots exist only in dev builds; installed copies don't contain them.
-#[cfg(debug_assertions)]
 mod capture;
 mod claude;
 mod clipboard;
@@ -18,6 +16,7 @@ mod logger;
 mod note_windows;
 mod notes;
 mod nowplaying;
+mod permissions;
 mod power;
 mod query;
 mod secrets;
@@ -57,7 +56,6 @@ pub fn run() {
                     if event.state != ShortcutState::Pressed {
                         return;
                     }
-                    #[cfg(debug_assertions)]
                     if shortcut::is_capture(pressed) {
                         capture::toggle(app);
                         return;
@@ -115,7 +113,6 @@ pub fn run() {
             sync::init(app.path().app_data_dir()?);
             notes::init(config_dir.join("notes"));
             icons::init(app.path().app_cache_dir()?.join("icons"));
-            #[cfg(debug_assertions)]
             capture::init(app.path().app_data_dir()?.join("captures"));
             // Dev builds keep their key in a file instead of the keychain (secrets.rs), so
             // they keep their own history too; sharing one wiped it at every switch.
@@ -212,6 +209,11 @@ pub fn run() {
             commands::now_playing_control,
             commands::now_playing_focus,
             commands::save_show_now_playing,
+            commands::save_bug_capture,
+            commands::reveal_captures,
+            commands::allow_protected_folders,
+            commands::permissions_status,
+            commands::permission_request,
             commands::save_steam_games,
             commands::power_preview,
             commands::power_run,

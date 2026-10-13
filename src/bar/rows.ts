@@ -13,6 +13,8 @@ export interface RowCtx {
   parkedName: string;
   /** Ids behind Ctrl+1..8. */
   strip: string[];
+  /** The text as typed, for matching command names; empty in a scoped search. */
+  typed: string;
 }
 
 export interface Group {
@@ -76,19 +78,10 @@ export function jumpRows(ctx: RowCtx): Suggestion[] {
   }
   if (settings?.clipboard.enabled) {
     const keys = settings.clipboard.shortcut ? shortcutKeys(settings.clipboard.shortcut) : [];
-    rows.push(
-      view(
-        'clip',
-        'Clipboard history',
-        'glyph:clipboard',
-        keys.length ? { keys } : { hint: '!clip' }
-      )
-    );
+    rows.push(view('clip', 'Clipboard history', 'glyph:clipboard', keys.length ? { keys } : {}));
   }
   const noteKeys = settings?.notesShortcut ? shortcutKeys(settings.notesShortcut) : [];
-  rows.push(
-    view('notes', 'Notes', 'glyph:note', noteKeys.length ? { keys: noteKeys } : { hint: '!note' })
-  );
+  rows.push(view('notes', 'Notes', 'glyph:note', noteKeys.length ? { keys: noteKeys } : {}));
   if (ctx.jobs.length || settings?.claude.projects.length) {
     const running = ctx.jobs.filter(
       (job) => job.status === 'running' || job.status === 'queued'
@@ -102,10 +95,87 @@ export function jumpRows(ctx: RowCtx): Suggestion[] {
       ? parts.join(', ')
       : latest
         ? `${latest.status === 'failed' ? '✗' : '✓'} ${latest.title}`
-        : '!claude';
+        : '';
     rows.push(view('claude', 'Claude jobs', 'glyph:terminal', { hint }));
   }
   return rows;
+}
+
+interface Command {
+  id: string;
+  label: string;
+  icon: string;
+  /** Names it answers to besides its label, lowercase. */
+  names: string[];
+}
+
+// Every mode and scoped search, by name, so none needs a bang: typing "files" offers the
+// files search, "typing" the typing test.
+const COMMANDS: Command[] = [
+  { id: 'ai', label: 'Ask AI', icon: 'glyph:sparkle', names: ['ai', 'chat'] },
+  {
+    id: 'clip',
+    label: 'Clipboard history',
+    icon: 'glyph:clipboard',
+    names: ['clipboard', 'clip', 'paste history'],
+  },
+  { id: 'notes', label: 'Notes', icon: 'glyph:note', names: ['note'] },
+  { id: 'claude', label: 'Claude jobs', icon: 'glyph:terminal', names: ['claude', 'jobs'] },
+  { id: 'shell', label: 'Shell', icon: 'glyph:prompt', names: ['terminal', 'command line'] },
+  {
+    id: 'typing',
+    label: 'Typing test',
+    icon: 'glyph:keyboard',
+    names: ['typing', 'type test', 'monkeytype', 'wpm'],
+  },
+  {
+    id: 'scope:files',
+    label: 'Search files',
+    icon: 'glyph:folder',
+    names: ['files', 'file', 'find file', 'folders'],
+  },
+  {
+    id: 'scope:bookmarks',
+    label: 'Search bookmarks',
+    icon: 'glyph:link',
+    names: ['bookmarks', 'bookmark'],
+  },
+  {
+    id: 'scope:settings',
+    label: 'Search settings',
+    icon: 'glyph:gear',
+    names: ['settings', 'setting', 'preferences'],
+  },
+  { id: 'scope:apps', label: 'Search apps', icon: 'glyph:grid', names: ['apps', 'applications'] },
+];
+
+/**
+ * Commands whose name starts with the typed text (at least two letters), with whether the
+ * text is exactly one of its names; only an exact name may take Enter.
+ */
+export function commandRows(ctx: RowCtx): { rows: Suggestion[]; exact: number | null } {
+  const typed = ctx.typed.trim().toLowerCase().replace(/\s+/g, ' ');
+  if (typed.length < 2 || /^[!>]/.test(typed)) return { rows: [], exact: null };
+  const settings = ctx.snapshot;
+  const rows: Suggestion[] = [];
+  let exact: number | null = null;
+  for (const command of COMMANDS) {
+    if (command.id === 'clip' && !settings?.clipboard.enabled) continue;
+    const names = [command.label.toLowerCase(), ...command.names];
+    const words = command.label.toLowerCase().split(' ');
+    if (!names.some((name) => name.startsWith(typed)) && !words.some((w) => w.startsWith(typed))) {
+      continue;
+    }
+    if (exact === null && names.includes(typed)) exact = rows.length;
+    let keys: string[] = [];
+    if (command.id === 'clip' && settings?.clipboard.shortcut) {
+      keys = shortcutKeys(settings.clipboard.shortcut);
+    } else if (command.id === 'notes' && settings?.notesShortcut) {
+      keys = shortcutKeys(settings.notesShortcut);
+    }
+    rows.push(view(command.id, command.label, command.icon, keys.length ? { keys } : {}));
+  }
+  return { rows, exact };
 }
 
 /** The rows the bar lists, and which one Enter takes before the user moves. */
@@ -139,8 +209,20 @@ export function buildRows(
     });
     preselect = 0;
   }
+  // Commands by name sit below the results; one named exactly takes Enter, unless an app
+  // has that exact name too ("Terminal" opens Terminal).
+  const commands = commandRows(ctx);
+  const typed = ctx.typed.trim().toLowerCase();
+  const appNamed = rows.some((row) => row.kind === 'app' && row.label.toLowerCase() === typed);
+  if (commands.exact !== null && !appNamed) {
+    const [named] = commands.rows.splice(commands.exact, 1);
+    rows.unshift(named);
+    preselect = 0;
+  }
+  rows.push(...commands.rows);
   if (response.mode === 'search' && response.target && response.text) {
-    rows.push(...searchWithRows(response, ctx, rows[0]?.kind === 'query' ? response.target : null));
+    const hasQuery = rows.some((row) => row.kind === 'query');
+    rows.push(...searchWithRows(response, ctx, hasQuery ? response.target : null));
   }
   return { rows, preselect };
 }
@@ -157,7 +239,6 @@ function searchWithRows(
   }
   const shown = ids.slice(0, 3).map((id): Suggestion => {
     const index = ctx.strip.indexOf(id);
-    const trigger = destination(ctx, id)?.triggers[0];
     return {
       kind: 'searchWith',
       section: 'searchWith',
@@ -167,7 +248,7 @@ function searchWithRows(
       destinationId: id,
       icon: `dest:${id}`,
       keys: index >= 0 ? [CTRL, String(index + 1)] : undefined,
-      hint: index < 0 && trigger ? `!${trigger}` : '',
+      hint: '',
     };
   });
   const remaining = ids.length - shown.length;
@@ -239,6 +320,7 @@ export function primaryLabel(row: Suggestion | undefined, ctx: RowCtx): string |
     case 'noteNew':
       return 'Create note';
     case 'view':
+      if (row.destinationId.startsWith('scope:')) return row.label;
       return `Open ${row.label.replace(/^Back to /, '')}`;
     case 'more':
       return 'Show all destinations';

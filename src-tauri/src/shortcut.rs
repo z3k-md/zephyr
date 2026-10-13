@@ -27,13 +27,11 @@ static NOTES_ID: AtomicU32 = AtomicU32::new(0);
 static CAPTURE_ID: AtomicU32 = AtomicU32::new(0);
 static SNAPSHOT_ID: AtomicU32 = AtomicU32::new(0);
 
-#[cfg(debug_assertions)]
 pub fn is_capture(shortcut: &Shortcut) -> bool {
     let id = CAPTURE_ID.load(Ordering::SeqCst);
     id != 0 && shortcut.id() == id
 }
 
-#[cfg(debug_assertions)]
 pub fn is_snapshot(shortcut: &Shortcut) -> bool {
     let id = SNAPSHOT_ID.load(Ordering::SeqCst);
     id != 0 && shortcut.id() == id
@@ -44,6 +42,8 @@ pub fn is_snapshot(shortcut: &Shortcut) -> bool {
 pub struct Extras<'a> {
     pub clipboard: Option<&'a str>,
     pub notes: Option<&'a str>,
+    /// Ctrl+Alt+R and Ctrl+Alt+S for bug captures.
+    pub capture: bool,
 }
 
 /// Replaces the registered shortcuts with the summon shortcut and the optional ones. An
@@ -59,14 +59,15 @@ pub fn register(app: &AppHandle, shortcut: &str, extras: Extras<'_>) -> Result<(
     shortcuts
         .register(parsed)
         .map_err(|err| format!("Couldn't register {shortcut}: {err}"))?;
-    // Bug captures are a development tool; release builds don't have them at all.
-    #[cfg(debug_assertions)]
-    let (capture, snapshot) = (
-        Some(crate::capture::SHORTCUT),
-        Some(crate::capture::SNAPSHOT_SHORTCUT),
-    );
-    #[cfg(not(debug_assertions))]
-    let (capture, snapshot): (Option<&str>, Option<&str>) = (None, None);
+    // Bug captures, unless turned off in Settings.
+    let (capture, snapshot) = if extras.capture {
+        (
+            Some(crate::capture::SHORTCUT),
+            Some(crate::capture::SNAPSHOT_SHORTCUT),
+        )
+    } else {
+        (None, None)
+    };
     for (wanted, slot) in [
         (extras.clipboard, &CLIPBOARD_ID),
         (extras.notes, &NOTES_ID),

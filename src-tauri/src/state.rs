@@ -79,6 +79,13 @@ pub struct Persisted {
     pub steam_games: bool,
     /// Notes open in their own windows, reopened where they were when Zephyr starts.
     pub note_windows: Vec<NoteWindow>,
+    /// Whether Ctrl+Alt+R and Ctrl+Alt+S record and snapshot the bar for bug reports.
+    #[serde(default = "yes")]
+    pub bug_capture: bool,
+    /// Whether file search may read Desktop, Documents and Downloads. macOS asks before an
+    /// app reads them, so they wait until file search is first used rather than prompting
+    /// at launch.
+    pub protected_folders: bool,
 }
 
 /// The palettes Settings > Appearance offers; the first is the default.
@@ -183,6 +190,8 @@ impl Persisted {
             show_now_playing: true,
             steam_games: true,
             note_windows: Vec::new(),
+            bug_capture: true,
+            protected_folders: false,
         }
     }
 
@@ -235,6 +244,7 @@ impl Persisted {
                 .enabled
                 .then_some(self.clipboard.shortcut.as_str()),
             notes: Some(self.notes_shortcut.as_str()),
+            capture: self.bug_capture,
         }
     }
 
@@ -288,7 +298,11 @@ impl Persisted {
     }
 
     pub fn file_config(&self) -> files::Config {
-        files::Config::resolve(self.file_roots.as_deref(), &self.file_excludes)
+        let mut config = files::Config::resolve(self.file_roots.as_deref(), &self.file_excludes);
+        if !self.protected_folders {
+            config.excludes.extend(files::protected_folders());
+        }
+        config
     }
 
     /// Saves file search folders; `None` roots go back to the home folder.

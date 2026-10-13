@@ -27,6 +27,7 @@
     startBarDrag,
     prepareGrid,
     warmSuggestions,
+    allowProtectedFolders,
     captureEvent,
     captureRecording,
     powerPreview,
@@ -61,6 +62,30 @@
   const inputEl = ref<HTMLInputElement | null>(null);
   const snapshot = ref<Snapshot | null>(null);
   const query = ref('');
+  // A search narrowed to one kind of result (files, bookmarks, settings, apps). It shows as a
+  // label before the text, and is sent to Rust as the bang it stands for, which still works
+  // typed: "!f " becomes the Files label.
+  interface Scope {
+    bang: string;
+    name: string;
+  }
+  const SCOPES: Record<string, Scope> = {
+    f: { bang: 'f', name: 'Files' },
+    file: { bang: 'f', name: 'Files' },
+    files: { bang: 'f', name: 'Files' },
+    bm: { bang: 'bm', name: 'Bookmarks' },
+    bookmark: { bang: 'bm', name: 'Bookmarks' },
+    bookmarks: { bang: 'bm', name: 'Bookmarks' },
+    set: { bang: 'set', name: 'Settings' },
+    settings: { bang: 'set', name: 'Settings' },
+    app: { bang: 'app', name: 'Apps' },
+    apps: { bang: 'app', name: 'Apps' },
+  };
+  const scope = ref<Scope | null>(null);
+  /** What Rust sees: the text, behind its scope's bang when there is one. */
+  function typedText(): string {
+    return scope.value ? `!${scope.value.bang} ${query.value}` : query.value;
+  }
   const armedId = ref('google');
   // The last suggest reply and the text it was for; the rows are built from it, so command
   // rows and job counts stay current without asking again.
@@ -151,6 +176,7 @@
     parked: parked.value,
     parkedName: MODE_NAMES[parked.value] ?? '',
     strip: strip.value.map((destination) => destination.id),
+    typed: scope.value ? '' : lastQuery.value,
   }));
 
   // Power commands ("shutdown in 30m"): what the typed text would do, a pending schedule with
@@ -306,7 +332,7 @@
   const ghost = computed(() => {
     const typed = query.value;
     if (!typed.trim() || !caretAtEnd.value || mode.value === 'destinations') return '';
-    if (typed.startsWith('!') || typed.startsWith('>')) return '';
+    if (scope.value || typed.startsWith('!') || typed.startsWith('>')) return '';
     const lower = typed.toLowerCase();
     const target = selectedItem.value;
     let candidates: string[];
@@ -352,43 +378,41 @@
     });
   }
 
-  // Bug captures (Ctrl+Alt+R and Ctrl+Alt+S, dev builds only): while one runs, the bar logs
-  // what it does. A release bundle never listens for captures or sends them anything.
+  // Bug captures (Ctrl+Alt+R and Ctrl+Alt+S, unless turned off in Settings): while one runs,
+  // the bar logs what it does.
   const capturing = ref(false);
   function trace(kind: string, data: unknown) {
-    if (import.meta.env.DEV && capturing.value) {
+    if (capturing.value) {
       void captureEvent(kind, data).catch(() => undefined);
     }
   }
-  if (import.meta.env.DEV) {
-    void captureRecording()
-      .then((on) => (capturing.value = on))
-      .catch(() => undefined);
-    void listen<boolean>('capture-state', (event) => {
-      capturing.value = event.payload;
-      // Everything a snapshot needs to explain its one frame, and where a recording begins.
-      if (event.payload) {
-        trace('start', {
-          text: query.value,
-          completion: ghost.value,
-          mode: mode.value,
-          view: view.value,
-          armed: armed.value?.name ?? null,
-          selected: selected.value,
-          notice: notice.value,
-          rows: items.value.map((item) => ({
-            section: item.section,
-            kind: item.kind,
-            label: item.label,
-            hint: item.hint,
-          })),
-        });
-      }
-    }).then((unlisten) => unlistens.push(unlisten));
-    watch(query, (text) => trace('text', { text }));
-    watch(selected, (index) => trace('selected', { index, label: items.value[index]?.label }));
-    watch(notice, (text) => text && trace('notice', { text }));
-  }
+  void captureRecording()
+    .then((on) => (capturing.value = on))
+    .catch(() => undefined);
+  void listen<boolean>('capture-state', (event) => {
+    capturing.value = event.payload;
+    // Everything a snapshot needs to explain its one frame, and where a recording begins.
+    if (event.payload) {
+      trace('start', {
+        text: query.value,
+        completion: ghost.value,
+        mode: mode.value,
+        view: view.value,
+        armed: armed.value?.name ?? null,
+        selected: selected.value,
+        notice: notice.value,
+        rows: items.value.map((item) => ({
+          section: item.section,
+          kind: item.kind,
+          label: item.label,
+          hint: item.hint,
+        })),
+      });
+    }
+  }).then((unlisten) => unlistens.push(unlisten));
+  watch(query, (text) => trace('text', { text }));
+  watch(selected, (index) => trace('selected', { index, label: items.value[index]?.label }));
+  watch(notice, (text) => text && trace('notice', { text }));
 
   const isMac = navigator.userAgent.includes('Mac');
   const actionKey = isMac ? '⌘K' : 'Ctrl+K';
@@ -425,7 +449,6 @@
             destination.id === target
               ? `Search ${destination.name}`
               : `Send to ${destination.name}`,
-          hint: destination.triggers[0] ? `!${destination.triggers[0]}` : undefined,
           run: () => run(text, destination.id, false),
         });
       }
@@ -487,8 +510,8 @@
         // The main bar keeps its text only briefly.
         const limit = (snapshot.value?.resumeSeconds ?? 120) * 1000;
         const recent = hiddenAt > 0 && limit > 0 && Date.now() - hiddenAt < limit;
-        // A picker search (!f, !app, !set, !note) sticks until something is picked.
-        const picker = /^!(f|file|files|app|apps|set|settings|note|notes)\b/i.test(query.value);
+        // A scoped search (files, apps, settings, notes) sticks until something is picked.
+        const picker = scope.value !== null || /^!(note|notes)\b/i.test(query.value);
         if (!recent && !picker) resetForSummon();
         void focusInput();
       })
@@ -683,6 +706,9 @@
       enter('clip');
     } else if (id === 'notes') {
       void openNotes();
+    } else if (id.startsWith('scope:')) {
+      scope.value = SCOPES[id.slice(6)] ?? null;
+      void focusInput();
     }
   }
 
@@ -732,6 +758,12 @@
   }
 
   watch(query, () => {
+    const scoped = /^!([a-z]+)\s+(.*)$/is.exec(query.value);
+    if (!scope.value && scoped && SCOPES[scoped[1].toLowerCase()]) {
+      scope.value = SCOPES[scoped[1].toLowerCase()];
+      query.value = scoped[2];
+      return;
+    }
     if (/^!type$/i.test(query.value.trim()) && query.value.endsWith(' ')) {
       query.value = '';
       enter('typing');
@@ -766,6 +798,17 @@
     scheduleSuggest();
   });
 
+  watch(scope, (next) => {
+    // File search is the first use of Desktop, Documents and Downloads, so macOS asks now,
+    // in context, rather than at launch.
+    if (next?.bang === 'f' && snapshot.value && !snapshot.value.protectedFolders) {
+      void allowProtectedFolders().catch(() => undefined);
+    }
+    selected.value = -1;
+    userMoved = false;
+    scheduleSuggest();
+  });
+
   watch(armedId, (id) => {
     selected.value = -1;
     userMoved = false;
@@ -776,6 +819,7 @@
   /** Clears the main bar's text and selection; views and the parked workspace are untouched. */
   function resetForSummon() {
     query.value = '';
+    scope.value = null;
     selected.value = -1;
     notice.value = null;
     armedId.value = snapshot.value?.defaultDestinationId ?? armedId.value;
@@ -826,7 +870,7 @@
 
   async function loadSuggestions(current: number, includeRemote: boolean) {
     try {
-      const typed = query.value;
+      const typed = typedText();
       const destinationId = armedId.value;
       const asked = performance.now();
       trace('fetch', { text: typed, remote: includeRemote, generation: current });
@@ -1040,6 +1084,16 @@
       event.preventDefault();
       confirmArm.value = '';
       notice.value = null;
+      return;
+    }
+
+    // Esc, or Backspace on empty text, drops a scope before anything else.
+    if (
+      scope.value &&
+      (event.key === 'Escape' || (event.key === 'Backspace' && !event.repeat && !query.value))
+    ) {
+      event.preventDefault();
+      scope.value = null;
       return;
     }
 
@@ -1324,7 +1378,7 @@
         return;
       }
       if (item.kind === 'query') {
-        await run(query.value, armedId.value, true);
+        await run(typedText(), armedId.value, true);
         return;
       }
       if (item.kind === 'more') {
@@ -1353,7 +1407,7 @@
       return;
     }
 
-    await run(query.value, armedId.value, true);
+    await run(typedText(), armedId.value, true);
   }
 
   // Keyboard moves keep the selected row in view inside the scrolling list.
@@ -1400,6 +1454,7 @@
     try {
       await launchApp(appId);
       query.value = '';
+      scope.value = null;
       selected.value = -1;
       notice.value = null;
     } catch (error) {
@@ -1411,6 +1466,7 @@
     try {
       await openSetting(settingId);
       query.value = '';
+      scope.value = null;
       selected.value = -1;
       notice.value = null;
     } catch (error) {
@@ -1422,6 +1478,7 @@
     try {
       await openFile(path);
       query.value = '';
+      scope.value = null;
       selected.value = -1;
       notice.value = null;
     } catch (error) {
@@ -1433,6 +1490,7 @@
     try {
       await revealFile(path);
       query.value = '';
+      scope.value = null;
       selected.value = -1;
       notice.value = null;
     } catch (error) {
@@ -1459,18 +1517,21 @@
         outcome.kind === 'fileOpened'
       ) {
         query.value = '';
+        scope.value = null;
         selected.value = -1;
         notice.value = null;
         return;
       }
       if (outcome.kind === 'ask') {
         query.value = '';
+        scope.value = null;
         void enterAi(outcome.query);
         return;
       }
       if (outcome.kind === 'armed') {
         armedId.value = outcome.destinationId;
         query.value = '';
+        scope.value = null;
         notice.value = null;
         return;
       }
@@ -1494,7 +1555,11 @@
     aria-label="Zephyr"
     @mousedown.capture="dragWithCtrl"
   >
-    <span v-if="capturing" class="capture-dot" title="Recording · Ctrl+Alt+R stops" />
+    <span
+      v-if="capturing"
+      class="capture-dot"
+      :title="`Recording · ${isMac ? '⌃⌥R' : 'Ctrl+Alt+R'} stops`"
+    />
     <ApprovalCard
       v-if="approvals.length"
       :approval="approvals[0]"
@@ -1543,6 +1608,7 @@
           <circle cx="11" cy="11" r="6.5" />
           <path d="M16 16.5 20 20.5" />
         </svg>
+        <span v-if="scope" class="chip scope-label">{{ scope.name }}</span>
         <div class="query-wrap">
           <!-- The typed text is invisible here; it only pushes the completion into place. -->
           <span v-if="ghost" class="query ghost" aria-hidden="true"
@@ -1559,7 +1625,7 @@
             aria-controls="results"
             :aria-expanded="items.length > 0"
             :aria-activedescendant="selected >= 0 ? `result-${selected}` : undefined"
-            placeholder="Search, open an app, or ! for a destination"
+            :placeholder="scope ? `Search ${scope.name.toLowerCase()}` : 'Search or open an app'"
             spellcheck="false"
             autocomplete="off"
             autocapitalize="off"

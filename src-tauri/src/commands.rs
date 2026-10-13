@@ -222,6 +222,82 @@ pub fn save_file_folders(
     publish(&app, snapshot)
 }
 
+/// Lets file search into Desktop, Documents and Downloads; macOS asks for each as the index
+/// first reads it. Called when file search is first used, or from Settings › Permissions.
+#[tauri::command]
+pub fn allow_protected_folders(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Persisted, String> {
+    let snapshot = state.update(|persisted| {
+        persisted.protected_folders = true;
+        Ok(())
+    })?;
+    files::index().configure(snapshot.file_config(), file_cache_path(&app));
+    publish(&app, snapshot)
+}
+
+/// Each permission Zephyr can use on this system and whether it has it.
+#[tauri::command]
+pub async fn permissions_status(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::permissions::Permission>, String> {
+    let protected = state.snapshot()?.protected_folders;
+    tauri::async_runtime::spawn_blocking(move || crate::permissions::statuses(protected))
+        .await
+        .map_err(|err| err.to_string())
+}
+
+/// Allow on a permission: the system's own prompt when it has never been asked, otherwise
+/// the exact System Settings pane. Returns the statuses afterward.
+#[tauri::command]
+pub async fn permission_request(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<Vec<crate::permissions::Permission>, String> {
+    use crate::permissions::{self, Status};
+    let open_pane = |app: &AppHandle| {
+        if let Some(url) = permissions::pane(&id) {
+            let _ = app.opener().open_url(url, None::<&str>);
+        }
+    };
+    match id.as_str() {
+        "accessibility" => {
+            // The only one macOS won't grant from a dialog: the switch is in System Settings.
+            permissions::request_accessibility(&app.config().identifier);
+            open_pane(&app);
+        }
+        "automation" => {
+            let status = tauri::async_runtime::spawn_blocking(|| permissions::automation(true))
+                .await
+                .map_err(|err| err.to_string())?;
+            if status == Status::Denied {
+                open_pane(&app);
+            }
+        }
+        "files" => {
+            let snapshot = state.update(|persisted| {
+                persisted.protected_folders = true;
+                Ok(())
+            })?;
+            files::index().configure(snapshot.file_config(), file_cache_path(&app));
+            let _ = app.emit("state-changed", &snapshot);
+            let status = tauri::async_runtime::spawn_blocking(permissions::probe_files)
+                .await
+                .map_err(|err| err.to_string())?;
+            if status == Status::Denied {
+                open_pane(&app);
+            }
+        }
+        _ => return Err(format!("No permission called {id}")),
+    }
+    let protected = state.snapshot()?.protected_folders;
+    tauri::async_runtime::spawn_blocking(move || permissions::statuses(protected))
+        .await
+        .map_err(|err| err.to_string())
+}
+
 pub fn file_cache_path(app: &AppHandle) -> Option<std::path::PathBuf> {
     use tauri::Manager;
     app.path()
@@ -1121,22 +1197,41 @@ pub fn clear_shell_history(
     publish(&app, snapshot)
 }
 
-/// One entry for the running bug capture's log. Release builds have no captures, so there
-/// it does nothing.
+/// One entry for the running bug capture's log; does nothing when not recording.
 #[tauri::command]
 pub fn capture_event(kind: String, data: serde_json::Value) {
-    #[cfg(debug_assertions)]
     crate::capture::record(&kind, data);
-    #[cfg(not(debug_assertions))]
-    let _ = (kind, data);
 }
 
 #[tauri::command]
 pub fn capture_recording() -> bool {
-    #[cfg(debug_assertions)]
-    return crate::capture::recording();
-    #[cfg(not(debug_assertions))]
-    false
+    crate::capture::recording()
+}
+
+/// Turns the bug capture shortcuts on or off; turning them off ends a running recording.
+#[tauri::command]
+pub fn save_bug_capture(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> Result<Persisted, String> {
+    let snapshot = state.update(|persisted| {
+        persisted.bug_capture = enabled;
+        Ok(())
+    })?;
+    if !enabled && crate::capture::recording() {
+        crate::capture::toggle(&app);
+    }
+    shortcut::register(&app, &snapshot.summon_shortcut, snapshot.extra_shortcuts())?;
+    publish(&app, snapshot)
+}
+
+#[tauri::command]
+pub fn reveal_captures(app: AppHandle) -> Result<(), String> {
+    let folder = crate::capture::folder()?;
+    app.opener()
+        .open_path(folder.to_string_lossy(), None::<&str>)
+        .map_err(|err| err.to_string())
 }
 
 /// Makes the snap grid's window when Ctrl is first held on the bar, before any drag.
