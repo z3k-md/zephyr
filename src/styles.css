@@ -1533,6 +1533,23 @@ textarea.query {
   padding-left: 22px;
 }
 
+/* Tailwind's reset takes every list's markers away; notes want them back. */
+.notes-doc ul {
+  list-style: disc;
+}
+
+.notes-doc ul ul {
+  list-style: circle;
+}
+
+.notes-doc ol {
+  list-style: decimal;
+}
+
+.notes-doc li::marker {
+  color: var(--muted);
+}
+
 .notes-doc ul[data-type='taskList'] {
   padding-left: 2px;
   list-style: none;
