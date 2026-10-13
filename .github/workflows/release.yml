@@ -163,6 +163,13 @@ jobs:
           RELEASE_ID: ${{ needs.version.outputs.release_id }}
           REQUIRED_PLATFORMS: windows-x86_64,darwin-aarch64,darwin-x86_64
 
+      # Plain labels on the installers and a Download section on top of the notes.
+      - name: Label downloads
+        run: node scripts/release-downloads.mjs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ needs.version.outputs.release_id }}
+
       - name: Publish release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
