@@ -83,6 +83,8 @@ export interface Snapshot {
   bookmarksDisabled: string[];
   /** Whether the bar's footer shows the song or video playing. */
   showNowPlaying: boolean;
+  /** Whether installed Steam games are listed with the apps. */
+  steamGames: boolean;
 }
 
 /** The song or video playing on this computer. */
@@ -406,3 +408,10 @@ export interface BookmarkSource {
   count: number;
   enabled: boolean;
 }
+
+/** The update card: downloading, counting down to install, installing, or failed. */
+export type UpdateStatus =
+  | { phase: 'downloading'; version: string; downloaded: number; total: number | null }
+  | { phase: 'ready'; version: string; installAt: number }
+  | { phase: 'installing'; version: string }
+  | { phase: 'failed'; version: string; message: string };

@@ -8,6 +8,7 @@
     aiPresets,
     aiSetKey,
     checkForUpdates,
+    rehearseUpdate,
     claudeStatus,
     saveClaudeSettings,
     clipCanPaste,
@@ -23,6 +24,7 @@
     saveResumeSeconds,
     saveTheme,
     saveShowNowPlaying,
+    saveSteamGames,
     bookmarkSources,
     saveBookmarkSources,
     saveShellProgram,
@@ -328,6 +330,18 @@
     formError.value = null;
   }
 
+  async function toggleSteamGames() {
+    if (!snapshot.value) return;
+    busy.value = true;
+    try {
+      apply(await saveSteamGames(!snapshot.value.steamGames));
+    } catch (error) {
+      formError.value = errorMessage(error);
+    } finally {
+      busy.value = false;
+    }
+  }
+
   async function toggleStartup() {
     if (!snapshot.value) return;
     busy.value = true;
@@ -597,6 +611,17 @@
     updateMessage.value = 'Checking…';
     try {
       updateMessage.value = await checkForUpdates();
+    } catch (error) {
+      updateMessage.value = errorMessage(error);
+    }
+  }
+
+  // Dev builds can't install a real update; this plays the update card through instead.
+  const isDev = import.meta.env.DEV;
+  async function rehearse() {
+    try {
+      await rehearseUpdate();
+      updateMessage.value = 'Rehearsing a made-up update; watch the corner of your screen.';
     } catch (error) {
       updateMessage.value = errorMessage(error);
     }
@@ -1153,6 +1178,15 @@
           />
           Launch at startup
         </label>
+        <label class="check">
+          <input
+            type="checkbox"
+            :checked="snapshot.steamGames"
+            :disabled="busy"
+            @change="toggleSteamGames"
+          />
+          Show installed Steam games with apps
+        </label>
         <label class="field">
           <span>Default destination</span>
           <select :value="snapshot.defaultDestinationId" :disabled="busy" @change="changeDefault">
@@ -1216,6 +1250,7 @@
         </label>
         <div class="field">
           <button type="button" @click="updates">Check for updates</button>
+          <button v-if="isDev" type="button" @click="rehearse">Rehearse an update (dev)</button>
           <span v-if="updateMessage" class="hint-text">{{ updateMessage }}</span>
         </div>
       </section>

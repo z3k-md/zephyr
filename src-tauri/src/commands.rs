@@ -433,6 +433,37 @@ pub async fn check_for_updates(app: AppHandle) -> Result<String, String> {
     updater::check_for_updates(&app).await
 }
 
+/// What the update card shows now, for a card that just opened.
+#[tauri::command]
+pub fn update_status() -> Option<updater::Status> {
+    updater::current()
+}
+
+#[tauri::command]
+pub fn update_install_now(app: AppHandle) {
+    updater::install_now(&app);
+}
+
+#[tauri::command]
+pub fn update_later(app: AppHandle) {
+    updater::later(&app);
+}
+
+/// Dev builds only: plays the update card through with a made-up update.
+#[tauri::command]
+pub fn rehearse_update(app: AppHandle) -> Result<(), String> {
+    #[cfg(debug_assertions)]
+    {
+        updater::rehearse(&app);
+        Ok(())
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        let _ = app;
+        Err("Only dev builds can rehearse an update".into())
+    }
+}
+
 pub fn apply_autostart(app: &AppHandle, enabled: bool) -> Result<(), String> {
     let autostart = app.autolaunch();
     let currently = autostart
@@ -969,6 +1000,21 @@ pub async fn now_playing_focus(app: AppHandle) -> Result<bool, String> {
         crate::window::hide_bar(&app);
     }
     Ok(focused)
+}
+
+#[tauri::command]
+pub fn save_steam_games(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> Result<Persisted, String> {
+    let snapshot = state.update(|persisted| {
+        persisted.steam_games = enabled;
+        Ok(())
+    })?;
+    crate::steam::configure(enabled);
+    apps::AppIndex::rescan(apps::index());
+    publish(&app, snapshot)
 }
 
 #[tauri::command]

@@ -24,6 +24,7 @@ mod settings;
 mod shell;
 mod shortcut;
 mod state;
+mod steam;
 mod suggest;
 mod sync;
 mod template;
@@ -129,6 +130,7 @@ pub fn run() {
             browser::start();
             nowplaying::start(app.handle());
             bookmarks::configure(&snapshot.bookmarks_disabled);
+            steam::configure(snapshot.steam_games);
 
             if let Err(err) = tray::init(app) {
                 log::error!("tray setup failed: {err}");
@@ -204,6 +206,7 @@ pub fn run() {
             commands::now_playing_control,
             commands::now_playing_focus,
             commands::save_show_now_playing,
+            commands::save_steam_games,
             commands::power_preview,
             commands::power_run,
             commands::power_cancel,
@@ -286,6 +289,10 @@ pub fn run() {
             commands::show_bar,
             commands::open_settings,
             commands::check_for_updates,
+            commands::update_status,
+            commands::update_install_now,
+            commands::update_later,
+            commands::rehearse_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Zephyr");
