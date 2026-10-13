@@ -269,6 +269,14 @@ impl AppIndex {
             .and_then(|apps| apps.iter().find(|app| app.id == id).cloned())
     }
 
+    /// Scans again at the next chance, as after Steam games are turned on or off.
+    pub fn rescan(index: &'static AppIndex) {
+        if let Ok(mut at) = index.scanned_at.lock() {
+            *at = None;
+        }
+        AppIndex::refresh_if_stale(index);
+    }
+
     /// Starts a scan on a worker thread unless one is running or the last one is still fresh.
     pub fn refresh_if_stale(index: &'static AppIndex) {
         let fresh = index
@@ -282,7 +290,18 @@ impl AppIndex {
         }
         std::thread::spawn(move || {
             let started = Instant::now();
-            let found = discover();
+            let mut found = discover();
+            // Steam's own shortcuts are links (steam://), which the scan drops; games come
+            // from Steam's library files instead.
+            for game in crate::steam::games() {
+                if !found
+                    .iter()
+                    .any(|app| app.name.eq_ignore_ascii_case(&game.name))
+                {
+                    found.push(game);
+                }
+            }
+            found.sort_by_key(|app| app.name.to_lowercase());
             log::info!("found {} apps in {:?}", found.len(), started.elapsed());
             if let Ok(mut apps) = index.apps.write() {
                 *apps = found;
@@ -436,8 +455,16 @@ fn scan_bundles(roots: &[std::path::PathBuf], depth: usize) -> Vec<App> {
     apps
 }
 
-#[cfg(windows)]
+/// Opens an app, or a Steam game through Steam.
 pub fn launch(app: &App) -> Result<(), String> {
+    match app.id.strip_prefix(crate::steam::ID_PREFIX) {
+        Some(game) => crate::steam::launch(game, &app.name),
+        None => launch_native(app),
+    }
+}
+
+#[cfg(windows)]
+fn launch_native(app: &App) -> Result<(), String> {
     std::process::Command::new("explorer.exe")
         .arg(format!("shell:AppsFolder\\{}", app.id))
         .spawn()
@@ -446,7 +473,7 @@ pub fn launch(app: &App) -> Result<(), String> {
 }
 
 #[cfg(target_os = "macos")]
-pub fn launch(app: &App) -> Result<(), String> {
+fn launch_native(app: &App) -> Result<(), String> {
     std::process::Command::new("open")
         .arg(&app.id)
         .spawn()
@@ -455,7 +482,7 @@ pub fn launch(app: &App) -> Result<(), String> {
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-pub fn launch(app: &App) -> Result<(), String> {
+fn launch_native(app: &App) -> Result<(), String> {
     Err(format!("Launching {} isn't supported here yet", app.name))
 }
 

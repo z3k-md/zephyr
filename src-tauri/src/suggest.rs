@@ -403,7 +403,11 @@ fn app_item(app: &App) -> Suggestion {
     Suggestion {
         label: app.name.clone(),
         kind: "app".into(),
-        hint: "App".into(),
+        hint: if app.id.starts_with(crate::steam::ID_PREFIX) {
+            "Game".into()
+        } else {
+            "App".into()
+        },
         section: "apps".into(),
         icon: format!("app:{}", app.id),
         app_id: Some(app.id.clone()),

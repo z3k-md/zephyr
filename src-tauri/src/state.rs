@@ -74,6 +74,9 @@ pub struct Persisted {
     /// Whether the bar's footer shows the song or video playing, with its controls.
     #[serde(default = "yes")]
     pub show_now_playing: bool,
+    /// Whether installed Steam games are listed with the apps.
+    #[serde(default = "yes")]
+    pub steam_games: bool,
 }
 
 /// The palettes Settings > Appearance offers; the first is the default.
@@ -165,6 +168,7 @@ impl Persisted {
             power: None,
             bookmarks_disabled: Vec::new(),
             show_now_playing: true,
+            steam_games: true,
         }
     }
 

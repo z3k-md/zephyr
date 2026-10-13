@@ -19,6 +19,10 @@ pub fn init(dir: PathBuf) {
 /// The icon for an app id (an AppUserModelID on Windows) as a `data:` URL, at `size` pixels.
 /// Slow on a miss, so callers run it off the UI thread.
 pub fn app_icon(app_id: &str, size: u32) -> Option<String> {
+    // Steam games bring their own icon from Steam's art cache.
+    if let Some(game) = app_id.strip_prefix(crate::steam::ID_PREFIX) {
+        return crate::steam::icon(game);
+    }
     let size = size.clamp(16, 256);
     let key = hex(&Sha256::digest(format!("{app_id}\n{size}").as_bytes()));
     let cached = DIR.get().map(|dir| dir.join(format!("{key}.png")));
