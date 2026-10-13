@@ -19,6 +19,7 @@ import type {
   BookmarkSource,
   MediaControl,
   NowPlaying,
+  UpdateStatus,
   PowerAction,
   PowerPreview,
   ShellEvent,
@@ -537,4 +538,26 @@ export function nowPlayingFocus(): Promise<boolean> {
 
 export function saveShowNowPlaying(show: boolean): Promise<Snapshot> {
   return invoke<Snapshot>('save_show_now_playing', { show });
+}
+
+/** What the update card shows now; later changes arrive as `update-status` events. */
+export function updateStatus(): Promise<UpdateStatus | null> {
+  return invoke<UpdateStatus | null>('update_status');
+}
+
+export function updateInstallNow(): Promise<void> {
+  return invoke('update_install_now');
+}
+
+export function updateLater(): Promise<void> {
+  return invoke('update_later');
+}
+
+/** Dev builds only: plays the update card through with a made-up update. */
+export function rehearseUpdate(): Promise<void> {
+  return invoke('rehearse_update');
+}
+
+export function saveSteamGames(enabled: boolean): Promise<Snapshot> {
+  return invoke<Snapshot>('save_steam_games', { enabled });
 }
