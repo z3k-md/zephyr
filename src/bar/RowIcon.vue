@@ -12,6 +12,8 @@
   const glyph = computed(() => {
     if (props.icon.startsWith('glyph:')) return GLYPHS[props.icon.slice(6)] ?? null;
     if (props.icon === 'dest:ai') return GLYPHS.sparkle;
+    // A Steam game whose art isn't in Steam's cache (or hasn't loaded yet).
+    if (props.icon.startsWith('app:steam:')) return GLYPHS.gamepad;
     return null;
   });
 
