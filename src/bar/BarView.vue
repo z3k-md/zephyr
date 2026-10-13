@@ -82,7 +82,6 @@
     ai: 'Ask AI',
     typing: 'typing test',
     shell: 'Shell',
-    notes: 'Notes',
   };
   const view = ref<View>('root');
   const parked = ref('');
@@ -683,7 +682,6 @@
       clipQuery.value = '';
       enter('clip');
     } else if (id === 'notes') {
-      parked.value = 'notes';
       void openNotes();
     }
   }
@@ -1226,7 +1224,6 @@
   }
 
   async function openNote(item: Suggestion) {
-    parked.value = 'notes';
     try {
       if (item.kind === 'note') await openNotes(item.noteId);
       else await openNotes(undefined, item.query);

@@ -8,14 +8,16 @@
   import { TaskItem, TaskList } from '@tiptap/extension-list';
   import { Placeholder } from '@tiptap/extensions';
   import {
+    captureEvent,
     dispatch,
     errorMessage,
-    leaveNotes,
     noteCreate,
     noteDelete,
     noteGet,
     noteSave,
     notesList,
+    openNoteWindow,
+    closeNoteWindow,
     pageReady,
     revealNotes,
   } from '../api';
@@ -92,22 +94,53 @@
   onMounted(async () => {
     pageReady();
     window.addEventListener('keydown', onKey, true);
-    unlisten = await listen<string>('notes-open', (event) => {
-      void openNote(event.payload);
-    });
+    // The window's close button: save (or drop an empty note) first, then close.
+    unlisten = await listen('note-close', () => void closeWindow());
+    // Each window holds the one note it was opened on.
     const requested = new URLSearchParams(window.location.search).get('id');
-    if (requested) {
-      await openNote(requested);
-    } else {
-      const recent = await notesList('');
-      if (recent.length) await openNote(recent[0].id);
-      else await newNote();
-    }
+    if (requested) await openNote(requested);
   });
+
+  async function closeWindow() {
+    await leave();
+    await closeNoteWindow().catch(() => undefined);
+  }
+
+  /** A note picked from the list or made from its search: it opens in a window of its own,
+   *  and an untouched new note this window was holding goes away instead of lingering. */
+  async function showElsewhere(id: string) {
+    browsing.value = false;
+    await openNoteWindow(id).catch((error) => (status.value = errorMessage(error)));
+    if (!html()) await closeWindow();
+  }
+
+  // Bug captures (Ctrl+Alt+S and Ctrl+Alt+R, dev builds only): when one starts, the log
+  // gets what this window is showing, so a snapshot of Notes explains itself.
+  let unlistenCapture: UnlistenFn | null = null;
+  if (import.meta.env.DEV) {
+    void listen<boolean>('capture-state', (event) => {
+      if (!event.payload) return;
+      const selection = editor.value?.state.selection;
+      void captureEvent('notes', {
+        noteId: noteId.value,
+        words: words.value,
+        browsing: browsing.value,
+        search: search.value,
+        listed: notes.value.map((note) => note.title),
+        status: status.value,
+        confirmDelete: confirmDelete.value,
+        block: block.value,
+        font: font.value,
+        size: size.value,
+        selection: selection ? { from: selection.from, to: selection.to } : null,
+      }).catch(() => undefined);
+    }).then((stop) => (unlistenCapture = stop));
+  }
 
   onBeforeUnmount(() => {
     window.removeEventListener('keydown', onKey, true);
     unlisten?.();
+    unlistenCapture?.();
     void flush();
     editor.value?.destroy();
   });
@@ -197,24 +230,29 @@
     }
   }
 
-  async function newNote() {
-    if (noteId.value && !html()) {
+  /** From the list: this window's own note just closes the list; any other opens beside it. */
+  async function pick(id: string) {
+    if (id === noteId.value) {
       browsing.value = false;
       await focusEditor();
       return;
     }
-    await leave();
-    try {
-      noteId.value = await noteCreate('');
-      savedBody = '';
-      browsing.value = false;
-      setContent('');
-      await focusEditor();
-    } catch (error) {
-      status.value = errorMessage(error);
-    }
+    await flush();
+    await showElsewhere(id);
   }
 
+  /** A new note opens in a new window, unless this one is still empty. */
+  async function newNote() {
+    browsing.value = false;
+    if (noteId.value && !html()) {
+      await focusEditor();
+      return;
+    }
+    await flush();
+    await openNoteWindow(null).catch((error) => (status.value = errorMessage(error)));
+  }
+
+  /** Deleting a note closes its window. */
   async function removeNote() {
     if (!noteId.value) return;
     if (!confirmDelete.value && html()) {
@@ -225,9 +263,7 @@
     const id = noteId.value;
     noteId.value = null;
     await noteDelete(id).catch(() => undefined);
-    const rest = await notesList('');
-    if (rest.length) await openNote(rest[0].id);
-    else await newNote();
+    await closeNoteWindow().catch(() => undefined);
   }
 
   async function copyText() {
@@ -267,14 +303,9 @@
 
   async function createFromSearch() {
     const text = search.value.trim();
-    await leave();
+    await flush();
     try {
-      noteId.value = await noteCreate(text);
-      const note = await noteGet(noteId.value);
-      savedBody = note.body;
-      browsing.value = false;
-      setContent(note.body);
-      await focusEditor();
+      await showElsewhere(await noteCreate(text));
     } catch (error) {
       status.value = errorMessage(error);
     }
@@ -340,10 +371,10 @@
       void removeNote();
       return;
     }
-    // Esc leaves Notes as the sticky mode and returns to the bar.
-    if (!browsing.value && event.key === 'Escape') {
+    // Ctrl+W closes this note's window; the note stays.
+    if (modifier && !event.shiftKey && event.code === 'KeyW') {
       event.preventDefault();
-      void flush().then(() => leaveNotes());
+      void closeWindow();
       return;
     }
     if (!browsing.value) return;
@@ -360,7 +391,7 @@
     } else if (event.key === 'Enter') {
       event.preventDefault();
       const picked = notes.value[browseIndex.value];
-      if (picked) void openNote(picked.id);
+      if (picked) void pick(picked.id);
       else if (search.value.trim()) void createFromSearch();
     }
   }
@@ -416,7 +447,7 @@
           :key="note.id"
           :class="{ selected: index === browseIndex, current: note.id === noteId }"
           @mousemove="browseIndex = index"
-          @click="openNote(note.id)"
+          @click="pick(note.id)"
         >
           <strong>{{ note.title }}</strong>
           <span>{{ note.snippet || 'No more text' }}</span>

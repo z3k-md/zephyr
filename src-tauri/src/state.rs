@@ -77,6 +77,8 @@ pub struct Persisted {
     /// Whether installed Steam games are listed with the apps.
     #[serde(default = "yes")]
     pub steam_games: bool,
+    /// Notes open in their own windows, reopened where they were when Zephyr starts.
+    pub note_windows: Vec<NoteWindow>,
 }
 
 /// The palettes Settings > Appearance offers; the first is the default.
@@ -84,6 +86,17 @@ pub const THEMES: &[&str] = &["violet", "graphite", "ocean", "forest", "ember"];
 
 fn default_theme() -> String {
     THEMES[0].into()
+}
+
+/// A note open in its own window, and where that window was, in physical pixels.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteWindow {
+    pub id: String,
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -169,6 +182,7 @@ impl Persisted {
             bookmarks_disabled: Vec::new(),
             show_now_playing: true,
             steam_games: true,
+            note_windows: Vec::new(),
         }
     }
 

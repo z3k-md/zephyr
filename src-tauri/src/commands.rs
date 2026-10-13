@@ -708,18 +708,27 @@ pub async fn open_notes(
         (None, Some(body)) => Some(notes::create(&body)?),
         (None, None) => None,
     };
-    remember_notes_mode(&app);
     window::hide_bar(&app);
     window::open_notes(&app, id.as_deref())
 }
 
-/// Opening notes makes them the place Zephyr returns to.
-pub fn remember_notes_mode(app: &AppHandle) {
-    use tauri::Manager;
-    let _ = app.state::<AppState>().update(|persisted| {
-        persisted.active_mode = "notes".into();
-        Ok(())
-    });
+/// From a note's window: opens `id`, or a new note when none is given, in a window of its
+/// own (or brings its window forward). Returns the note's id.
+// Async for the same reason as open_settings: it may build a webview.
+#[tauri::command]
+pub async fn open_note_window(app: AppHandle, id: Option<String>) -> Result<String, String> {
+    let id = match id {
+        Some(id) => id,
+        None => notes::create("")?,
+    };
+    crate::note_windows::open(&app, &id, true)?;
+    Ok(id)
+}
+
+/// From a note's window, once it has saved: closes that window. The note stays.
+#[tauri::command]
+pub fn close_note_window(app: AppHandle, window: tauri::WebviewWindow) {
+    crate::note_windows::close(&app, &window);
 }
 
 #[tauri::command]
@@ -1197,21 +1206,6 @@ pub fn set_active_mode(state: State<'_, AppState>, mode: String) -> Result<(), S
         persisted.active_mode = mode.chars().take(32).collect();
         Ok(())
     })?;
-    Ok(())
-}
-
-/// Leaves Notes as the sticky mode: hides the notes window and brings back the bar.
-#[tauri::command]
-pub fn leave_notes(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    use tauri::Manager;
-    state.update(|persisted| {
-        persisted.active_mode.clear();
-        Ok(())
-    })?;
-    if let Some(notes) = app.get_webview_window("notes") {
-        let _ = notes.hide();
-    }
-    window::show_bar(&app);
     Ok(())
 }
 
