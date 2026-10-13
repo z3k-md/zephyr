@@ -62,6 +62,9 @@
     "createUpdaterArtifacts": true,
     "category": "Utility",
     "shortDescription": "Desktop dispatch bar",
+    "macOS": {
+      "hardenedRuntime": false
+    },
     "windows": {
       "nsis": {
         "installerIcon": "icons/icon.ico",

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Zephyr uses System Events to shut down, restart or log out when you ask it to.</string>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>Zephyr indexes this folder so you can find your files from the bar. Nothing leaves your Mac.</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>Zephyr indexes this folder so you can find your files from the bar. Nothing leaves your Mac.</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>Zephyr indexes this folder so you can find your files from the bar. Nothing leaves your Mac.</string>
+</dict>
+</plist>

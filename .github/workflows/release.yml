@@ -110,8 +110,11 @@ jobs:
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile
 
-      # Signs and notarizes with a Developer ID when the Apple secrets exist. Otherwise the app
-      # is ad-hoc signed, which still installs (via right-click > Open) and still auto-updates.
+      # Signs with the certificate in the Apple secrets: a self-signed one keeps the same
+      # identity from release to release, so macOS keeps Zephyr's permissions across updates.
+      # Notarizing also needs a Developer ID and APPLE_ID, APPLE_PASSWORD and APPLE_TEAM_ID;
+      # empty ones aren't set, so Tauri skips notarizing. With no certificate at all the app is
+      # ad-hoc signed, which still installs and updates but loses permissions every update.
       - name: Configure macOS signing
         if: runner.os == 'macOS'
         shell: bash
@@ -125,7 +128,9 @@ jobs:
         run: |
           if [ -n "$APPLE_CERTIFICATE" ]; then
             for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
-              echo "$name=${!name}" >> "$GITHUB_ENV"
+              if [ -n "${!name}" ]; then
+                echo "$name=${!name}" >> "$GITHUB_ENV"
+              fi
             done
           else
             echo "APPLE_SIGNING_IDENTITY=-" >> "$GITHUB_ENV"
