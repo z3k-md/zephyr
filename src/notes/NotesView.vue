@@ -114,28 +114,26 @@
     if (!html()) await closeWindow();
   }
 
-  // Bug captures (Ctrl+Alt+S and Ctrl+Alt+R, dev builds only): when one starts, the log
+  // Bug captures (Ctrl+Alt+S and Ctrl+Alt+R): when one starts, the log
   // gets what this window is showing, so a snapshot of Notes explains itself.
   let unlistenCapture: UnlistenFn | null = null;
-  if (import.meta.env.DEV) {
-    void listen<boolean>('capture-state', (event) => {
-      if (!event.payload) return;
-      const selection = editor.value?.state.selection;
-      void captureEvent('notes', {
-        noteId: noteId.value,
-        words: words.value,
-        browsing: browsing.value,
-        search: search.value,
-        listed: notes.value.map((note) => note.title),
-        status: status.value,
-        confirmDelete: confirmDelete.value,
-        block: block.value,
-        font: font.value,
-        size: size.value,
-        selection: selection ? { from: selection.from, to: selection.to } : null,
-      }).catch(() => undefined);
-    }).then((stop) => (unlistenCapture = stop));
-  }
+  void listen<boolean>('capture-state', (event) => {
+    if (!event.payload) return;
+    const selection = editor.value?.state.selection;
+    void captureEvent('notes', {
+      noteId: noteId.value,
+      words: words.value,
+      browsing: browsing.value,
+      search: search.value,
+      listed: notes.value.map((note) => note.title),
+      status: status.value,
+      confirmDelete: confirmDelete.value,
+      block: block.value,
+      font: font.value,
+      size: size.value,
+      selection: selection ? { from: selection.from, to: selection.to } : null,
+    }).catch(() => undefined);
+  }).then((stop) => (unlistenCapture = stop));
 
   onBeforeUnmount(() => {
     window.removeEventListener('keydown', onKey, true);
