@@ -15,6 +15,7 @@ mod files;
 mod history;
 mod icons;
 mod logger;
+mod note_windows;
 mod notes;
 mod nowplaying;
 mod power;
@@ -66,10 +67,7 @@ pub fn run() {
                     }
                     if shortcut::is_clipboard(pressed) {
                         window::show_clipboard(app);
-                    } else if shortcut::is_notes(pressed) || notes_is_sticky(app) {
-                        if shortcut::is_notes(pressed) {
-                            commands::remember_notes_mode(app);
-                        }
+                    } else if shortcut::is_notes(pressed) {
                         let app = app.clone();
                         tauri::async_runtime::spawn(async move {
                             if let Err(err) = window::open_notes(&app, None) {
@@ -176,6 +174,7 @@ pub fn run() {
                 let _ = main_window.hide();
             }
 
+            note_windows::restore(app.handle());
             register_links(app);
 
             log::info!("Zephyr is running");
@@ -237,7 +236,8 @@ pub fn run() {
             commands::clear_shell_history,
             commands::pick_folder,
             commands::set_active_mode,
-            commands::leave_notes,
+            commands::open_note_window,
+            commands::close_note_window,
             commands::save_open_behavior,
             commands::sync_status,
             commands::sync_google_sign_in,
@@ -325,11 +325,4 @@ fn register_links(app: &tauri::App) {
             deeplink::handle(app.handle(), &url);
         }
     }
-}
-
-/// While Notes is the active mode, the summon shortcut opens notes instead of the bar.
-fn notes_is_sticky(app: &tauri::AppHandle) -> bool {
-    app.try_state::<AppState>()
-        .and_then(|state| state.snapshot().ok())
-        .is_some_and(|snapshot| snapshot.return_to_mode && snapshot.active_mode == "notes")
 }

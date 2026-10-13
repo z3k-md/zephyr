@@ -1,10 +1,12 @@
-//! Dev-build bug captures: Ctrl+Alt+R records the bar for up to 30 seconds as PNG frames
-//! plus a timestamped log of what the bar did (keys pressed in it, the text, the results and
-//! the selected row, suggestion fetches, size changes, errors). Each capture is a folder
-//! under `captures/` in Zephyr's data folder; the newest 20 are kept.
+//! Dev-build bug captures: Ctrl+Alt+R records a Zephyr window (the bar, Notes or Settings,
+//! whichever is in front) for up to 30 seconds as PNG frames, plus a timestamped log of what
+//! its page did (for the bar: keys pressed in it, the text, the results and the selected
+//! row, suggestion fetches, size changes, errors). Each capture is a folder under
+//! `captures/` in Zephyr's data folder; the newest 20 are kept.
 //!
-//! Only Zephyr's own windows are involved: frames are taken of the bar's rectangle while it
-//! is showing, and keys are logged by the bar's page, so nothing typed elsewhere is seen.
+//! Only Zephyr's own windows are involved: frames are taken of that window's rectangle
+//! while it is showing, and keys are logged by Zephyr's pages, so nothing typed elsewhere is
+//! seen.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -78,9 +80,19 @@ fn begin(suffix: &str) -> Result<(PathBuf, Arc<AtomicBool>), String> {
     Ok((dir, stop_flag))
 }
 
-/// Saves one frame of the bar, if it is showing, as frame-NNNN.png.
-fn save_frame(app: &AppHandle, dir: &Path, frame: u32) -> bool {
-    let Some(window) = app.get_webview_window("main") else {
+/// The window a capture is of: the Zephyr window in front (the bar, a note, Settings), else
+/// the bar.
+fn target(app: &AppHandle) -> String {
+    app.webview_windows()
+        .into_iter()
+        .find(|(_, window)| window.is_focused().unwrap_or(false))
+        .map(|(label, _)| label)
+        .unwrap_or_else(|| "main".into())
+}
+
+/// Saves one frame of `label`'s window, if it is showing, as frame-NNNN.png.
+fn save_frame(app: &AppHandle, label: &str, dir: &Path, frame: u32) -> bool {
+    let Some(window) = app.get_webview_window(label) else {
         return false;
     };
     if !window.is_visible().unwrap_or(false) {
@@ -105,7 +117,9 @@ fn save_frame(app: &AppHandle, dir: &Path, frame: u32) -> bool {
 }
 
 fn start(app: &AppHandle) -> Result<(), String> {
+    let label = target(app);
     let (dir, stop_flag) = begin("")?;
+    record("window", json!({ "label": label }));
     let _ = app.emit("capture-state", true);
     log::info!("capture started: {}", dir.display());
 
@@ -115,7 +129,7 @@ fn start(app: &AppHandle) -> Result<(), String> {
         let mut frame = 0u32;
         while !stop_flag.load(Ordering::SeqCst) && began.elapsed() < LIMIT {
             let tick = Instant::now();
-            if save_frame(&app, &dir, frame + 1) {
+            if save_frame(&app, &label, &dir, frame + 1) {
                 frame += 1;
             }
             std::thread::sleep(FRAME_EVERY.saturating_sub(tick.elapsed()));
@@ -127,12 +141,13 @@ fn start(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Ctrl+Alt+S: one frame of the bar as it is now, plus the bar's state (text, results,
-/// selected row) in the log. The frame is taken first, so the recording dot isn't in it.
+/// Ctrl+Alt+S: one frame of the Zephyr window in front as it is now, plus its page's state
+/// (the bar's text, results and selected row; the open note) in the log. The frame is taken first, so the recording dot isn't in it.
 pub fn snapshot(app: &AppHandle) {
     if recording() {
         return;
     }
+    let label = target(app);
     let dir = match begin("-snap") {
         Ok((dir, _)) => dir,
         Err(err) => {
@@ -140,10 +155,11 @@ pub fn snapshot(app: &AppHandle) {
             return;
         }
     };
-    if !save_frame(app, &dir, 1) {
+    record("window", json!({ "label": label }));
+    if !save_frame(app, &label, &dir, 1) {
         record(
             "note",
-            json!({ "text": "The bar wasn't showing, so there is no frame" }),
+            json!({ "text": "No Zephyr window was showing, so there is no frame" }),
         );
     }
     // The page answers with its state when told a capture is running.

@@ -413,45 +413,17 @@ pub fn set_bar_height(app: &AppHandle, height: f64, width: Option<f64>) -> Resul
 }
 
 /// Opens or focuses the floating notes window, on note `id` when given.
+/// Opens notes: `id` in its own window, or with none, brings the open notes forward (or the
+/// newest note when none is open). See note_windows.
 pub fn open_notes(app: &AppHandle, id: Option<&str>) -> Result<(), String> {
-    if let Some(window) = app.get_webview_window("notes") {
-        if let Some(id) = id {
-            let _ = window.emit("notes-open", id);
-        }
-        let _ = window.show();
-        let _ = window.unminimize();
-        focus_on_main_thread(app, window);
-        return Ok(());
-    }
-    let url = match id {
-        Some(id) => format!("index.html?view=notes&id={}", urlencoding::encode(id)),
-        None => "index.html?view=notes".into(),
-    };
-    // Painted dark and kept hidden until the page has drawn, so it never flashes white.
-    let window = WebviewWindowBuilder::new(app, "notes", WebviewUrl::App(url.into()))
-        .title("Notes")
-        .background_color(WINDOW_BACKGROUND)
-        .transparent(true)
-        .effects(glass())
-        .visible(false)
-        .inner_size(460.0, 560.0)
-        .min_inner_size(320.0, 240.0)
-        .center()
-        .resizable(true)
-        .always_on_top(true)
-        .visible_on_all_workspaces(true)
-        .focused(true)
-        .build()
-        .map_err(|err| err.to_string())?;
-    reveal_soon(app, window);
-    Ok(())
+    crate::note_windows::show(app, id)
 }
 
 /// Settings and notes are see-through over a blurred, darkened copy of what is behind them;
 /// the page adds the purple tint. Until the page paints the window stays hidden.
-const WINDOW_BACKGROUND: tauri::window::Color = tauri::window::Color(0, 0, 0, 0);
+pub(crate) const WINDOW_BACKGROUND: tauri::window::Color = tauri::window::Color(0, 0, 0, 0);
 
-fn glass() -> tauri::utils::config::WindowEffectsConfig {
+pub(crate) fn glass() -> tauri::utils::config::WindowEffectsConfig {
     use tauri::window::{Effect, EffectState, EffectsBuilder};
     EffectsBuilder::new()
         .effect(Effect::HudWindow)
@@ -489,13 +461,15 @@ pub fn make_bar_glass(window: &tauri::WebviewWindow) -> Result<(), String> {
 
 /// Shows a window built hidden once its page says it has drawn, or after a moment if it
 /// never does.
-fn reveal_soon(app: &AppHandle, window: tauri::WebviewWindow) {
+pub(crate) fn reveal_soon(app: &AppHandle, window: tauri::WebviewWindow) {
     let app = app.clone();
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(1500));
         if !window.is_visible().unwrap_or(true) {
             let _ = window.show();
-            focus_on_main_thread(&app, window);
+            if !crate::note_windows::take_quiet(window.label()) {
+                focus_on_main_thread(&app, window);
+            }
         }
     });
 }
@@ -506,7 +480,10 @@ pub fn page_ready(app: &AppHandle, label: &str) {
         && !window.is_visible().unwrap_or(true)
     {
         let _ = window.show();
-        focus_on_main_thread(app, window);
+        // A note reopened at start comes up without taking focus.
+        if !crate::note_windows::take_quiet(label) {
+            focus_on_main_thread(app, window);
+        }
     }
 }
 
@@ -548,6 +525,11 @@ pub fn open_settings(app: &AppHandle, section: Option<&str>) -> Result<(), Strin
 
 // open_settings can be called from an async command's worker thread; the Win32 foreground
 // dance attaches the calling thread's input queue, so it has to run on the UI thread.
+/// Brings one of Zephyr's windows to the front and gives it the keyboard.
+pub(crate) fn focus_window(app: &AppHandle, window: tauri::WebviewWindow) {
+    focus_on_main_thread(app, window);
+}
+
 fn focus_on_main_thread(app: &AppHandle, window: tauri::WebviewWindow) {
     let result = app.run_on_main_thread(move || {
         force_foreground(&window);

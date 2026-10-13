@@ -399,8 +399,14 @@ export function setActiveMode(mode: string): Promise<void> {
   return invoke('set_active_mode', { mode });
 }
 
-export function leaveNotes(): Promise<void> {
-  return invoke('leave_notes');
+/** From a note's window: opens `id` (a new note when null) in a window of its own. */
+export function openNoteWindow(id: string | null): Promise<string> {
+  return invoke<string>('open_note_window', { id });
+}
+
+/** From a note's window, once it has saved: closes that window; the note stays. */
+export function closeNoteWindow(): Promise<void> {
+  return invoke('close_note_window');
 }
 
 export function saveOpenBehavior(
