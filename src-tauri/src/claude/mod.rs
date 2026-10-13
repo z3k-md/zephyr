@@ -783,11 +783,15 @@ fn watchdog(app: AppHandle, job_id: String, pid: u32, minutes: u32) {
 }
 
 fn git(folder: &Path, args: &[&str]) -> Option<String> {
-    let output = std::process::Command::new("git")
-        .current_dir(folder)
-        .args(args)
-        .output()
-        .ok()?;
+    let mut command = std::process::Command::new("git");
+    // git is a console program; without this each call flashes a window on Windows.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let output = command.current_dir(folder).args(args).output().ok()?;
     let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
     (output.status.success() && !text.is_empty()).then_some(text)
 }
