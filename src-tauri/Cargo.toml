@@ -63,6 +63,9 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
     "NSRunningApplication",
     "NSWindow",
     "NSWorkspace",
+    "NSGraphicsContext",
+    "NSImage",
+    "objc2-core-graphics",
 ] }
 objc2-core-graphics = "0.3"
 objc2-foundation = "0.3"
