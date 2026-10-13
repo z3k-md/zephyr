@@ -83,6 +83,8 @@ export interface Snapshot {
   bookmarksDisabled: string[];
   /** Whether the bar's footer shows the song or video playing. */
   showNowPlaying: boolean;
+  bugCapture: boolean;
+  protectedFolders: boolean;
   /** Whether installed Steam games are listed with the apps. */
   steamGames: boolean;
 }
@@ -362,6 +364,12 @@ export interface SyncDevice {
   lastSeenAt: string | null;
   revokedAt: string | null;
   createdAt: string | null;
+}
+
+export type PermissionId = 'accessibility' | 'automation' | 'files';
+export interface Permission {
+  id: PermissionId;
+  status: 'granted' | 'denied' | 'notAsked' | 'unknown';
 }
 
 export interface SyncStatus {

@@ -313,6 +313,18 @@ section > button {
   padding: 3px 9px;
 }
 
+/* A scoped search (Files, Bookmarks, Settings, Apps), in front of the text; Backspace on
+   empty text or Esc removes it. */
+.scope-label {
+  flex: none;
+  margin-right: 8px;
+  padding: 3px 9px;
+  border-color: transparent;
+  background: var(--select);
+  color: var(--fg);
+  cursor: default;
+}
+
 /* Quieter than a selected chip: it names where Enter goes without outshining the text. */
 .chip.active.armed-pill {
   background: var(--chip-hover);
@@ -1976,6 +1988,46 @@ textarea.query {
 .field select:focus {
   border-color: var(--focus);
   outline: none;
+}
+
+/* Settings › Permissions: a row per permission with a status dot and its Allow button. */
+.permissions {
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.permission {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 0;
+  border-top: 1px solid var(--stroke);
+}
+
+.permission-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.permission-dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+
+.permission-dot.granted {
+  background: #4ade80;
+  box-shadow: 0 0 8px rgba(74, 222, 128, 0.5);
+}
+
+.permission-dot.denied {
+  background: var(--notice);
 }
 
 /* The glass menu that opens in place of the native dropdown popup (SelectMenu.vue). */

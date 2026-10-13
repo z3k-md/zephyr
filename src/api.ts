@@ -28,6 +28,8 @@ import type {
   Snapshot,
   SyncPending,
   SyncStatus,
+  Permission,
+  PermissionId,
   TypingBest,
   SuggestResponse,
 } from './types';
@@ -53,7 +55,7 @@ export function warmSuggestions(destinationId: string): Promise<void> {
   return invoke('warm_suggestions', { destinationId });
 }
 
-/** Adds an entry to the running bug capture's log (Ctrl+Alt+R in dev builds). */
+/** Adds an entry to the running bug capture's log (Ctrl+Alt+R). */
 export function captureEvent(kind: string, data: unknown): Promise<void> {
   return invoke('capture_event', { kind, data });
 }
@@ -417,6 +419,15 @@ export function saveOpenBehavior(
   return invoke<Snapshot>('save_open_behavior', { returnToMode, routeCmd, routeAlt });
 }
 
+export function permissionsStatus(): Promise<Permission[]> {
+  return invoke<Permission[]>('permissions_status');
+}
+
+/** Allow on a permission: the system prompt, or the exact System Settings pane. */
+export function permissionRequest(id: PermissionId): Promise<Permission[]> {
+  return invoke<Permission[]>('permission_request', { id });
+}
+
 export function syncStatus(): Promise<SyncStatus> {
   return invoke<SyncStatus>('sync_status');
 }
@@ -544,6 +555,19 @@ export function nowPlayingFocus(): Promise<boolean> {
 
 export function saveShowNowPlaying(show: boolean): Promise<Snapshot> {
   return invoke<Snapshot>('save_show_now_playing', { show });
+}
+
+export function saveBugCapture(enabled: boolean): Promise<Snapshot> {
+  return invoke<Snapshot>('save_bug_capture', { enabled });
+}
+
+export function revealCaptures(): Promise<void> {
+  return invoke('reveal_captures');
+}
+
+/** Lets file search into Desktop, Documents and Downloads (macOS asks for each). */
+export function allowProtectedFolders(): Promise<Snapshot> {
+  return invoke<Snapshot>('allow_protected_folders');
 }
 
 /** What the update card shows now; later changes arrive as `update-status` events. */

@@ -1,12 +1,13 @@
-//! Dev-build bug captures: Ctrl+Alt+R records a Zephyr window (the bar, Notes or Settings,
-//! whichever is in front) for up to 30 seconds as PNG frames, plus a timestamped log of what
-//! its page did (for the bar: keys pressed in it, the text, the results and the selected
-//! row, suggestion fetches, size changes, errors). Each capture is a folder under
-//! `captures/` in Zephyr's data folder; the newest 20 are kept.
+//! Bug captures, in dev and installed builds alike (Settings can turn the shortcuts off):
+//! Ctrl+Alt+R records a Zephyr window (the bar, Notes or Settings, whichever is in front) for
+//! up to 30 seconds as PNG frames, plus a timestamped log of what its page did (for the bar:
+//! keys pressed in it, the text, the results and the selected row, suggestion fetches, size
+//! changes, errors), and Ctrl+Alt+S takes one frame with the page's state. Each capture is a
+//! folder under `captures/` in Zephyr's data folder; the newest 20 are kept.
 //!
-//! Only Zephyr's own windows are involved: frames are taken of that window's rectangle
-//! while it is showing, and keys are logged by Zephyr's pages, so nothing typed elsewhere is
-//! seen.
+//! Only Zephyr's own windows are involved: frames are taken of that window alone while it is
+//! showing (on macOS, of the window itself, which needs no Screen Recording permission), and
+//! keys are logged by Zephyr's pages, so nothing typed elsewhere is seen.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -34,6 +35,13 @@ static SESSION: Mutex<Option<Session>> = Mutex::new(None);
 
 pub fn init(dir: PathBuf) {
     let _ = DIR.set(dir);
+}
+
+/// The captures folder, made if it isn't there yet.
+pub fn folder() -> Result<PathBuf, String> {
+    let dir = DIR.get().ok_or("Captures aren't set up")?;
+    std::fs::create_dir_all(dir).map_err(|err| err.to_string())?;
+    Ok(dir.clone())
 }
 
 pub fn recording() -> bool {
@@ -102,7 +110,11 @@ fn save_frame(app: &AppHandle, label: &str, dir: &Path, frame: u32) -> bool {
         return false;
     };
     let rect = (position.x, position.y, size.width, size.height);
-    let Some(png) = grab(rect) else {
+    #[cfg(target_os = "macos")]
+    let png = grab_window(app, &window);
+    #[cfg(not(target_os = "macos"))]
+    let png = grab(rect);
+    let Some(png) = png else {
         return false;
     };
     let file = format!("frame-{frame:04}.png");
@@ -278,7 +290,50 @@ fn grab(rect: (i32, i32, u32, u32)) -> Option<Vec<u8>> {
 }
 
 /// macOS will take frames with ScreenCaptureKit; until then a capture is the event log only.
-#[cfg(not(windows))]
+/// The bar's own window as PNG, blur and transparency included. Capturing only Zephyr's
+/// window needs no Screen Recording permission, so this never prompts.
+#[cfg(target_os = "macos")]
+#[allow(deprecated)] // CGWindowListCreateImage; ScreenCaptureKit would need the permission.
+fn grab_window(app: &AppHandle, window: &tauri::WebviewWindow) -> Option<Vec<u8>> {
+    use objc2::AnyThread;
+    use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSWindow};
+    use objc2_core_graphics::{CGWindowImageOption, CGWindowListCreateImage, CGWindowListOption};
+    use objc2_foundation::{NSDictionary, NSPoint, NSRect, NSSize};
+
+    // AppKit windows belong to the main thread, so the window number is read there.
+    let pointer = window.ns_window().ok()? as usize;
+    let (sender, receiver) = std::sync::mpsc::channel();
+    app.run_on_main_thread(move || {
+        // SAFETY: `pointer` is the live NSWindow behind the bar, read on the main thread.
+        let ns_window = unsafe { &*(pointer as *const NSWindow) };
+        let _ = sender.send(ns_window.windowNumber());
+    })
+    .ok()?;
+    let number = receiver.recv_timeout(Duration::from_secs(1)).ok()?;
+    let number = u32::try_from(number).ok().filter(|number| *number > 0)?;
+
+    objc2::rc::autoreleasepool(|_| {
+        // CGRectNull: just the window's own bounds.
+        let bounds = NSRect::new(
+            NSPoint::new(f64::INFINITY, f64::INFINITY),
+            NSSize::new(0.0, 0.0),
+        );
+        let image = CGWindowListCreateImage(
+            bounds,
+            CGWindowListOption::OptionIncludingWindow,
+            number,
+            CGWindowImageOption::BoundsIgnoreFraming | CGWindowImageOption::BestResolution,
+        )?;
+        let rep = NSBitmapImageRep::initWithCGImage(NSBitmapImageRep::alloc(), &image);
+        // SAFETY: an empty properties dictionary is valid for PNG.
+        let png = unsafe {
+            rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new())
+        }?;
+        Some(png.to_vec())
+    })
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 fn grab(_rect: (i32, i32, u32, u32)) -> Option<Vec<u8>> {
     None
 }

@@ -29,6 +29,8 @@ export const GLYPHS: Record<string, string> = {
     '<rect x="3" y="6.5" width="18" height="11" rx="2"/><path d="M7 10h.01M10 10h.01M13 10h.01M16 10h.01M7.5 14h9"/>',
   grid: '<rect x="4.5" y="4.5" width="6" height="6" rx="1.2"/><rect x="13.5" y="4.5" width="6" height="6" rx="1.2"/><rect x="4.5" y="13.5" width="6" height="6" rx="1.2"/><rect x="13.5" y="13.5" width="6" height="6" rx="1.2"/>',
   logo: '<path d="M4 8h11a3 3 0 1 0-3-3M4 12h15a3 3 0 1 1-3 3M4 16h7"/>',
+  shield:
+    '<path d="M12 3.5 5 6.5v5.2c0 4.3 3 7.6 7 8.8 4-1.2 7-4.5 7-8.8V6.5z"/><path d="m9 12 2.2 2.2L15.5 10"/>',
   bookmark: '<path d="M7 3.5h10v17l-5-3.6-5 3.6z"/>',
   gamepad:
     '<path d="M7.5 8.5h9a4 4 0 0 1 3.9 4.9l-.8 3.4a2 2 0 0 1-3.5.8l-1.6-2.1h-5l-1.6 2.1a2 2 0 0 1-3.5-.8l-.8-3.4a4 4 0 0 1 3.9-4.9z"/><path d="M8.5 11v3M7 12.5h3M15.5 12h.01M17 13.5h.01"/>',
