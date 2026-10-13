@@ -475,7 +475,14 @@ fn read_saved(dir: &Path, cipher: &Cipher) -> Option<Saved> {
     {
         Ok(saved) => Some(saved),
         Err(err) => {
-            log::error!("couldn't read clipboard history, starting over: {err}");
+            // Set aside rather than overwritten by the next save, so a key that comes back
+            // (a restored keychain) can still read it.
+            let aside = dir.join("history.unreadable.bin");
+            let _ = fs::rename(dir.join("history.bin"), &aside);
+            log::error!(
+                "couldn't read clipboard history, starting over (kept it as {}): {err}",
+                aside.display()
+            );
             None
         }
     }

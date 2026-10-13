@@ -119,8 +119,15 @@ pub fn run() {
             icons::init(app.path().app_cache_dir()?.join("icons"));
             #[cfg(debug_assertions)]
             capture::init(app.path().app_data_dir()?.join("captures"));
+            // Dev builds keep their key in a file instead of the keychain (secrets.rs), so
+            // they keep their own history too; sharing one wiped it at every switch.
+            let clipboard_dir = if cfg!(debug_assertions) {
+                "clipboard-dev"
+            } else {
+                "clipboard"
+            };
             clipboard::start(
-                app.path().app_data_dir()?.join("clipboard"),
+                app.path().app_data_dir()?.join(clipboard_dir),
                 snapshot.clipboard.clone(),
             );
 
