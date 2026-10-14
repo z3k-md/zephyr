@@ -566,14 +566,50 @@ pub fn make_bar_panel(window: &tauri::WebviewWindow) -> Result<(), String> {
     panel
         .add_style_mask(NSWindowStyleMask::NonactivatingPanel)
         .map_err(|err| err.to_string())?;
+    // MoveToActiveSpace, not CanJoinAllSpaces: the bar opens on whichever Space is current,
+    // but belongs to that one Space while up, so swiping to another desktop leaves it behind
+    // instead of carrying it along (it then hides; see `hide_on_space_change`).
     panel.set_collection_behavior(
-        NSWindowCollectionBehavior::CanJoinAllSpaces
+        NSWindowCollectionBehavior::MoveToActiveSpace
             | NSWindowCollectionBehavior::FullScreenAuxiliary
             | NSWindowCollectionBehavior::IgnoresCycle,
     );
     panel.set_level(NSStatusWindowLevel as i64);
     panel.set_hides_on_deactivate(false);
     Ok(())
+}
+
+/// Closes the bar the moment the user switches desktops (a three-finger swipe, Ctrl+arrow),
+/// like Spotlight, so it never lingers on the old Space or shows up on the new one. Its
+/// view and text are kept, as with any other close.
+#[cfg(target_os = "macos")]
+pub fn hide_on_space_change(app: &AppHandle) {
+    use objc2_app_kit::{NSWorkspace, NSWorkspaceActiveSpaceDidChangeNotification};
+    use objc2_foundation::{NSNotification, NSOperationQueue};
+
+    let app = app.clone();
+    let block = block2::RcBlock::new(move |_: std::ptr::NonNull<NSNotification>| {
+        let showing = app
+            .get_webview_window("main")
+            .is_some_and(|window| window.is_visible().unwrap_or(false));
+        if showing {
+            log::debug!("the Space changed, hiding the bar");
+            hide_bar(&app);
+        }
+    });
+    // SAFETY: a main-queue observer for a workspace notification; the block only touches
+    // the app handle, and the observer lives as long as Zephyr.
+    let observer = unsafe {
+        NSWorkspace::sharedWorkspace()
+            .notificationCenter()
+            .addObserverForName_object_queue_usingBlock(
+                Some(NSWorkspaceActiveSpaceDidChangeNotification),
+                None,
+                Some(&NSOperationQueue::mainQueue()),
+                &block,
+            )
+    };
+    std::mem::forget(observer);
 }
 
 /// Shows the bar panel and gives it the keyboard without activating Zephyr, so a

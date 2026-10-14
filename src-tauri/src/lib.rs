@@ -143,6 +143,8 @@ pub fn run() {
                 if let Err(err) = window::make_bar_panel(&main_window) {
                     log::error!("couldn't let the bar float over full-screen apps: {err}");
                 }
+                #[cfg(target_os = "macos")]
+                window::hide_on_space_change(app.handle());
                 #[cfg(windows)]
                 if let Err(err) = window::make_bar_glass(&main_window) {
                     log::error!("couldn't blur behind the bar: {err}");
