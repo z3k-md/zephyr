@@ -25,6 +25,7 @@ pub fn init() {
             Cleanup::KeepLogFiles(KEPT_LOG_FILES),
         )
         .append()
+        .format_for_files(timestamped)
         .write_mode(WriteMode::Direct);
 
     if cfg!(debug_assertions) {
@@ -43,6 +44,23 @@ pub fn init() {
         log::error!("panic: {info}");
         previous(info);
     }));
+}
+
+/// `2026-10-19 09:36:57.120 INFO [zephyr_lib] Zephyr is running`: the time shows how long
+/// startup took after login.
+fn timestamped(
+    out: &mut dyn std::io::Write,
+    now: &mut flexi_logger::DeferredNow,
+    record: &log::Record,
+) -> std::io::Result<()> {
+    write!(
+        out,
+        "{} {} [{}] {}",
+        now.format("%Y-%m-%d %H:%M:%S%.3f"),
+        record.level(),
+        record.module_path().unwrap_or_default(),
+        record.args()
+    )
 }
 
 /// Logging starts before Tauri does, so this can't use Tauri's path resolver.
