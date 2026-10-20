@@ -3,101 +3,101 @@
 
 ### Bug Fixes
 
-* run git for Claude jobs without flashing a console on Windows ([a47c59f](https://github.com/z3k-md/zephyr/commit/a47c59f800139543e4fdf248d903c3fb1ab33973))
+* run git for Claude jobs without flashing a console on Windows ([f000da7](https://github.com/z3k-md/zephyr/commit/f000da7418a45534991018e951d03584cf8b8415))
 
 
 ### Features
 
-* launch installed Steam games by name ([e761a0f](https://github.com/z3k-md/zephyr/commit/e761a0f2735af04414c6ce0acecb65eb576600d9))
-* update card with download progress and an install countdown ([eb3256e](https://github.com/z3k-md/zephyr/commit/eb3256ec050d95302b6e59e4ce6425f2284f47b1))
+* launch installed Steam games by name ([7925684](https://github.com/z3k-md/zephyr/commit/7925684938dfaed8e47e6fb3d3265ea4f1530647))
+* update card with download progress and an install countdown ([99de503](https://github.com/z3k-md/zephyr/commit/99de503c3598dd5cb33190245709b48f70c2cf91))
 
 # [2.6.0](https://github.com/z3k-md/zephyr/compare/v2.5.0...v2.6.0) (2026-10-12)
 
 
 ### Bug Fixes
 
-* let the Mac build pass Clippy with Windows-only now playing and snap ([290977c](https://github.com/z3k-md/zephyr/commit/290977cadddf21e659611d5f90ea570b7c1fc877))
+* let the Mac build pass Clippy with Windows-only now playing and snap ([ac3166f](https://github.com/z3k-md/zephyr/commit/ac3166fa9af62ef8f41f3fcff8f02303949bde3c))
 
 
 ### Features
 
-* browser bookmarks in the bar ([b365455](https://github.com/z3k-md/zephyr/commit/b36545556ff0ab9c884c8660056a0014017d4178))
-* **extension:** switch to a tab that is already open ([4431d33](https://github.com/z3k-md/zephyr/commit/4431d33af26f4042da258184b5151c8b5ff6db4f))
-* read what's playing from Windows' media controls ([0c5b2c3](https://github.com/z3k-md/zephyr/commit/0c5b2c3452e0dc5a77c29745d740e69b8c971865))
-* shut down, restart, sleep, lock and sign out from the bar ([f2f75b3](https://github.com/z3k-md/zephyr/commit/f2f75b3d24a0d8696161b1139d81fab3205cf340))
-* site icons for web destinations ([d499194](https://github.com/z3k-md/zephyr/commit/d4991945030e33d8d3548905825ddc6f8ed5100e))
-* snap grid for Ctrl+drag, themes, now playing and a recent-first empty bar ([c152586](https://github.com/z3k-md/zephyr/commit/c152586fd1370f83c8cbcea571b79be67796096d))
+* browser bookmarks in the bar ([cdd9ac8](https://github.com/z3k-md/zephyr/commit/cdd9ac868284e0a19eec56ae451a825d44163071))
+* **extension:** switch to a tab that is already open ([8685dee](https://github.com/z3k-md/zephyr/commit/8685deed493cc787f5f178d2e9107f32f9f20e67))
+* read what's playing from Windows' media controls ([973962a](https://github.com/z3k-md/zephyr/commit/973962ab0d56a81c2692a0fbaf19414ec86f105c))
+* shut down, restart, sleep, lock and sign out from the bar ([131c3e1](https://github.com/z3k-md/zephyr/commit/131c3e18c8bbb4f35732330b7a5dff65b905ded7))
+* site icons for web destinations ([ff5f21d](https://github.com/z3k-md/zephyr/commit/ff5f21d66a3b93c102580a93950a48b5bfaf0ea7))
+* snap grid for Ctrl+drag, themes, now playing and a recent-first empty bar ([cbe319c](https://github.com/z3k-md/zephyr/commit/cbe319c93fae09a7b799661fc88eed1381c0207c))
 
 # [2.5.0](https://github.com/z3k-md/zephyr/compare/v2.4.0...v2.5.0) (2026-10-10)
 
 
 ### Bug Fixes
 
-* accept ~ in project folders on Windows and add a folder picker ([e23bde6](https://github.com/z3k-md/zephyr/commit/e23bde646c09127aa4409251074473da68d6adc4))
-* blur behind the bar on Windows with Acrylic and rounded corners ([aeb53b6](https://github.com/z3k-md/zephyr/commit/aeb53b606bd3f827556cab70929b404b34c23f9e))
+* accept ~ in project folders on Windows and add a folder picker ([2a5ef06](https://github.com/z3k-md/zephyr/commit/2a5ef069ca6e2923db3ebbea81882166648d4852))
+* blur behind the bar on Windows with Acrylic and rounded corners ([49c22ee](https://github.com/z3k-md/zephyr/commit/49c22ee199cebf43bd3a90b93d1577582c7681a6))
 
 
 ### Features
 
-* fixed-size bar, real app icons, type-ahead and Ctrl+drag ([e3562d1](https://github.com/z3k-md/zephyr/commit/e3562d17ffe6f9a6397d71f8a29efde6cbf9d3dd))
-* glass dropdown menus in Settings ([4379222](https://github.com/z3k-md/zephyr/commit/4379222a89e856d7cf9aa5e8c02ad1436000c3d9))
-* record clipboard history on Windows ([0ed229b](https://github.com/z3k-md/zephyr/commit/0ed229b6c30b2e33d0a3cb3908fe103499db5b1a))
-* run shell commands from the bar ([9826762](https://github.com/z3k-md/zephyr/commit/9826762d19325443c69492246e85ad4fab1e9a4d))
-* sectioned launcher results with icons, a query row and Search with ([5943090](https://github.com/z3k-md/zephyr/commit/59430900d8ac6b81ad2040f4fe0e00d45096d879))
-* settings sidebar, search, toggles and cleaner fields ([2917ff1](https://github.com/z3k-md/zephyr/commit/2917ff18b08245f3faf206645a303724327cb6b1))
-* sign in with Google and sync device keys end to end encrypted ([ef4a96d](https://github.com/z3k-md/zephyr/commit/ef4a96d596f2e9a68da3ca962abafff70e587dc5))
-* sticky modes, Ask AI conversations and Enter routes ([44cd06f](https://github.com/z3k-md/zephyr/commit/44cd06f828876faeaa592c57facfe902c6adbec7))
-* the summon shortcut closes the bar when it is open ([38c60ea](https://github.com/z3k-md/zephyr/commit/38c60ea8e7e5d89ffc997395a33571e488c18189))
+* fixed-size bar, real app icons, type-ahead and Ctrl+drag ([cbd613f](https://github.com/z3k-md/zephyr/commit/cbd613f53a28c52517ca2e7f2197f76ab154d7b4))
+* glass dropdown menus in Settings ([a52076a](https://github.com/z3k-md/zephyr/commit/a52076a2272e6afd1b7df2fb3c1f01c4d013dbdb))
+* record clipboard history on Windows ([8a18056](https://github.com/z3k-md/zephyr/commit/8a180566c07815e3a03f218e51f2842a9c9dfe4a))
+* run shell commands from the bar ([770dcbd](https://github.com/z3k-md/zephyr/commit/770dcbda7b63e7aabffd60251609196cfde09a1a))
+* sectioned launcher results with icons, a query row and Search with ([d4e8507](https://github.com/z3k-md/zephyr/commit/d4e8507a571638a461572b0b50a97f0d5840b5cf))
+* settings sidebar, search, toggles and cleaner fields ([97390c6](https://github.com/z3k-md/zephyr/commit/97390c66fac84ad5fa5aef33cabf0b3ae185fa0e))
+* sign in with Google and sync device keys end to end encrypted ([90a8d76](https://github.com/z3k-md/zephyr/commit/90a8d76130a8e2ce8bfc1033dd2ae4a337048c36))
+* sticky modes, Ask AI conversations and Enter routes ([3102edb](https://github.com/z3k-md/zephyr/commit/3102edb2769ee11e317f9d49bf6d2abe3aed3442))
+* the summon shortcut closes the bar when it is open ([abdf692](https://github.com/z3k-md/zephyr/commit/abdf6929d35e158eb5f142674f5aafd0190c43e2))
 
 # [2.4.0](https://github.com/z3k-md/zephyr/compare/v2.3.0...v2.4.0) (2026-10-06)
 
 
 ### Bug Fixes
 
-* let the settings window scroll ([792ad7f](https://github.com/z3k-md/zephyr/commit/792ad7fb6fea052169836e2a1abeeb0a0ea5fe8c))
-* **macos:** give focus back to the previous app when Esc dismisses the bar ([92d5668](https://github.com/z3k-md/zephyr/commit/92d5668403cf2fa82fd8ed1b4e60fe93d57565b7))
-* **macos:** open the bar over full-screen apps ([e605401](https://github.com/z3k-md/zephyr/commit/e605401c7d1ad9dd7f7a8e467e56f1506141b49d))
-* **macos:** show the bar as a non-activating panel over full-screen apps ([7fb0643](https://github.com/z3k-md/zephyr/commit/7fb0643d3f753afe8134eef33dc8e74e9edb0eae))
-* stop cutting the bar off at half height on Retina screens ([3813ea2](https://github.com/z3k-md/zephyr/commit/3813ea248e2d6b505855b6f508ae0397ea95323b))
+* let the settings window scroll ([c17a924](https://github.com/z3k-md/zephyr/commit/c17a9248e3616b6cab4d4182931c4b9f4a50dd70))
+* **macos:** give focus back to the previous app when Esc dismisses the bar ([9dd51a6](https://github.com/z3k-md/zephyr/commit/9dd51a6949922a632edd4e3789a061c82b2aeda5))
+* **macos:** open the bar over full-screen apps ([9672c49](https://github.com/z3k-md/zephyr/commit/9672c49012318047424da3f2564c6a4855fafbe2))
+* **macos:** show the bar as a non-activating panel over full-screen apps ([a5e4db5](https://github.com/z3k-md/zephyr/commit/a5e4db51af29571566aa39537ecb4c1569307688))
+* stop cutting the bar off at half height on Retina screens ([05db676](https://github.com/z3k-md/zephyr/commit/05db676f9caaeaad4e599b4ab00177ff9cdb7b1e))
 
 
 ### Features
 
-* ask AI from the bar with a local model or your own key ([7ad8884](https://github.com/z3k-md/zephyr/commit/7ad8884332ace0ca0e86490dac00cfb58eadd24e))
-* clipboard history, notes, Claude jobs, typing test and a glass theme ([42b9d0f](https://github.com/z3k-md/zephyr/commit/42b9d0f1d0243238e9d28196cd41e05d018b8bf1))
-* inline answers, action panel, richer templates and zephyr:// links ([8543d5a](https://github.com/z3k-md/zephyr/commit/8543d5adfe24cb216cab10557cbaf0d3db3d6995))
+* ask AI from the bar with a local model or your own key ([f4587c3](https://github.com/z3k-md/zephyr/commit/f4587c32bc390e2772cd04ae184a3c4f692b822a))
+* clipboard history, notes, Claude jobs, typing test and a glass theme ([89002ff](https://github.com/z3k-md/zephyr/commit/89002fff422738d1b18c5c6c57d2bf374c28c1de))
+* inline answers, action panel, richer templates and zephyr:// links ([c0d46c8](https://github.com/z3k-md/zephyr/commit/c0d46c8145b3c54507abae3750a7dbcd9b1d545d))
 
 # [2.3.0](https://github.com/z3k-md/zephyr/compare/v2.2.0...v2.3.0) (2026-10-06)
 
 
 ### Features
 
-* find and open files from the bar (!f) ([9401d03](https://github.com/z3k-md/zephyr/commit/9401d03221e4a982e00d4fd340023753b007a6e1))
+* find and open files from the bar (!f) ([a736f88](https://github.com/z3k-md/zephyr/commit/a736f882ca4a3a2e42f9321fa843843cde1f088b))
 
 # [2.2.0](https://github.com/z3k-md/zephyr/compare/v2.1.0...v2.2.0) (2026-10-06)
 
 
 ### Features
 
-* search and open settings from the bar ([2f10b17](https://github.com/z3k-md/zephyr/commit/2f10b17819cdd609bf40625593e71d2e7d6d720d))
+* search and open settings from the bar ([2cefc23](https://github.com/z3k-md/zephyr/commit/2cefc23011bd027966e366e57670d0197f547cb5))
 
 # [2.1.0](https://github.com/z3k-md/zephyr/compare/v2.0.0...v2.1.0) (2026-10-06)
 
 
 ### Bug Fixes
 
-* open settings without deadlocking the main thread on Windows ([739e4d1](https://github.com/z3k-md/zephyr/commit/739e4d15c2ed043bac675a02eb22125feb0addef))
+* open settings without deadlocking the main thread on Windows ([5687a9d](https://github.com/z3k-md/zephyr/commit/5687a9d3c81826bf0134e4e50648668338909861))
 
 
 ### Features
 
-* new app icon ([88ed2ad](https://github.com/z3k-md/zephyr/commit/88ed2adbb4edbb8ef8e4fc663ba56691ce808e2d))
-* open installed apps from the bar ([bfebc02](https://github.com/z3k-md/zephyr/commit/bfebc029372e8188f63bfa9cb8a21b6c08b6e851))
+* new app icon ([6bc771c](https://github.com/z3k-md/zephyr/commit/6bc771cd5b8cfaa1f48055fb9501aacddda3f95a))
+* open installed apps from the bar ([2322b43](https://github.com/z3k-md/zephyr/commit/2322b4300c283328025d7c8ad64321e279155ed2))
 
 # [2.0.0](https://github.com/z3k-md/zephyr/compare/v1.3.1...v2.0.0) (2026-10-04)
 
 
-* feat!: rewrite Zephyr as a desktop dispatch bar ([0e73d75](https://github.com/z3k-md/zephyr/commit/0e73d756e9d07fb7256522d9c475acdb61a91536))
+* feat!: rewrite Zephyr as a desktop dispatch bar ([d6032a0](https://github.com/z3k-md/zephyr/commit/d6032a07e06e04093318fb867b5fe45fd9757cdd))
 
 
 ### BREAKING CHANGES
