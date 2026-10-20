@@ -34,8 +34,6 @@
     "vue": "3.5.43"
   },
   "devDependencies": {
-    "@semantic-release/changelog": "^7.0.0",
-    "@semantic-release/git": "^11.0.1",
     "@tauri-apps/cli": "^2.12.1",
     "@vitejs/plugin-vue": "^6.0.9",
     "dotenv-cli": "^11.0.0",

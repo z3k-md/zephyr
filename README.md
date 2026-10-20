@@ -47,9 +47,19 @@ bun dev
 
 `bun run test` runs the Rust tests. `bun run lint` runs every check CI runs: Prettier, vue-tsc, rustfmt, and Clippy with warnings as errors. `bun run format` fixes formatting.
 
+## Branches
+
+Work lands on `develop`. Checks run on Windows and macOS for every push and pull request to `develop` and `main`. `main` moves only when `develop` is promoted, by fast-forwarding it once `develop`'s checks are green:
+
+```bash
+git push origin develop:main
+```
+
+`main` requires both checks to pass and can't be deleted.
+
 ## Release
 
-Releases are cut on demand: run the **Release** workflow from the Actions tab. It runs the checks on Windows and macOS, and if [semantic-release](https://semantic-release.gitbook.io/) finds a `feat:` or `fix:` commit since the last tag, it bumps the version, tags it, and creates a draft GitHub release. Windows and macOS (universal) installers are then built, signed for the updater, and uploaded. A final job writes `latest.json` and publishes the release, and installed copies pick it up from there.
+Releases are cut on demand from `main`: run the **Release** workflow from the Actions tab. It runs the checks on Windows and macOS, and if [semantic-release](https://semantic-release.gitbook.io/) finds a `feat:` or `fix:` commit since the last tag, it tags the next version and creates a draft GitHub release with its notes. Nothing is committed back to `main`: the build stamps the version from the tag, and the release notes replace `CHANGELOG.md`, which stops at 2.7.0. Windows and macOS (universal) installers are then built, signed for the updater, and uploaded. A final job writes `latest.json` and publishes the release, and installed copies pick it up from there.
 
 Repository secrets:
 

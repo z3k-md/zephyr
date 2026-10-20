@@ -1,5 +1,6 @@
 name: Release
-# Releases are cut on demand (Actions > Release > Run workflow), not on every push to main.
+# Releases are cut on demand (Actions > Release > Run workflow), only from main, which moves
+# only when develop is promoted.
 on:
   workflow_dispatch:
     inputs:
@@ -7,7 +8,7 @@ on:
         description: Existing tag to build and publish instead of cutting a new version
         required: false
 
-# Releases bump package.json and push a tag, so two runs must never overlap.
+# Each release pushes a tag, so two runs must never overlap.
 concurrency:
   group: release
   cancel-in-progress: false
@@ -17,6 +18,7 @@ permissions:
 
 jobs:
   checks:
+    if: github.ref == 'refs/heads/main'
     uses: ./.github/workflows/checks.yml
 
   version:
@@ -95,7 +97,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ needs.version.outputs.tag }} # the commit that carries the bumped version
+          ref: ${{ needs.version.outputs.tag }}
+
+      # Releases only push a tag (main is protected), so the version is stamped here.
+      # tauri.conf.json reads it from package.json.
+      - name: Set version from tag
+        shell: bash
+        env:
+          TAG: ${{ needs.version.outputs.tag }}
+        run: npm pkg set version="${TAG#v}"
 
       - uses: oven-sh/setup-bun@v2
 
