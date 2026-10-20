@@ -3,7 +3,9 @@
 
 use std::time::{Duration, Instant};
 
-use chrono::{DateTime, NaiveTime, TimeZone, Utc};
+use chrono::{
+    DateTime, Datelike, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, Offset, TimeZone, Utc,
+};
 use chrono_tz::Tz;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,7 +21,96 @@ pub fn inline(input: &str, now: DateTime<Utc>) -> Option<Answer> {
     if input.is_empty() || input.len() > 200 {
         return None;
     }
-    time_answer(input, now).or_else(|| calculate(input))
+    let local = chrono::Local
+        .offset_from_utc_datetime(&now.naive_utc())
+        .fix();
+    clock_answer(input, now, local)
+        .or_else(|| time_answer(input, now))
+        .or_else(|| calculate(input))
+}
+
+// Timestamps, week numbers and the like
+
+/// `unix`, `1760000000 unix`, `epoch 1760000000123`, `2026-10-13 to unix`, `week`,
+/// `day of year`, `now iso`, `timestamp filename`. `local` is this computer's UTC offset.
+fn clock_answer(input: &str, now: DateTime<Utc>, local: FixedOffset) -> Option<Answer> {
+    let lower = input.to_lowercase();
+    let lower = lower.trim();
+    let here = now.with_timezone(&local);
+    let answer = |value: String| {
+        Some(Answer {
+            value,
+            hint: "Time",
+        })
+    };
+    match lower {
+        "unix" | "epoch" | "timestamp" | "unix time" | "epoch time" | "unix timestamp" => {
+            return answer(now.timestamp().to_string());
+        }
+        "week" | "week number" | "what week" | "what week is it" => {
+            let week = here.iso_week();
+            return answer(format!("Week {}, {}", week.week(), week.year()));
+        }
+        "day of year" | "day number" => {
+            let days = if here.date_naive().leap_year() {
+                366
+            } else {
+                365
+            };
+            return answer(format!("Day {} of {days}", here.ordinal()));
+        }
+        "now iso" | "iso now" | "iso time" | "iso 8601" => {
+            return answer(here.format("%Y-%m-%dT%H:%M:%S%:z").to_string());
+        }
+        "timestamp filename" | "filename timestamp" => {
+            return answer(here.format("%Y-%m-%d_%H-%M-%S").to_string());
+        }
+        _ => {}
+    }
+
+    // A number read as a Unix time, only when it says so: a bare 10-digit number is as
+    // likely a phone number.
+    let number = lower
+        .strip_suffix(" unix")
+        .or_else(|| lower.strip_suffix(" epoch"))
+        .or_else(|| lower.strip_prefix("epoch "))
+        .or_else(|| lower.strip_prefix("unix "))
+        .map(str::trim);
+    if let Some(number) = number
+        && !number.is_empty()
+        && number.bytes().all(|b| b.is_ascii_digit())
+    {
+        let seconds: i64 = match number.len() {
+            10 => number.parse().ok()?,
+            13 => number.parse::<i64>().ok()? / 1000,
+            _ => return None,
+        };
+        let at = DateTime::<Utc>::from_timestamp(seconds, 0)?;
+        let local_at = at.with_timezone(&local);
+        return answer(format!(
+            "{} ({})",
+            local_at.format("%a %b %-d %Y, %-I:%M:%S %p"),
+            at.format("%Y-%m-%dT%H:%M:%SZ")
+        ));
+    }
+
+    // A date (or date and time, in this computer's time zone) as Unix seconds.
+    let date = lower
+        .strip_suffix(" to unix")
+        .or_else(|| lower.strip_suffix(" to epoch"))
+        .or_else(|| lower.strip_suffix(" in unix"))?
+        .trim();
+    let parsed = NaiveDateTime::parse_from_str(date, "%Y-%m-%d %H:%M:%S")
+        .or_else(|_| NaiveDateTime::parse_from_str(date, "%Y-%m-%d %H:%M"))
+        .or_else(|_| NaiveDateTime::parse_from_str(date, "%Y-%m-%dt%H:%M:%S"))
+        .or_else(|_| NaiveDateTime::parse_from_str(date, "%Y-%m-%dt%H:%M"))
+        .or_else(|_| {
+            NaiveDate::parse_from_str(date, "%Y-%m-%d")
+                .map(|day| day.and_hms_opt(0, 0, 0).unwrap_or_default())
+        })
+        .ok()?;
+    let at = local.from_local_datetime(&parsed).single()?;
+    answer(at.timestamp().to_string())
 }
 
 // Calculator
@@ -320,5 +411,59 @@ mod tests {
             Some("2:30 PM BST")
         );
         assert_eq!(value("time in narnia"), None);
+    }
+
+    /// Clock answers as seen from a computer seven hours behind UTC (Denver in summer).
+    fn clock(input: &str) -> Option<String> {
+        let denver = FixedOffset::west_opt(7 * 3600).unwrap();
+        clock_answer(input, now(), denver).map(|answer| answer.value)
+    }
+
+    #[test]
+    fn gives_unix_times_both_ways() {
+        assert_eq!(clock("unix").as_deref(), Some("1791255600"));
+        assert_eq!(clock("Epoch").as_deref(), Some("1791255600"));
+        assert_eq!(
+            clock("1791255600 unix").as_deref(),
+            Some("Mon Oct 5 2026, 8:00:00 PM (2026-10-06T03:00:00Z)")
+        );
+        assert_eq!(
+            clock("epoch 1791255600123").as_deref(),
+            Some("Mon Oct 5 2026, 8:00:00 PM (2026-10-06T03:00:00Z)")
+        );
+        assert_eq!(
+            clock("2026-10-05 20:00 to unix").as_deref(),
+            Some("1791255600")
+        );
+        assert_eq!(clock("2026-10-06 to unix").as_deref(), Some("1791270000"));
+    }
+
+    #[test]
+    fn a_bare_long_number_is_not_a_unix_time() {
+        for search in [
+            "1791255600",
+            "8015550100",
+            "unix 123",
+            "epoch 12345678901",
+            "18005550100 unix",
+        ] {
+            assert_eq!(clock(search), None, "{search}");
+        }
+        // Nor does any other answer claim a phone number.
+        assert_eq!(value("8015550100").as_deref(), None);
+    }
+
+    #[test]
+    fn tells_the_week_day_and_iso_time() {
+        assert_eq!(clock("week").as_deref(), Some("Week 41, 2026"));
+        assert_eq!(clock("day of year").as_deref(), Some("Day 278 of 365"));
+        assert_eq!(
+            clock("now iso").as_deref(),
+            Some("2026-10-05T20:00:00-07:00")
+        );
+        assert_eq!(
+            clock("timestamp filename").as_deref(),
+            Some("2026-10-05_20-00-00")
+        );
     }
 }

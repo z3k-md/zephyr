@@ -1,6 +1,7 @@
 mod ai;
 mod answer;
 mod apps;
+mod bindings;
 mod bookmarks;
 mod browser;
 mod capture;
@@ -12,17 +13,21 @@ mod destination;
 mod files;
 mod history;
 mod icons;
+mod ip;
 mod logger;
+mod login_task;
 mod note_windows;
 mod notes;
 mod nowplaying;
 mod permissions;
 mod power;
 mod query;
+mod running;
 mod secrets;
 mod settings;
 mod shell;
 mod shortcut;
+mod startup;
 mod state;
 mod steam;
 mod suggest;
@@ -39,6 +44,7 @@ use tauri_plugin_global_shortcut::ShortcutState;
 use crate::state::AppState;
 
 pub fn init_logging() {
+    startup::begin();
     logger::init();
 }
 
@@ -72,6 +78,12 @@ pub fn run() {
                                 log::error!("couldn't open notes: {err}");
                             }
                         });
+                    } else if let Some(target) = shortcut::binding_for(pressed) {
+                        // Off the main thread: a note or a launch may build a window.
+                        let app = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            commands::run_binding(&app, &target);
+                        });
                     } else {
                         window::toggle_bar(app);
                     }
@@ -85,6 +97,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_drag::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
@@ -92,6 +105,7 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
+            startup::mark("setup began");
             let config_dir = app.path().app_config_dir()?;
             let state = AppState::load(config_dir.join("state.json"));
             let snapshot = state
@@ -105,9 +119,15 @@ pub fn run() {
             ) {
                 log::error!("{err}");
             }
-            if let Err(err) = commands::apply_autostart(app.handle(), snapshot.launch_at_startup) {
-                log::error!("{err}");
-            }
+            startup::mark("summon shortcut registered");
+            // Off the startup path: on Windows it runs schtasks, which takes a moment.
+            let autostart_app = app.handle().clone();
+            let launch_at_startup = snapshot.launch_at_startup;
+            std::thread::spawn(move || {
+                if let Err(err) = commands::apply_autostart(&autostart_app, launch_at_startup) {
+                    log::error!("{err}");
+                }
+            });
 
             secrets::init(app.path().app_data_dir()?);
             sync::init(app.path().app_data_dir()?);
@@ -176,6 +196,7 @@ pub fn run() {
             note_windows::restore(app.handle());
             register_links(app);
 
+            startup::mark("setup finished");
             log::info!("Zephyr is running");
 
             apps::AppIndex::refresh_if_stale(apps::index());
@@ -217,6 +238,14 @@ pub fn run() {
             commands::permissions_status,
             commands::permission_request,
             commands::save_steam_games,
+            commands::save_binding,
+            commands::drag_prepare,
+            commands::file_preview,
+            commands::quick_look,
+            commands::drag_finished,
+            commands::binding_failures,
+            commands::edit_binding,
+            commands::take_pending_binding,
             commands::power_preview,
             commands::power_run,
             commands::power_cancel,
@@ -284,6 +313,9 @@ pub fn run() {
             commands::suggest,
             commands::dispatch,
             commands::launch_app,
+            commands::window_focus,
+            commands::window_close,
+            commands::app_quit,
             commands::open_setting,
             commands::open_file,
             commands::reveal_file,
@@ -305,8 +337,13 @@ pub fn run() {
             commands::update_later,
             commands::rehearse_update,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Zephyr");
+        .build(tauri::generate_context!())
+        .expect("error while building Zephyr")
+        .run(|_app, event| {
+            if let tauri::RunEvent::Ready = event {
+                startup::mark("event loop running, the summon shortcut works");
+            }
+        });
 }
 
 /// Routes `zephyr://` links to the bar, including the one that launched Zephyr.

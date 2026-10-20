@@ -46,7 +46,7 @@ pub async fn suggest(
     let snapshot = state.snapshot()?;
     let installed = apps::index().snapshot();
     let catalog = catalog(&installed, &snapshot);
-    Ok(suggest::gather(
+    let mut response = suggest::gather(
         &query,
         &destination_id,
         &snapshot.destinations,
@@ -54,7 +54,9 @@ pub async fn suggest(
         catalog,
         include_remote,
     )
-    .await)
+    .await;
+    crate::running::annotate(&mut response, &installed, &query);
+    Ok(response)
 }
 
 /// Connects to the destination's suggestion service when the bar opens, so the first
@@ -92,17 +94,45 @@ pub fn launch_app(
     app: AppHandle,
     state: State<'_, AppState>,
     app_id: String,
+    new_window: Option<bool>,
 ) -> Result<DispatchOutcome, String> {
+    if new_window == Some(true) {
+        return start(&app, &state, &app_id);
+    }
     launch(&app, &state, &app_id)
 }
 
+/// Opens an app, or switches to its front window when it's already running.
 fn launch(app: &AppHandle, state: &AppState, app_id: &str) -> Result<DispatchOutcome, String> {
+    if let Some(target) = apps::index().find(app_id) {
+        let windows = crate::running::all();
+        if let Some(front) = crate::running::of_app(&target, &windows).first()
+            && crate::running::focus(front.handle)
+        {
+            remember_launch(app, state, &target.id);
+            window::hide_bar(app);
+            log::info!("switched to {}", target.name);
+            return Ok(DispatchOutcome::Launched { app_id: target.id });
+        }
+    }
+    start(app, state, app_id)
+}
+
+/// Starts the app: a new instance, even when one is running.
+fn start(app: &AppHandle, state: &AppState, app_id: &str) -> Result<DispatchOutcome, String> {
     let target = apps::index()
         .find(app_id)
         .ok_or_else(|| "That app is no longer installed.".to_string())?;
     apps::launch(&target)?;
+    remember_launch(app, state, &target.id);
+    window::hide_bar(app);
+    log::info!("launched {}", target.name);
+    Ok(DispatchOutcome::Launched { app_id: target.id })
+}
+
+fn remember_launch(app: &AppHandle, state: &AppState, app_id: &str) {
     match state.update(|persisted| {
-        persisted.record_launch(&target.id, now_secs());
+        persisted.record_launch(app_id, now_secs());
         Ok(())
     }) {
         Ok(recorded) => {
@@ -110,9 +140,39 @@ fn launch(app: &AppHandle, state: &AppState, app_id: &str) -> Result<DispatchOut
         }
         Err(err) => log::error!("couldn't record the launch: {err}"),
     }
-    window::hide_bar(app);
-    log::info!("launched {}", target.name);
-    Ok(DispatchOutcome::Launched { app_id: target.id })
+}
+
+/// Switches to an open window (a "Windows" row, or one picked from an app's actions).
+#[tauri::command]
+pub fn window_focus(app: AppHandle, handle: i64) -> Result<(), String> {
+    if !crate::running::focus(handle) {
+        return Err("That window is gone.".into());
+    }
+    window::hide_bar(&app);
+    Ok(())
+}
+
+/// Asks an open window to close, as its own close button would.
+#[tauri::command]
+pub fn window_close(handle: i64) -> Result<(), String> {
+    crate::running::close(handle);
+    crate::running::refresh();
+    Ok(())
+}
+
+/// Quits an app gracefully: every one of its windows is asked to close, so it can still
+/// offer to save. Nothing is force-killed.
+#[tauri::command]
+pub fn app_quit(app_id: String) -> Result<(), String> {
+    let target = apps::index()
+        .find(&app_id)
+        .ok_or_else(|| "That app is no longer installed.".to_string())?;
+    let windows = crate::running::all();
+    for window in crate::running::of_app(&target, &windows) {
+        crate::running::close(window.handle);
+    }
+    crate::running::refresh();
+    Ok(())
 }
 
 // Async for the same reason as open_settings: a Zephyr setting may build the settings webview.
@@ -540,7 +600,30 @@ pub fn rehearse_update(app: AppHandle) -> Result<(), String> {
     }
 }
 
+/// Starts Zephyr when you sign in, or stops doing so. On Windows that's a logon task in Task
+/// Scheduler (see login_task.rs); the Run-key entry earlier versions made is removed, since it
+/// started several seconds late and would now start a second copy. Dev builds leave this to
+/// the installed app, so the login item never points at a debug build.
 pub fn apply_autostart(app: &AppHandle, enabled: bool) -> Result<(), String> {
+    if cfg!(debug_assertions) {
+        return Ok(());
+    }
+    #[cfg(windows)]
+    {
+        let autostart = app.autolaunch();
+        if autostart.is_enabled().unwrap_or(false)
+            && let Err(err) = autostart.disable()
+        {
+            log::warn!("couldn't remove the old startup entry: {err}");
+        }
+        crate::login_task::set(enabled)
+    }
+    #[cfg(not(windows))]
+    autolaunch(app, enabled)
+}
+
+#[cfg(not(windows))]
+fn autolaunch(app: &AppHandle, enabled: bool) -> Result<(), String> {
     let autostart = app.autolaunch();
     let currently = autostart
         .is_enabled()
@@ -1382,4 +1465,301 @@ pub fn sync_recovery_key() -> Result<String, String> {
 #[tauri::command]
 pub async fn sync_sign_out() -> Result<(), String> {
     crate::sync::sign_out().await
+}
+
+/// Saves a hotkey and alias for one command, app, destination or bookmark (both empty removes
+/// it), then registers the hotkeys again.
+#[tauri::command]
+pub fn save_binding(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    binding: crate::state::Binding,
+) -> Result<Persisted, String> {
+    let current = state.snapshot()?;
+    let clipboard = if current.clipboard.enabled {
+        current.clipboard.shortcut.as_str()
+    } else {
+        ""
+    };
+    let (recording, snapshotting) = if current.bug_capture {
+        (crate::capture::SHORTCUT, crate::capture::SNAPSHOT_SHORTCUT)
+    } else {
+        ("", "")
+    };
+    let taken = [
+        (current.summon_shortcut.as_str(), "the bar"),
+        (clipboard, "clipboard history"),
+        (current.notes_shortcut.as_str(), "notes"),
+        (recording, "a bug recording"),
+        (snapshotting, "a bug snapshot"),
+    ];
+    let updated = crate::bindings::upsert(&current.bindings, binding, &taken)?;
+    let snapshot = state.update(|persisted| {
+        persisted.bindings = updated;
+        Ok(())
+    })?;
+    shortcut::register(&app, &snapshot.summon_shortcut, snapshot.extra_shortcuts())?;
+    publish(&app, snapshot)
+}
+
+/// The targets whose hotkey couldn't be registered because another app holds it.
+#[tauri::command]
+pub fn binding_failures() -> Vec<String> {
+    shortcut::failed_bindings()
+}
+
+/// A target the bar asked Settings to set a hotkey or alias for.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingBinding {
+    pub target: String,
+    pub label: String,
+}
+
+fn pending_binding() -> &'static std::sync::Mutex<Option<PendingBinding>> {
+    static PENDING: std::sync::OnceLock<std::sync::Mutex<Option<PendingBinding>>> =
+        std::sync::OnceLock::new();
+    PENDING.get_or_init(Default::default)
+}
+
+/// From the bar's actions ("Set hotkey…"): opens Settings > Shortcuts on this target.
+// Async for the same reason as open_settings: it may build the settings webview.
+#[tauri::command]
+pub async fn edit_binding(app: AppHandle, target: String, label: String) -> Result<(), String> {
+    if let Ok(mut pending) = pending_binding().lock() {
+        *pending = Some(PendingBinding { target, label });
+    }
+    window::hide_bar(&app);
+    window::open_settings(&app, Some("shortcuts"))?;
+    let _ = app.emit_to("settings", "binding-pending", ());
+    Ok(())
+}
+
+/// For Settings > Shortcuts: the target the bar asked about, once.
+#[tauri::command]
+pub fn take_pending_binding() -> Option<PendingBinding> {
+    pending_binding().lock().ok()?.take()
+}
+
+/// Runs what a binding's hotkey points at: a mode or scoped search opens the bar there, an
+/// app or bookmark opens without the bar, and a destination opens the bar armed with it.
+pub fn run_binding(app: &AppHandle, target: &str) {
+    use tauri::Manager;
+    let (kind, value) = target.split_once(':').unwrap_or((target, ""));
+    let result = match (kind, value) {
+        ("view", "notes") => window::open_notes(app, None),
+        ("view", "clip") => {
+            window::show_clipboard(app);
+            Ok(())
+        }
+        ("view", _) | ("scope", _) => {
+            window::show_bar(app);
+            let opened = if kind == "scope" {
+                target.to_string()
+            } else {
+                value.to_string()
+            };
+            app.emit_to("main", "bar-open", opened)
+                .map_err(|err| err.to_string())
+        }
+        ("app", id) => launch(app, &app.state::<AppState>(), id).map(|_| ()),
+        ("bookmark", url) => open_url(app.clone(), url.to_string()),
+        ("dest", id) => {
+            window::show_bar(app);
+            app.emit_to(
+                "main",
+                "bar-input",
+                serde_json::json!({ "query": "", "destination": id, "run": false }),
+            )
+            .map_err(|err| err.to_string())
+        }
+        _ => Err(format!("Nothing to run for {target}")),
+    };
+    if let Err(err) = result {
+        log::error!("couldn't run a shortcut: {err}");
+    }
+}
+
+/// What a drag out of the bar carries: the files, and a picture for the pointer.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DragOut {
+    pub files: Vec<String>,
+    pub icon: String,
+}
+
+/// Gets a file result (`path`, which must be in the file index) or a clipboard history item
+/// (`clip`) ready to drag into another app, and keeps the bar up until the drag ends.
+#[tauri::command]
+pub fn drag_prepare(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    path: Option<String>,
+    clip: Option<u64>,
+) -> Result<DragOut, String> {
+    use tauri::Manager;
+    let dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|err| err.to_string())?
+        .join("drag");
+    let files = match (path, clip) {
+        (Some(path), _) => {
+            known_file(&state, &path)?;
+            vec![path]
+        }
+        // Earlier drags' copies are done with: whatever they were dropped on has read them.
+        (None, Some(id)) => {
+            let _ = std::fs::remove_dir_all(&dir);
+            clipboard::drag_files(id, &dir)?
+        }
+        (None, None) => return Err("Nothing to drag".into()),
+    };
+    let first = files.first().ok_or("Nothing to drag")?;
+    let png = crate::icons::file_icon_png(first, 64).ok_or("Couldn't draw the drag picture")?;
+    std::fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
+    let icon = dir.join("pointer.png");
+    std::fs::write(&icon, png).map_err(|err| err.to_string())?;
+    window::begin_drag_out();
+    Ok(DragOut {
+        files,
+        icon: icon.to_string_lossy().into_owned(),
+    })
+}
+
+/// The drag ended: dropped somewhere hides the bar, cancelled keeps it.
+#[tauri::command]
+pub fn drag_finished(app: AppHandle, dropped: bool) {
+    window::end_drag_out(&app, dropped);
+}
+
+/// What the bar's preview pane shows for a file result.
+#[derive(serde::Serialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum FilePreview {
+    Image {
+        url: String,
+        size: u64,
+        modified: i64,
+    },
+    Text {
+        text: String,
+        /// More lines follow than are shown.
+        truncated: bool,
+        size: u64,
+        modified: i64,
+    },
+    Info {
+        size: u64,
+        modified: i64,
+        folder: bool,
+    },
+}
+
+/// A look at a file result without opening it: a picture, the first lines of a text file,
+/// or its size and date. Only for files in Zephyr's file index.
+#[tauri::command]
+pub async fn file_preview(state: State<'_, AppState>, path: String) -> Result<FilePreview, String> {
+    known_file(&state, &path)?;
+    tauri::async_runtime::spawn_blocking(move || preview_of(std::path::Path::new(&path)))
+        .await
+        .map_err(|err| err.to_string())?
+}
+
+fn preview_of(path: &std::path::Path) -> Result<FilePreview, String> {
+    use base64::Engine;
+    use base64::engine::general_purpose::STANDARD;
+    use std::io::Read;
+
+    const IMAGE_LIMIT: u64 = 15 * 1024 * 1024;
+    const TEXT_PEEK: u64 = 256 * 1024;
+    const LINES: usize = 200;
+
+    let meta = std::fs::metadata(path).map_err(|err| err.to_string())?;
+    let size = meta.len();
+    let modified = meta
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|elapsed| elapsed.as_secs() as i64)
+        .unwrap_or(0);
+    if meta.is_dir() {
+        return Ok(FilePreview::Info {
+            size: 0,
+            modified,
+            folder: true,
+        });
+    }
+    let extension = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let image_type = match extension.as_str() {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        "bmp" => Some("image/bmp"),
+        "ico" => Some("image/x-icon"),
+        "svg" => Some("image/svg+xml"),
+        _ => None,
+    };
+    if let Some(mime) = image_type
+        && size <= IMAGE_LIMIT
+    {
+        let bytes = std::fs::read(path).map_err(|err| err.to_string())?;
+        return Ok(FilePreview::Image {
+            url: format!("data:{mime};base64,{}", STANDARD.encode(bytes)),
+            size,
+            modified,
+        });
+    }
+
+    // Anything that reads as text: no NUL bytes in its first part.
+    let mut peek = Vec::new();
+    std::fs::File::open(path)
+        .and_then(|file| file.take(TEXT_PEEK).read_to_end(&mut peek))
+        .map_err(|err| err.to_string())?;
+    if !peek.is_empty() && !peek.contains(&0) {
+        let text = String::from_utf8_lossy(&peek);
+        let mut lines: Vec<&str> = text.lines().take(LINES + 1).collect();
+        let truncated = lines.len() > LINES || size > TEXT_PEEK;
+        lines.truncate(LINES);
+        return Ok(FilePreview::Text {
+            text: lines.join("\n"),
+            truncated,
+            size,
+            modified,
+        });
+    }
+    Ok(FilePreview::Info {
+        size,
+        modified,
+        folder: false,
+    })
+}
+
+/// macOS: opens Quick Look on a file result (Space-style preview), from the file index only.
+#[tauri::command]
+pub fn quick_look(state: State<'_, AppState>, path: String) -> Result<(), String> {
+    known_file(&state, &path)?;
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("qlmanage")
+            .args(["-p", &path])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map(|_| ())
+            .map_err(|err| err.to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err("Quick Look is only on macOS".into())
+    }
 }

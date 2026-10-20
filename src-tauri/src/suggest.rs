@@ -39,6 +39,12 @@ pub struct Suggestion {
     /// `app:<id>`, `dest:<id>` or `glyph:<name>`.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub icon: String,
+    /// An open app's windows, front to back; its row switches to the first.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub windows: Vec<crate::running::WindowRef>,
+    /// The window a `window` row switches to.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window: Option<i64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -203,6 +209,9 @@ pub async fn gather(
 
     // A bang or a URL names where the text goes, so apps stay out of the way.
     let offer_apps = parsed.bang.is_none() && !query::looks_like_url(&parsed.query);
+    if offer_apps && crate::ip::is_query(&parsed.query) {
+        return ip_answers(&parsed.query, armed_id, destinations, include_remote).await;
+    }
     let preferred = offer_apps
         .then(|| catalog.preferred(&parsed.query))
         .flatten();
@@ -338,6 +347,49 @@ pub async fn gather(
             .then_some(0),
         target,
         text: parsed.query.clone(),
+        search_with: searchable(destinations),
+    }
+}
+
+/// "ip", "my ip": the local address the internet is reached through, preselected so Enter
+/// copies it, then the public address (asked only on the pass that may use the network), then
+/// the computer's other addresses.
+async fn ip_answers(
+    text: &str,
+    armed_id: &str,
+    destinations: &[Destination],
+    include_remote: bool,
+) -> SuggestResponse {
+    let row = |value: String, detail: String| Suggestion {
+        label: value.clone(),
+        query: value,
+        kind: "answer".into(),
+        hint: "Copy".into(),
+        section: "answer".into(),
+        subtitle: detail,
+        icon: "glyph:network".into(),
+        ..Default::default()
+    };
+    let local = crate::ip::local();
+    let mut items: Vec<Suggestion> = Vec::new();
+    let mut rest = local.into_iter();
+    if let Some(primary) = rest.next() {
+        items.push(row(primary.value, format!("Local IP · {}", primary.detail)));
+    }
+    if include_remote && let Some(public) = crate::ip::public().await {
+        items.push(row(
+            public,
+            "Public IP, as the internet sees this computer".into(),
+        ));
+    }
+    items.extend(rest.map(|address| row(address.value, address.detail)));
+    SuggestResponse {
+        mode: "search".into(),
+        preselect: (!items.is_empty()).then_some(0),
+        items,
+        notice: None,
+        target: destination::enabled(destinations, armed_id).map(|found| found.id.clone()),
+        text: text.to_string(),
         search_with: searchable(destinations),
     }
 }
@@ -511,12 +563,22 @@ fn recent(
 ) -> SuggestResponse {
     let mut launches: Vec<&apps::LaunchEntry> = catalog.launches.iter().collect();
     launches.sort_by_key(|entry| std::cmp::Reverse(entry.last_used));
-    let apps: Vec<Suggestion> = launches
+    let mut opened: Vec<&App> = launches
         .iter()
         .filter_map(|entry| catalog.apps.iter().find(|app| app.id == entry.app_id))
         .take(3)
-        .map(app_item)
         .collect();
+    // Until three apps have been opened from Zephyr (a first launch), common ones fill in,
+    // so the empty bar always offers some.
+    for app in starter_apps(catalog.apps) {
+        if opened.len() >= 3 {
+            break;
+        }
+        if !opened.iter().any(|shown| shown.id == app.id) {
+            opened.push(app);
+        }
+    }
+    let apps: Vec<Suggestion> = opened.into_iter().map(app_item).collect();
 
     let mut searched: Vec<&HistoryEntry> = history.iter().collect();
     searched.sort_by_key(|entry| std::cmp::Reverse(entry.last_used));
@@ -538,6 +600,36 @@ fn recent(
         items,
         ..Default::default()
     }
+}
+
+/// Everyday apps that are installed, most likely first, for an empty bar with no history yet.
+fn starter_apps(installed: &[App]) -> Vec<&App> {
+    const COMMON: &[&str] = &[
+        "Google Chrome",
+        "Microsoft Edge",
+        "Firefox",
+        "Safari",
+        "File Explorer",
+        "Finder",
+        "Terminal",
+        "Visual Studio Code",
+        "Spotify",
+        "Discord",
+        "Steam",
+        "Settings",
+        "System Settings",
+        "Notepad",
+        "Notes",
+        "Calculator",
+    ];
+    COMMON
+        .iter()
+        .filter_map(|name| {
+            installed
+                .iter()
+                .find(|app| app.name.eq_ignore_ascii_case(name))
+        })
+        .collect()
 }
 
 fn history_items(
@@ -822,6 +914,45 @@ mod tests {
             uses: 1,
             last_used: 1_000_000,
         }
+    }
+
+    #[test]
+    fn a_first_launch_still_offers_common_apps() {
+        static NO_FILES: std::sync::LazyLock<crate::files::FileIndex> =
+            std::sync::LazyLock::new(crate::files::FileIndex::default);
+        let apps: Vec<App> = ["Zoom", "Steam", "Google Chrome", "Notepad", "Calculator"]
+            .iter()
+            .map(|name| App {
+                id: name.to_lowercase(),
+                name: (*name).into(),
+            })
+            .collect();
+        let opened = [apps::LaunchEntry {
+            app_id: "zoom".into(),
+            uses: 1,
+            last_used: 5,
+        }];
+        let catalog = |launches| Catalog {
+            apps: &apps,
+            settings: SETTINGS,
+            files: &NO_FILES,
+            launches,
+            file_opens: &[],
+            overrides: &[],
+            now: 100,
+        };
+        let labels = |response: SuggestResponse| -> Vec<String> {
+            response.items.into_iter().map(|item| item.label).collect()
+        };
+        assert_eq!(
+            labels(recent(&[], &[], &catalog(&[]))),
+            ["Google Chrome", "Steam", "Notepad"]
+        );
+        // What was opened comes first; common apps only fill the rest.
+        assert_eq!(
+            labels(recent(&[], &[], &catalog(&opened))),
+            ["Zoom", "Google Chrome", "Steam"]
+        );
     }
 
     #[test]

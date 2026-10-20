@@ -1,8 +1,15 @@
 // Turns a suggest response into the bar's sectioned list: the query row, command rows and
 // section headers. Pure functions, so the bar only wires them up.
 
-import { CTRL, MOD, shortcutKeys } from '../keys';
-import type { ClaudeJob, Destination, Snapshot, Suggestion, SuggestResponse } from '../types';
+import { CTRL, MOD, isMac, shortcutKeys } from '../keys';
+import type {
+  Binding,
+  ClaudeJob,
+  Destination,
+  Snapshot,
+  Suggestion,
+  SuggestResponse,
+} from '../types';
 
 export interface RowCtx {
   snapshot: Snapshot | null;
@@ -36,6 +43,7 @@ const SECTION_TITLES: Record<string, string> = {
   shell: 'Shell',
   power: 'Power',
   bookmarks: 'Bookmarks',
+  windows: 'Windows',
 };
 
 function destination(ctx: RowCtx, id: string): Destination | undefined {
@@ -82,6 +90,8 @@ export function jumpRows(ctx: RowCtx): Suggestion[] {
   }
   const noteKeys = settings?.notesShortcut ? shortcutKeys(settings.notesShortcut) : [];
   rows.push(view('notes', 'Notes', 'glyph:note', noteKeys.length ? { keys: noteKeys } : {}));
+  // Types "ip" in, so the addresses answer below it.
+  rows.push(view('ip', 'IP address', 'glyph:network', {}));
   if (ctx.jobs.length || settings?.claude.projects.length) {
     const running = ctx.jobs.filter(
       (job) => job.status === 'running' || job.status === 'queued'
@@ -205,7 +215,14 @@ export function buildRows(
       destinationId: target,
       section: 'web',
       icon: target === 'url' ? 'glyph:link' : `dest:${target}`,
-      hint: target === 'url' ? 'Open' : ai ? 'Ask' : 'Search',
+      hint:
+        target === 'url'
+          ? 'Open'
+          : ai
+            ? 'Ask'
+            : target === 'google'
+              ? `↵ Search · ${isMac ? '⇧' : 'Shift+'}↵ AI Mode`
+              : 'Search',
     });
     preselect = 0;
   }
@@ -220,6 +237,12 @@ export function buildRows(
     preselect = 0;
   }
   rows.push(...commands.rows);
+  // An alias the user set, typed exactly, outranks everything, app name matches included.
+  const aliased = aliasRow(ctx);
+  if (aliased) {
+    rows.unshift(aliased);
+    preselect = 0;
+  }
   if (response.mode === 'search' && response.target && response.text) {
     const hasQuery = rows.some((row) => row.kind === 'query');
     rows.push(...searchWithRows(response, ctx, hasQuery ? response.target : null));
@@ -328,4 +351,96 @@ export function primaryLabel(row: Suggestion | undefined, ctx: RowCtx): string |
       return `Use ${row.label}`;
   }
   return null;
+}
+
+/** The binding an alias names, matched case-insensitively. */
+export function bindingForAlias(ctx: RowCtx, alias: string): Binding | undefined {
+  const wanted = alias.trim().toLowerCase();
+  if (!wanted) return undefined;
+  return ctx.snapshot?.bindings?.find((binding) => binding.alias && binding.alias === wanted);
+}
+
+/** The command (mode or scoped search) a view: or scope: target names. */
+export function commandFor(target: string): Command | undefined {
+  const id = target.startsWith('view:') ? target.slice(5) : target;
+  return COMMANDS.find((command) => command.id === id);
+}
+
+/** A row for whatever a binding points at, as the bar would show it. */
+export function bindingRow(binding: Binding): Suggestion | null {
+  const [kind, ...rest] = binding.target.split(':');
+  const value = rest.join(':');
+  const hint = binding.alias ? `Alias “${binding.alias}”` : '';
+  switch (kind) {
+    case 'app':
+      return {
+        kind: 'app',
+        appId: value,
+        label: binding.label,
+        query: '',
+        destinationId: '',
+        hint,
+        section: 'apps',
+        icon: `app:${value}`,
+      };
+    case 'dest':
+      return {
+        kind: 'destination',
+        label: binding.label,
+        query: '',
+        destinationId: value,
+        hint,
+        section: 'destinations',
+        icon: `dest:${value}`,
+      };
+    case 'bookmark':
+      return {
+        kind: 'bookmark',
+        label: binding.label,
+        query: value,
+        destinationId: '',
+        hint,
+        section: 'bookmarks',
+        icon: `site:${value}`,
+      };
+    case 'view':
+    case 'scope': {
+      const command = commandFor(binding.target);
+      if (!command) return null;
+      return view(command.id, command.label, command.icon, { hint });
+    }
+    default:
+      return null;
+  }
+}
+
+function aliasRow(ctx: RowCtx): Suggestion | null {
+  const binding = bindingForAlias(ctx, ctx.typed);
+  return binding ? bindingRow(binding) : null;
+}
+
+/**
+ * The binding target for a row, when the row can have a hotkey or alias: an app, a
+ * destination, a bookmark, or a command (a mode or scoped search).
+ */
+export function bindingTarget(row: Suggestion): { target: string; label: string } | null {
+  if (row.kind === 'app' && row.appId) return { target: `app:${row.appId}`, label: row.label };
+  if (row.kind === 'destination') return { target: `dest:${row.destinationId}`, label: row.label };
+  if (row.kind === 'searchWith') return { target: `dest:${row.destinationId}`, label: row.label };
+  if (row.kind === 'bookmark') return { target: `bookmark:${row.query}`, label: row.label };
+  if (row.kind === 'view') {
+    const id = row.destinationId;
+    if (id === 'back' || id === 'ip') return null;
+    const target = id.startsWith('scope:') ? id : `view:${id}`;
+    return commandFor(target) ? { target, label: row.label } : null;
+  }
+  return null;
+}
+
+/** Every mode and scoped search, as binding targets, for Settings > Shortcuts. */
+export function commandTargets(): { target: string; label: string }[] {
+  return COMMANDS.map((command) => ({
+    target: command.id.startsWith('scope:') ? command.id : `view:${command.id}`,
+    label: command.label,
+  }));
 }

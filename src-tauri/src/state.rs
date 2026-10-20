@@ -86,6 +86,8 @@ pub struct Persisted {
     /// app reads them, so they wait until file search is first used rather than prompting
     /// at launch.
     pub protected_folders: bool,
+    /// Hotkeys and aliases the user gave commands, apps, destinations and bookmarks.
+    pub bindings: Vec<Binding>,
 }
 
 /// The palettes Settings > Appearance offers; the first is the default.
@@ -93,6 +95,22 @@ pub const THEMES: &[&str] = &["violet", "graphite", "ocean", "forest", "ember"];
 
 fn default_theme() -> String {
     THEMES[0].into()
+}
+
+/// A hotkey and/or an alias for one thing the bar can do. `target` names it: `view:ai`,
+/// `scope:files`, `app:<id>`, `dest:<id>` or `bookmark:<url>`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Binding {
+    pub target: String,
+    /// What Settings calls it ("Ask AI", "Spotify").
+    pub label: String,
+    /// A global shortcut that runs it from anywhere; empty for none.
+    pub hotkey: String,
+    /// Typed in the bar (then a space) to go straight to it; empty for none.
+    pub alias: String,
+    /// Fires as soon as the alias is typed, no space: for symbols like `=`.
+    pub direct: bool,
 }
 
 /// A note open in its own window, and where that window was, in physical pixels.
@@ -192,6 +210,7 @@ impl Persisted {
             note_windows: Vec::new(),
             bug_capture: true,
             protected_folders: false,
+            bindings: Vec::new(),
         }
     }
 
@@ -245,6 +264,7 @@ impl Persisted {
                 .then_some(self.clipboard.shortcut.as_str()),
             notes: Some(self.notes_shortcut.as_str()),
             capture: self.bug_capture,
+            bindings: &self.bindings,
         }
     }
 

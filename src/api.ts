@@ -16,6 +16,8 @@ import type {
   LocalServer,
   Note,
   NoteSummary,
+  Binding,
+  FilePreview,
   BookmarkSource,
   MediaControl,
   NowPlaying,
@@ -46,8 +48,24 @@ export function suggest(
   return invoke<SuggestResponse>('suggest', { query, destinationId, includeRemote });
 }
 
-export function launchApp(appId: string): Promise<DispatchOutcome> {
-  return invoke<DispatchOutcome>('launch_app', { appId });
+/** Opens an app, or switches to it when it's running; newWindow starts another one. */
+export function launchApp(appId: string, newWindow = false): Promise<DispatchOutcome> {
+  return invoke<DispatchOutcome>('launch_app', { appId, newWindow });
+}
+
+/** Switches to an open window. */
+export function windowFocus(handle: number): Promise<void> {
+  return invoke('window_focus', { handle });
+}
+
+/** Asks an open window to close, as its close button would. */
+export function windowClose(handle: number): Promise<void> {
+  return invoke('window_close', { handle });
+}
+
+/** Asks every window of an app to close; nothing is force-quit. */
+export function appQuit(appId: string): Promise<void> {
+  return invoke('app_quit', { appId });
 }
 
 /** Opens the connection to a destination's suggestion service before the first keystroke. */
@@ -590,4 +608,46 @@ export function rehearseUpdate(): Promise<void> {
 
 export function saveSteamGames(enabled: boolean): Promise<Snapshot> {
   return invoke<Snapshot>('save_steam_games', { enabled });
+}
+
+/** Saves a hotkey and alias for one target; both empty removes it. */
+export function saveBinding(binding: Binding): Promise<Snapshot> {
+  return invoke<Snapshot>('save_binding', { binding });
+}
+
+/** Targets whose hotkey another app already holds. */
+export function bindingFailures(): Promise<string[]> {
+  return invoke<string[]>('binding_failures');
+}
+
+/** From the bar: opens Settings > Shortcuts on this target. */
+export function editBinding(target: string, label: string): Promise<void> {
+  return invoke('edit_binding', { target, label });
+}
+
+/** For Settings: the target the bar asked about, once. */
+export function takePendingBinding(): Promise<{ target: string; label: string } | null> {
+  return invoke('take_pending_binding');
+}
+
+/** Gets a file result or clipboard item ready to drag out; the bar stays up meanwhile. */
+export function dragPrepare(source: {
+  path?: string;
+  clip?: number;
+}): Promise<{ files: string[]; icon: string }> {
+  return invoke('drag_prepare', { path: source.path ?? null, clip: source.clip ?? null });
+}
+
+export function dragFinished(dropped: boolean): Promise<void> {
+  return invoke('drag_finished', { dropped });
+}
+
+/** A look at a file result without opening it. */
+export function filePreview(path: string): Promise<FilePreview> {
+  return invoke<FilePreview>('file_preview', { path });
+}
+
+/** macOS: Quick Look on a file result. */
+export function quickLook(path: string): Promise<void> {
+  return invoke('quick_look', { path });
 }

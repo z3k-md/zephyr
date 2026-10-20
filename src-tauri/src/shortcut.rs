@@ -1,4 +1,5 @@
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 use tauri::AppHandle;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
@@ -44,6 +45,43 @@ pub struct Extras<'a> {
     pub notes: Option<&'a str>,
     /// Ctrl+Alt+R and Ctrl+Alt+S for bug captures.
     pub capture: bool,
+    /// Hotkeys the user gave commands, apps, destinations and bookmarks.
+    pub bindings: &'a [crate::state::Binding],
+}
+
+/// The registered binding hotkeys, by shortcut id, with what each runs.
+fn bound() -> &'static Mutex<Vec<(u32, String)>> {
+    static BOUND: OnceLock<Mutex<Vec<(u32, String)>>> = OnceLock::new();
+    BOUND.get_or_init(Default::default)
+}
+
+/// Bindings whose hotkey couldn't be registered (another app holds it), by target.
+fn failed() -> &'static Mutex<Vec<String>> {
+    static FAILED: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
+    FAILED.get_or_init(Default::default)
+}
+
+/// What a pressed binding hotkey runs.
+pub fn binding_for(shortcut: &Shortcut) -> Option<String> {
+    bound()
+        .lock()
+        .ok()?
+        .iter()
+        .find(|(id, _)| *id == shortcut.id())
+        .map(|(_, target)| target.clone())
+}
+
+/// The targets whose hotkey another app already holds, for Settings to point out.
+pub fn failed_bindings() -> Vec<String> {
+    failed()
+        .lock()
+        .map(|failed| failed.clone())
+        .unwrap_or_default()
+}
+
+/// Whether two shortcuts are the same keys, however they were written.
+pub fn same(a: &str, b: &str) -> bool {
+    matches!((parse(a), parse(b)), (Ok(a), Ok(b)) if a.id() == b.id())
 }
 
 /// Replaces the registered shortcuts with the summon shortcut and the optional ones. An
@@ -86,6 +124,33 @@ pub fn register(app: &AppHandle, shortcut: &str, extras: Extras<'_>) -> Result<(
             Ok(extra) => slot.store(extra.id(), Ordering::SeqCst),
             Err(err) => log::error!("{err}"),
         }
+    }
+
+    let mut registered = Vec::new();
+    let mut failures = Vec::new();
+    for binding in extras
+        .bindings
+        .iter()
+        .filter(|binding| !binding.hotkey.is_empty())
+    {
+        match parse(&binding.hotkey).and_then(|hotkey| {
+            shortcuts
+                .register(hotkey)
+                .map(|()| hotkey)
+                .map_err(|err| format!("Couldn't register {}: {err}", binding.hotkey))
+        }) {
+            Ok(hotkey) => registered.push((hotkey.id(), binding.target.clone())),
+            Err(err) => {
+                log::error!("{err}");
+                failures.push(binding.target.clone());
+            }
+        }
+    }
+    if let Ok(mut bound) = bound().lock() {
+        *bound = registered;
+    }
+    if let Ok(mut failed) = failed().lock() {
+        *failed = failures;
     }
     Ok(())
 }

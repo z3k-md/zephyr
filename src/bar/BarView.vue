@@ -11,6 +11,12 @@
     getSnapshot,
     hideBar,
     launchApp,
+    quickLook,
+    pageReady,
+    editBinding,
+    windowFocus,
+    windowClose,
+    appQuit,
     openFile,
     openSetting,
     claudeSubmit,
@@ -42,12 +48,16 @@
   import DeviceCard from './DeviceCard.vue';
   import ResultList from './ResultList.vue';
   import NowPlayingStrip from './NowPlayingStrip.vue';
+  import { dragOut } from './dragOut';
+  import { GLYPHS } from './glyphs';
+  import FilePreviewPane from './FilePreviewPane.vue';
   import { useNowPlaying } from './nowPlaying';
-  import { buildRows, groups, primaryLabel, rowKey, type RowCtx } from './rows';
+  import { bindingForAlias, bindingTarget, buildRows, groups, rowKey, type RowCtx } from './rows';
   import ClaudeView from '../claude/ClaudeView.vue';
   import ShellView from '../shell/ShellView.vue';
   import {
     isSnapshot,
+    type Binding,
     type ClaudeApproval,
     type ClaudeJob,
     type SyncPending,
@@ -203,6 +213,7 @@
     sleep: 'glyph:moon',
     lock: 'glyph:lock',
     sign_out: 'glyph:signout',
+    firmware: 'glyph:chip',
   };
   const POWER_LABELS: Record<string, string> = {
     shutdown: 'Shut down',
@@ -210,6 +221,7 @@
     sleep: 'Sleep',
     lock: 'Lock',
     sign_out: 'Sign out',
+    firmware: 'Restart to BIOS',
   };
   const POWER_NAMES: Record<string, string> = {
     shutdown: 'Shutting down',
@@ -217,6 +229,7 @@
     sleep: 'Sleeping',
     lock: 'Locking',
     sign_out: 'Signing out',
+    firmware: 'Restarting to BIOS',
   };
 
   function powerRows(): Suggestion[] {
@@ -315,17 +328,6 @@
     selected.value >= 0 ? items.value[selected.value] : undefined
   );
 
-  const enterLabel = computed(() => {
-    const item = selectedItem.value;
-    if (item?.kind === 'powerPending') return 'Cancel it';
-    if (item?.kind === 'bookmark') return `Open ${item.label}`;
-    if (item?.kind === 'power' && item.power) {
-      const key = `${item.power.action}:${item.power.at ?? 'now'}`;
-      return confirmArm.value === key ? `Confirm: ${item.power.label}` : item.power.label;
-    }
-    return primaryLabel(item, rowCtx.value) ?? `Search ${armed.value?.name ?? ''}`;
-  });
-
   // Type-ahead: the rest of what Enter would act on, drawn faintly after the cursor. Enter
   // still sends only what was typed; Right arrow or End takes the completion.
   const caretAtEnd = ref(true);
@@ -415,21 +417,42 @@
   watch(notice, (text) => text && trace('notice', { text }));
 
   const isMac = navigator.userAgent.includes('Mac');
-  const actionKey = isMac ? '⌘K' : 'Ctrl+K';
 
   // Ctrl+K (⌘K on a Mac) lists what else the selected row, or the typed text, can do.
-  const actions = computed<Action[]>(() => {
+  const rowActions = computed<Action[]>(() => {
     const item = selectedItem.value;
     const list: Action[] = [];
     if (item?.kind === 'answer') {
       list.push({ label: 'Copy answer', run: () => copyText(item.label) });
+    } else if (item?.kind === 'app' && item.appId && item.windows?.length) {
+      // A running app: switch to any of its windows, start another, or close it.
+      const appId = item.appId;
+      const front = item.windows[0].handle;
+      for (const open of item.windows.slice(0, 5)) {
+        list.push({ label: `Switch to ${open.title}`, run: () => switchTo(open.handle) });
+      }
+      list.push({ label: 'Open a new window', run: () => launch(appId, true) });
+      list.push({ label: 'Close window', run: () => closeWindow(front) });
+      list.push({ label: `Quit ${item.label}`, run: () => quitApp(appId, item.label) });
     } else if (item?.kind === 'app' && item.appId) {
       const appId = item.appId;
       list.push({ label: `Open ${item.label}`, run: () => launch(appId) });
       list.push({ label: 'Copy name', run: () => copyText(item.label) });
+    } else if (item?.kind === 'window' && item.window) {
+      const handle = item.window;
+      list.push({ label: 'Switch', run: () => switchTo(handle) });
+      list.push({ label: 'Close window', run: () => closeWindow(handle) });
+      if (item.appId) {
+        const appId = item.appId;
+        list.push({ label: `Quit ${item.hint}`, run: () => quitApp(appId, item.hint) });
+      }
     } else if (item?.kind === 'file' && item.path) {
       const path = item.path;
       list.push({ label: `Open ${item.label}`, run: () => openPath(path) });
+      list.push({
+        label: isMac ? 'Quick Look' : previewOpen.value ? 'Close preview' : 'Preview',
+        run: () => togglePreview(),
+      });
       list.push({ label: `Show in ${isMac ? 'Finder' : 'Explorer'}`, run: () => reveal(path) });
       list.push({ label: 'Copy path', run: () => copyText(path) });
     } else if (item?.kind === 'setting' && item.settingId) {
@@ -461,6 +484,19 @@
     return list;
   });
 
+  // Anything that can have a hotkey or alias gets one more action, which opens Settings on it.
+  const actions = computed<Action[]>(() => {
+    const item = selectedItem.value;
+    const bindable = item ? bindingTarget(item) : null;
+    if (!bindable) return rowActions.value;
+    const set = snapshot.value?.bindings?.find((binding) => binding.target === bindable.target);
+    const label = set ? 'Change hotkey or alias…' : 'Set hotkey or alias…';
+    return [
+      ...rowActions.value,
+      { label, run: () => editBinding(bindable.target, bindable.label) },
+    ];
+  });
+
   // What's playing, in the footer where the shortcut otherwise sits.
   const media = useNowPlaying();
   const playingNow = computed(() =>
@@ -474,6 +510,8 @@
   );
 
   onMounted(async () => {
+    // Only logs the startup timing; the bar still shows when it's summoned.
+    pageReady();
     try {
       snapshot.value = await getSnapshot();
       armedId.value = snapshot.value.defaultDestinationId;
@@ -498,6 +536,7 @@
           parked.value = '';
           view.value = 'root';
           resetForSummon();
+          scheduleSuggest();
           void focusInput();
           return;
         }
@@ -513,6 +552,9 @@
         // A scoped search (files, apps, settings, notes) sticks until something is picked.
         const picker = scope.value !== null || /^!(note|notes)\b/i.test(query.value);
         if (!recent && !picker) resetForSummon();
+        // The empty bar's list changes while hidden (apps found after startup, a launch, a
+        // search), and the text is unchanged, so nothing else would refresh it.
+        if (!query.value) scheduleSuggest();
         void focusInput();
       })
     );
@@ -562,6 +604,13 @@
       await listen('clipboard-shown', () => {
         clipQuery.value = '';
         enter('clip');
+      })
+    );
+    // A hotkey the user gave a mode or scoped search (Settings > Shortcuts).
+    unlistens.push(
+      await listen<string>('bar-open', (event) => {
+        query.value = '';
+        openView(event.payload);
       })
     );
     unlistens.push(
@@ -706,6 +755,9 @@
       enter('clip');
     } else if (id === 'notes') {
       void openNotes();
+    } else if (id === 'ip') {
+      query.value = 'ip';
+      void focusInput();
     } else if (id.startsWith('scope:')) {
       scope.value = SCOPES[id.slice(6)] ?? null;
       void focusInput();
@@ -758,6 +810,7 @@
   }
 
   watch(query, () => {
+    if (!scope.value && view.value === 'root' && runAlias()) return;
     const scoped = /^!([a-z]+)\s+(.*)$/is.exec(query.value);
     if (!scope.value && scoped && SCOPES[scoped[1].toLowerCase()]) {
       scope.value = SCOPES[scoped[1].toLowerCase()];
@@ -1079,6 +1132,26 @@
       return;
     }
 
+    // Shift+Space on a file previews it (plain Space still types); Esc closes the preview
+    // before anything else.
+    if (
+      event.key === ' ' &&
+      event.shiftKey &&
+      !event.ctrlKey &&
+      !event.altKey &&
+      !event.metaKey &&
+      selectedItem.value?.kind === 'file'
+    ) {
+      event.preventDefault();
+      if (!event.repeat) togglePreview();
+      return;
+    }
+    if (event.key === 'Escape' && previewShown.value) {
+      event.preventDefault();
+      previewOpen.value = false;
+      return;
+    }
+
     // Esc backs out of a shutdown waiting for its second Enter before it closes anything.
     if (event.key === 'Escape' && confirmArm.value) {
       event.preventDefault();
@@ -1106,6 +1179,17 @@
     if (event.key === 'Tab') {
       event.preventDefault();
       cycleArmed(event.shiftKey);
+      return;
+    }
+
+    // Alt+1..9 (⌘1..9 on a Mac) runs the Nth row, as Enter on it would.
+    if (runKeyHeld(event) && /^Digit[1-9]$/.test(event.code)) {
+      const index = Number(event.code.slice(5)) - 1;
+      if (index < items.value.length) {
+        event.preventDefault();
+        showNumbers.value = false;
+        if (!event.repeat) chooseAt(index);
+      }
       return;
     }
 
@@ -1147,12 +1231,40 @@
 
     if (event.key === 'Enter') {
       event.preventDefault();
-      if (event.repeat || event.shiftKey) return;
+      if (event.repeat) return;
+      if (event.shiftKey) {
+        if (!modifier && !event.altKey) void googleAiMode();
+        return;
+      }
       if (modifier || event.altKey) {
         void route(event.altKey ? 'alt' : 'cmd');
         return;
       }
       void accept();
+    }
+  }
+
+  /**
+   * Shift+Enter on a search going to Google opens it in Google's AI Mode (udm=50) instead
+   * of the usual results. Anything else ignores it.
+   */
+  async function googleAiMode() {
+    const item = selectedItem.value;
+    const searchRow =
+      item && ['query', 'history', 'remote', 'searchWith'].includes(item.kind) ? item : null;
+    const text = (searchRow ? searchRow.query : typedText()).trim();
+    const destinationId = searchRow ? searchRow.destinationId : armedId.value;
+    if (!text || destinationId !== 'google' || (item && !searchRow)) return;
+    try {
+      const url = new URL(await resolveUrl(text, 'google'));
+      url.searchParams.set('udm', '50');
+      await openUrl(url.toString());
+      query.value = '';
+      scope.value = null;
+      selected.value = -1;
+      notice.value = null;
+    } catch (error) {
+      notice.value = errorMessage(error);
     }
   }
 
@@ -1247,9 +1359,48 @@
       gridReady = true;
       void prepareGrid().catch(() => (gridReady = false));
     }
+    trackRunKey(event);
   }
-  const cmdLabel = computed(() => routeFor('cmd').label);
-  const altLabel = computed(() => routeFor('alt').label);
+
+  // Alt+1..9 (⌘1..9 on a Mac) runs the Nth row. Holding the key a moment, or tapping Alt
+  // alone on Windows, numbers the rows; any other key hides the numbers again.
+  const RUN_KEY = isMac ? '⌘' : 'Alt+';
+  const showNumbers = ref(false);
+  let numbersTimer = 0;
+  let altAlone = false;
+  function runKeyHeld(event: KeyboardEvent | MouseEvent) {
+    return isMac
+      ? event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey
+      : event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey;
+  }
+  function trackRunKey(event: KeyboardEvent | MouseEvent) {
+    const keyboard = event instanceof KeyboardEvent;
+    if (keyboard && event.type === 'keydown') {
+      altAlone = !isMac && event.key === 'Alt';
+      if (event.key !== 'Alt' && event.key !== 'Meta') showNumbers.value = false;
+    }
+    if (keyboard && event.type === 'keyup' && event.key === 'Alt' && !isMac) {
+      // A bare Alt would otherwise move the webview's focus to a (missing) menu bar.
+      event.preventDefault();
+      window.clearTimeout(numbersTimer);
+      numbersTimer = 0;
+      showNumbers.value = altAlone;
+      altAlone = false;
+      return;
+    }
+    if (runKeyHeld(event)) {
+      if (!numbersTimer && !showNumbers.value) {
+        numbersTimer = window.setTimeout(() => {
+          numbersTimer = 0;
+          showNumbers.value = true;
+        }, 300);
+      }
+    } else if (!keyboard || event.type === 'keyup') {
+      window.clearTimeout(numbersTimer);
+      numbersTimer = 0;
+      if (isMac || keyboard) showNumbers.value = false;
+    }
+  }
 
   function runAction(action: Action | undefined) {
     if (!action) return;
@@ -1267,6 +1418,49 @@
     armedId.value = destinationId;
     query.value = '';
     inputEl.value?.focus();
+  }
+
+  /**
+   * Aliases the user set (Settings > Shortcuts). A direct one fires as soon as it's typed;
+   * any other, typed and then a space, goes into its destination or command with whatever
+   * follows. An app's or bookmark's alias waits for Enter (its row tops the list instead).
+   * Returns whether it took the text.
+   */
+  function runAlias(): boolean {
+    const text = query.value;
+    const ctx = rowCtx.value;
+    const direct = bindingForAlias(ctx, text);
+    if (direct?.direct && text.trim() === text) {
+      query.value = '';
+      void runBinding(direct, '');
+      return true;
+    }
+    const spaced = /^(\S+) (.*)$/s.exec(text);
+    if (!spaced) return false;
+    const binding = bindingForAlias(ctx, spaced[1]);
+    if (!binding || binding.direct) return false;
+    if (!/^(dest|view|scope):/.test(binding.target)) return false;
+    void runBinding(binding, spaced[2]);
+    return true;
+  }
+
+  async function runBinding(binding: Binding, rest: string) {
+    const [kind, ...parts] = binding.target.split(':');
+    const value = parts.join(':');
+    if (kind === 'dest') {
+      armedId.value = value;
+      query.value = rest;
+      inputEl.value?.focus();
+    } else if (kind === 'view' || kind === 'scope') {
+      const id = kind === 'scope' ? binding.target : value;
+      query.value = rest;
+      openView(id);
+      if (kind === 'scope') query.value = rest;
+    } else if (kind === 'app') {
+      await launch(value);
+    } else if (kind === 'bookmark') {
+      await openUrl(value).catch((error) => (notice.value = errorMessage(error)));
+    }
   }
 
   async function copyLink(text: string, destinationId: string) {
@@ -1390,6 +1584,10 @@
         await launch(item.appId);
         return;
       }
+      if (item.kind === 'window' && item.window) {
+        await switchTo(item.window);
+        return;
+      }
       if (item.kind === 'setting' && item.settingId) {
         await openPage(item.settingId);
         return;
@@ -1422,6 +1620,49 @@
     void accept();
   }
 
+  // Shift+Space on a file (or Preview in its actions) opens a look at it beside the results;
+  // it follows the selection until closed. On a Mac it's Quick Look instead.
+  const previewOpen = ref(false);
+  const inputRowEl = ref<HTMLElement | null>(null);
+  const footerEl = ref<HTMLElement | null>(null);
+  const previewBounds = ref({ top: 0, bottom: 0 });
+  const previewShown = computed(
+    () => previewOpen.value && view.value === 'root' && selectedItem.value?.kind === 'file'
+  );
+  const previewStyle = computed(() => ({
+    top: `${previewBounds.value.top}px`,
+    bottom: `${previewBounds.value.bottom}px`,
+  }));
+
+  function measurePreview() {
+    const bar = root.value;
+    const input = inputRowEl.value;
+    const footer = footerEl.value;
+    if (!bar || !input || !footer) return;
+    previewBounds.value = {
+      top: input.offsetTop + input.offsetHeight,
+      bottom: bar.clientHeight - footer.offsetTop,
+    };
+  }
+
+  function togglePreview() {
+    const path = selectedItem.value?.kind === 'file' ? selectedItem.value.path : undefined;
+    if (!path) return;
+    if (isMac) {
+      void quickLook(path).catch((error) => (notice.value = errorMessage(error)));
+      return;
+    }
+    previewOpen.value = !previewOpen.value;
+    if (previewOpen.value) void nextTick(measurePreview);
+  }
+
+  /** A file result dragged out of the bar drops into the other app as that file. */
+  function dragRow(index: number) {
+    const row = items.value[index];
+    if (row?.kind !== 'file' || !row.path) return;
+    void dragOut({ path: row.path }).catch((error) => (notice.value = errorMessage(error)));
+  }
+
   /** Shut down, restart and sign out take a second Enter; sleep and lock go at once. */
   async function runPower(preview: PowerPreview) {
     const key = `${preview.action}:${preview.at ?? 'now'}`;
@@ -1450,9 +1691,43 @@
     }
   }
 
-  async function launch(appId: string) {
+  async function switchTo(handle: number) {
     try {
-      await launchApp(appId);
+      await windowFocus(handle);
+      query.value = '';
+      scope.value = null;
+      selected.value = -1;
+      notice.value = null;
+    } catch (error) {
+      notice.value = errorMessage(error);
+    }
+  }
+
+  /** Closing asks the window, so the app can still offer to save; the list catches up. */
+  async function closeWindow(handle: number) {
+    try {
+      await windowClose(handle);
+      notice.value = 'Asked the window to close';
+      window.setTimeout(scheduleSuggest, 400);
+    } catch (error) {
+      notice.value = errorMessage(error);
+    }
+  }
+
+  async function quitApp(appId: string, name: string) {
+    try {
+      await appQuit(appId);
+      notice.value = `Asked ${name} to quit`;
+      window.setTimeout(scheduleSuggest, 400);
+    } catch (error) {
+      notice.value = errorMessage(error);
+    }
+  }
+
+  /** Opens an app; a running one is switched to unless `newWindow` asks for another. */
+  async function launch(appId: string, newWindow = false) {
+    try {
+      await launchApp(appId, newWindow);
       query.value = '';
       scope.value = null;
       selected.value = -1;
@@ -1550,7 +1825,7 @@
   <div
     ref="root"
     class="bar"
-    :class="{ moving: movable }"
+    :class="{ moving: movable, previewing: previewShown }"
     role="dialog"
     aria-label="Zephyr"
     @mousedown.capture="dragWithCtrl"
@@ -1603,7 +1878,7 @@
       @picked="leave"
     />
     <template v-if="view === 'root'">
-      <div class="input-row">
+      <div ref="inputRowEl" class="input-row">
         <svg class="mark" viewBox="0 0 24 24" aria-hidden="true">
           <circle cx="11" cy="11" r="6.5" />
           <path d="M16 16.5 20 20.5" />
@@ -1635,9 +1910,10 @@
             @select="trackCaret"
           />
         </div>
-        <!-- Where Enter sends the text; Tab cycles it and Ctrl+1–8 pick one by number. -->
+        <!-- Only when Tab or Ctrl+1–8 sent the text somewhere other than the default; the
+             top row already says where it goes. -->
         <button
-          v-if="armed"
+          v-if="armed && armed.id !== snapshot?.defaultDestinationId"
           class="chip active armed-pill"
           type="button"
           title="Tab cycles · Ctrl+1–8 picks"
@@ -1645,9 +1921,6 @@
           @click="cycleArmed(false)"
         >
           {{ armed.name }}
-        </button>
-        <button class="text-button" type="button" @mousedown.prevent @click="openSettings">
-          Settings
         </button>
       </div>
 
@@ -1675,33 +1948,32 @@
         :groups="sections"
         :selected="selected"
         :names="destinationNames"
+        :numbered="showNumbers ? RUN_KEY : ''"
         @choose="chooseAt"
         @hover="hover"
+        @drag="dragRow"
       />
 
-      <p v-else-if="mode === 'recent' && !query.trim()" class="empty">
-        Searches you run will show up here.
-      </p>
+      <!-- After the list's v-if chain, which it must not join. -->
+      <FilePreviewPane
+        v-if="previewShown && selectedItem?.path"
+        :path="selectedItem.path"
+        :name="selectedItem.label"
+        :icon="selectedItem.icon"
+        :style="previewStyle"
+      />
 
-      <footer class="footer">
-        <span>
-          <!-- Only dims while a held key previews another Enter route; with no text there is
-               none, and dimming then just made the footer flash on every Ctrl press. -->
-          <span :class="{ dim: held && query.trim() }">↵ {{ enterLabel }}</span>
-          <template v-if="query.trim()">
-            ·
-            <span :class="{ lit: held === 'cmd' }"
-              >{{ isMac ? '⌘' : 'Ctrl+' }}↵ {{ cmdLabel }}</span
-            >
-            ·
-            <span :class="{ lit: held === 'alt' }">{{ isMac ? '⌥' : 'Alt+' }}↵ {{ altLabel }}</span>
-          </template>
-          <template v-if="selectedItem?.kind === 'file'">
-            · Ctrl+Enter show in {{ isMac ? 'Finder' : 'Explorer' }} · Ctrl+Shift+C copy path
-          </template>
-          <template v-if="actions.length && !actionsOpen"> · {{ actionKey }} actions</template>
-          <template v-if="actionsOpen"> · Esc back</template>
-        </span>
+      <footer ref="footerEl" class="footer">
+        <button
+          type="button"
+          class="footer-settings"
+          title="Zephyr settings"
+          aria-label="Zephyr settings"
+          @mousedown.prevent
+          @click="openSettings"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true" v-html="GLYPHS.gear" />
+        </button>
         <span v-if="movable" class="move-hint">
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M12 3v18M3 12h18M12 3 9.5 5.5M12 3l2.5 2.5M12 21l-2.5-2.5M12 21l2.5-2.5" />

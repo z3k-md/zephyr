@@ -784,6 +784,37 @@ pub fn detail(id: u64) -> Result<ClipDetail, String> {
     })
 }
 
+/// Files to drag a history item out as: a files item's own paths, an image as a PNG and text
+/// (or a link or color) as a .txt, both written into `dir`.
+pub fn drag_files(id: u64, dir: &Path) -> Result<Vec<String>, String> {
+    let history = history()
+        .lock()
+        .map_err(|_| "Clipboard history is unavailable")?;
+    let item = history
+        .items
+        .iter()
+        .find(|item| item.id == id)
+        .ok_or("That item is no longer in your history")?;
+    if item.kind == Kind::Files {
+        return Ok(item.files.clone());
+    }
+    fs::create_dir_all(dir).map_err(|err| err.to_string())?;
+    let (name, bytes) = if item.kind == Kind::Image {
+        let png = history
+            .image_png(id)
+            .ok_or("That image is no longer in your history")?;
+        (format!("Clipboard image {id}.png"), png)
+    } else {
+        (
+            format!("Clipboard text {id}.txt"),
+            item.text.clone().into_bytes(),
+        )
+    };
+    let path = dir.join(name);
+    fs::write(&path, bytes).map_err(|err| err.to_string())?;
+    Ok(vec![path.to_string_lossy().into_owned()])
+}
+
 // Actions
 
 /// Puts an item back on the clipboard and moves it to the top of history.

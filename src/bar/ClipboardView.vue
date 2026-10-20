@@ -11,6 +11,7 @@
     errorMessage,
   } from '../api';
   import type { ClipDetail, ClipKind, ClipSummary } from '../types';
+  import { dragGesture, dragOut } from './dragOut';
 
   const props = defineProps<{ initialQuery: string }>();
   // `picked` means an item was pasted or copied, which ends the clipboard picker.
@@ -36,6 +37,14 @@
   const mod = isMac ? '⌘' : 'Ctrl+';
 
   const inputEl = ref<HTMLInputElement | null>(null);
+
+  // Dragging an item out drops it into the other app: files as themselves, an image as a PNG
+  // and text as a .txt file.
+  const gesture = dragGesture((index) => {
+    const item = items.value[index];
+    if (!item) return;
+    void dragOut({ clip: item.id }).catch((error) => (notice.value = errorMessage(error)));
+  });
   const listEl = ref<HTMLElement | null>(null);
   const query = ref(props.initialQuery);
   const filter = ref('all');
@@ -360,7 +369,9 @@
             :aria-selected="index === selected"
             class="clip-item"
             :class="{ selected: index === selected }"
-            @mousedown.prevent
+            @mousedown.prevent="gesture.down($event, index)"
+            @mouseup="gesture.up()"
+            @mousemove="gesture.move($event)"
             @click="selected = index"
             @dblclick="paste(false)"
           >

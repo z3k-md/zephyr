@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Zephyr windows. The frontend only calls Zephyr's own commands and listens for events; plugins are driven from Rust.",
   "windows": ["main", "settings", "note-*", "grid", "update"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "drag:default"]
 }

@@ -110,11 +110,13 @@ fn extract(app_id: &str, size: u32) -> Option<Vec<u8>> {
     };
     use windows::core::PCWSTR;
 
-    // The same item Explorer launches the app from, so packaged and desktop apps both work.
-    let path: Vec<u16> = format!("shell:AppsFolder\\{app_id}")
-        .encode_utf16()
-        .chain(Some(0))
-        .collect();
+    // The same item Explorer launches the app from, so packaged and desktop apps both work;
+    // `exe:<path>` is a running program that isn't in the app list (an open window's owner).
+    let item = match app_id.strip_prefix("exe:") {
+        Some(program) => program.to_string(),
+        None => format!("shell:AppsFolder\\{app_id}"),
+    };
+    let path: Vec<u16> = item.encode_utf16().chain(Some(0)).collect();
     unsafe {
         // Already initialized on this thread is fine; the shell works in either apartment.
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
@@ -188,6 +190,15 @@ fn extract(app_id: &str, size: u32) -> Option<Vec<u8>> {
 #[cfg(not(any(windows, target_os = "macos")))]
 fn extract(_app_id: &str, _size: u32) -> Option<Vec<u8>> {
     None
+}
+
+/// A file's icon as PNG bytes, for the picture that follows the pointer in a drag.
+pub fn file_icon_png(path: &str, size: u32) -> Option<Vec<u8>> {
+    if cfg!(windows) {
+        extract(&format!("exe:{path}"), size)
+    } else {
+        extract(path, size)
+    }
 }
 
 /// The shell hands back premultiplied BGRA; PNG wants straight RGBA.

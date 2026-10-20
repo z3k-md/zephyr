@@ -53,6 +53,7 @@
   } from '../api';
   import SyncSection from './SyncSection.vue';
   import PermissionsSection from './PermissionsSection.vue';
+  import ShortcutsSection from './ShortcutsSection.vue';
   import SelectMenu from './SelectMenu.vue';
   import { GLYPHS } from '../bar/glyphs';
   import {
@@ -225,6 +226,7 @@
     { id: 'destinations', label: 'Destinations', icon: 'link' },
     { id: 'bookmarks', label: 'Bookmarks', icon: 'bookmark' },
     { id: 'nowplaying', label: 'Now playing', icon: 'music' },
+    { id: 'shortcuts', label: 'Shortcuts', icon: 'keyboard' },
     { id: 'files', label: 'Files', icon: 'folder' },
     { id: 'history', label: 'History', icon: 'clock' },
     ...(navigator.userAgent.includes('Mac')
@@ -1559,6 +1561,12 @@
       </section>
 
       <SyncSection v-if="snapshot" v-show="!search && active === 'sync'" />
+      <ShortcutsSection
+        v-if="snapshot"
+        v-show="!search && active === 'shortcuts'"
+        :snapshot="snapshot"
+        @apply="apply"
+      />
       <PermissionsSection
         v-if="snapshot && SECTIONS.some((section) => section.id === 'permissions')"
         v-show="!search && active === 'permissions'"

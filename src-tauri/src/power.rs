@@ -17,6 +17,8 @@ pub enum Action {
     Sleep,
     Lock,
     SignOut,
+    /// Restart straight into the BIOS (UEFI firmware settings).
+    Firmware,
 }
 
 impl Action {
@@ -27,6 +29,7 @@ impl Action {
             Action::Sleep => "Sleep",
             Action::Lock => "Lock",
             Action::SignOut => "Sign out",
+            Action::Firmware => "Restart to BIOS",
         }
     }
 
@@ -38,17 +41,62 @@ impl Action {
             Action::Sleep => "sleep",
             Action::Lock => "lock",
             Action::SignOut => "sign-out",
+            Action::Firmware => "restart to BIOS",
         }
     }
 
     /// Ending the session asks for a second Enter; sleep and lock don't lose anything.
     pub fn needs_confirm(self) -> bool {
-        matches!(self, Action::Shutdown | Action::Restart | Action::SignOut)
+        matches!(
+            self,
+            Action::Shutdown | Action::Restart | Action::SignOut | Action::Firmware
+        )
     }
+
+    /// Whether this computer can do it: restarting to the BIOS needs UEFI firmware, on
+    /// Windows or Linux. Macs can't be sent to firmware from software.
+    pub fn available(self) -> bool {
+        self != Action::Firmware || firmware_restart_supported()
+    }
+}
+
+#[cfg(windows)]
+fn firmware_restart_supported() -> bool {
+    use std::sync::OnceLock;
+    use windows::Win32::System::SystemInformation::{
+        FIRMWARE_TYPE, FirmwareTypeUefi, GetFirmwareType,
+    };
+    static UEFI: OnceLock<bool> = OnceLock::new();
+    *UEFI.get_or_init(|| {
+        let mut kind = FIRMWARE_TYPE::default();
+        unsafe { GetFirmwareType(&mut kind) }.is_ok() && kind == FirmwareTypeUefi
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn firmware_restart_supported() -> bool {
+    std::path::Path::new("/sys/firmware/efi").exists()
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+fn firmware_restart_supported() -> bool {
+    false
 }
 
 /// The words each action answers to, longest first so "shut down" wins over "shut".
 const WORDS: &[(&str, Action)] = &[
+    // Before "restart" and "reboot", which they start with.
+    ("restart to bios", Action::Firmware),
+    ("reboot to bios", Action::Firmware),
+    ("restart to uefi", Action::Firmware),
+    ("reboot to uefi", Action::Firmware),
+    ("restart to firmware", Action::Firmware),
+    ("reboot to firmware", Action::Firmware),
+    ("boot to bios", Action::Firmware),
+    ("firmware settings", Action::Firmware),
+    ("firmware", Action::Firmware),
+    ("bios", Action::Firmware),
+    ("uefi", Action::Firmware),
     ("shut down", Action::Shutdown),
     ("shutdown", Action::Shutdown),
     ("power off", Action::Shutdown),
@@ -110,7 +158,9 @@ pub fn preview(input: &str, now: DateTime<Local>) -> Option<Preview> {
         && !rest.contains(' ')
         && let Some((_, action)) = WORDS
             .iter()
-            .find(|(word, _)| word.starts_with(rest) && *word != rest)
+            .filter(|(word, action)| word.starts_with(rest) && *word != rest && action.available())
+            // The shortest word it starts: "rest" offers Restart, not Restart to BIOS.
+            .min_by_key(|(word, _)| word.len())
             .filter(|_| !WORDS.iter().any(|(word, _)| *word == rest))
     {
         return Some(Preview {
@@ -123,9 +173,9 @@ pub fn preview(input: &str, now: DateTime<Local>) -> Option<Preview> {
         });
     }
 
-    let (word, action) = WORDS
-        .iter()
-        .find(|(word, _)| rest == *word || rest.starts_with(&format!("{word} ")))?;
+    let (word, action) = WORDS.iter().find(|(word, action)| {
+        action.available() && (rest == *word || rest.starts_with(&format!("{word} ")))
+    })?;
     let mut tail = rest[word.len()..].trim();
     for filler in ["the computer", "computer", "the pc", "pc", "now"] {
         if let Some(stripped) = tail.strip_prefix(filler) {
@@ -305,6 +355,9 @@ pub fn commands_for(action: Action, delay: Option<i64>) -> Vec<Vec<String>> {
         match action {
             Action::Shutdown => vec![owned(&["shutdown", "/s", "/t", &after])],
             Action::Restart => vec![owned(&["shutdown", "/r", "/t", &after])],
+            // /fw needs an administrator, so Windows shows its UAC prompt; the restart (and
+            // its timer) start once it's allowed.
+            Action::Firmware => vec![owned(&[ELEVATED, "shutdown", "/r", "/fw", "/t", &after])],
             // These have no OS timer; a scheduled one is run by Zephyr when it's due.
             Action::SignOut if delay.is_none() => vec![owned(&["shutdown", "/l"])],
             Action::Sleep if delay.is_none() => vec![owned(&[
@@ -335,12 +388,46 @@ pub fn commands_for(action: Action, delay: Option<i64>) -> Vec<Vec<String>> {
             Action::Sleep => vec![owned(&["pmset", "sleepnow"])],
             // Locked in-process, which needs no permission (see `lock_screen`).
             Action::Lock => vec![owned(&[LOCK_IN_PROCESS])],
+            // Linux asks for permission itself (polkit); a Mac can't, so it's never offered.
+            Action::Firmware if cfg!(target_os = "linux") => {
+                vec![owned(&["systemctl", "reboot", "--firmware-setup"])]
+            }
+            Action::Firmware => Vec::new(),
         }
     }
 }
 
 /// Stands in for a command: lock the screen from inside Zephyr.
 const LOCK_IN_PROCESS: &str = "zephyr:lock";
+
+/// Before a command: run it as an administrator (Windows asks with its UAC prompt).
+const ELEVATED: &str = "zephyr:elevated";
+
+/// Runs a program as an administrator, hidden: Windows shows its UAC prompt first, and a
+/// declined prompt is an error.
+#[cfg(windows)]
+fn run_elevated(program: &str, args: &[String]) -> Result<(), String> {
+    use windows::Win32::UI::Shell::ShellExecuteW;
+    use windows::Win32::UI::WindowsAndMessaging::SW_HIDE;
+    use windows::core::{HSTRING, w};
+
+    let program = HSTRING::from(program);
+    let args = HSTRING::from(args.join(" "));
+    let result = unsafe { ShellExecuteW(None, w!("runas"), &program, &args, None, SW_HIDE) };
+    // ShellExecute reports success as a value above 32.
+    if result.0 as isize > 32 {
+        Ok(())
+    } else {
+        Err("Windows didn't allow it (the administrator prompt was declined)".into())
+    }
+}
+
+#[cfg(not(windows))]
+fn run_elevated(program: &str, _args: &[String]) -> Result<(), String> {
+    Err(format!(
+        "Running {program} as an administrator is only for Windows"
+    ))
+}
 
 /// The login framework's own "lock now", the one the menu bar's Lock Screen uses. Unlike
 /// pressing ⌃⌘Q through System Events, it needs neither Automation nor Accessibility.
@@ -395,6 +482,10 @@ fn execute(commands: &[Vec<String>]) -> Result<(), String> {
         }
         if command[0] == LOCK_IN_PROCESS {
             lock_screen()?;
+            continue;
+        }
+        if command[0] == ELEVATED && command.len() > 1 {
+            run_elevated(&command[1], &command[2..])?;
             continue;
         }
         let mut process = std::process::Command::new(&command[0]);
@@ -465,6 +556,14 @@ pub fn cancel(app: &AppHandle) {
         if cfg!(windows) && matches!(schedule.action, Action::Shutdown | Action::Restart) {
             // Nothing pending is fine: the OS just says so.
             let _ = execute(&[vec!["shutdown".into(), "/a".into()]]);
+        }
+        // A restart to the BIOS was started as an administrator, so stopping it may need
+        // one too.
+        if cfg!(windows)
+            && schedule.action == Action::Firmware
+            && execute(&[vec!["shutdown".into(), "/a".into()]]).is_err()
+        {
+            let _ = execute(&[vec![ELEVATED.into(), "shutdown".into(), "/a".into()]]);
         }
         save(app, None);
         log::info!("power: cancelled the scheduled {}", schedule.action.label());
@@ -549,6 +648,47 @@ mod tests {
             .with_ymd_and_hms(2026, 10, 10, hour, minute, 0)
             .single()
             .unwrap()
+    }
+
+    #[test]
+    fn restart_to_bios_answers_to_its_names_where_the_firmware_allows() {
+        let now = at(20, 0);
+        for text in [
+            "bios",
+            "reboot to bios",
+            "Restart to BIOS",
+            "uefi",
+            "firmware",
+        ] {
+            let preview = preview(text, now);
+            if Action::Firmware.available() {
+                let preview = preview.unwrap_or_else(|| panic!("{text}"));
+                assert_eq!(preview.action, Action::Firmware, "{text}");
+                assert!(preview.confirm, "{text}");
+            } else {
+                assert!(preview.is_none(), "{text}");
+            }
+        }
+        // Typing the start of "restart" still offers Restart.
+        assert_eq!(preview("rest", now).unwrap().action, Action::Restart);
+        assert_eq!(preview("restart", now).unwrap().action, Action::Restart);
+        assert_eq!(
+            preview("restart in 5m", now).unwrap().action,
+            Action::Restart
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn restart_to_bios_runs_shutdown_as_an_administrator() {
+        assert_eq!(
+            commands_for(Action::Firmware, None),
+            [[ELEVATED, "shutdown", "/r", "/fw", "/t", "0"]]
+        );
+        assert_eq!(
+            commands_for(Action::Firmware, Some(900)),
+            [[ELEVATED, "shutdown", "/r", "/fw", "/t", "900"]]
+        );
     }
 
     #[test]

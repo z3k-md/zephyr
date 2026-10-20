@@ -57,6 +57,22 @@ pub fn start_bar_drag(app: &AppHandle) -> Result<(), String> {
 }
 
 /// Lets focus loss hide the bar again a moment after a move, once the focus has settled.
+/// A drag out of the bar has started: focus moves to wherever it's dropped, so the bar
+/// mustn't hide on blur until it ends.
+pub fn begin_drag_out() {
+    SUPPRESS_BLUR.store(true, Ordering::SeqCst);
+}
+
+/// The drag ended: a drop hides the bar (the file went somewhere), a cancel keeps it.
+pub fn end_drag_out(app: &AppHandle, dropped: bool) {
+    if dropped {
+        SUPPRESS_BLUR.store(false, Ordering::SeqCst);
+        hide_bar(app);
+    } else {
+        settle_after_move();
+    }
+}
+
 fn settle_after_move() {
     let generation = SHOW_GENERATION.load(Ordering::SeqCst);
     std::thread::spawn(move || {
@@ -294,6 +310,8 @@ pub fn bar_moved(app: &AppHandle, position: PhysicalPosition<i32>) {
 }
 
 pub fn show_bar(app: &AppHandle) {
+    // Before the bar takes the front, so the list is in the order the user left it.
+    crate::running::refresh();
     crate::apps::AppIndex::refresh_if_stale(crate::apps::index());
     crate::files::index().refresh_if_stale();
     let Some(window) = app.get_webview_window("main") else {
@@ -476,6 +494,11 @@ pub(crate) fn reveal_soon(app: &AppHandle, window: tauri::WebviewWindow) {
 
 /// Called by a settings or notes page after its first paint.
 pub fn page_ready(app: &AppHandle, label: &str) {
+    // The bar shows only when summoned; its page reports in once, for the startup timing.
+    if label == "main" {
+        crate::startup::mark("bar page loaded");
+        return;
+    }
     if let Some(window) = app.get_webview_window(label)
         && !window.is_visible().unwrap_or(true)
     {

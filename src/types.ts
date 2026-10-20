@@ -87,6 +87,8 @@ export interface Snapshot {
   protectedFolders: boolean;
   /** Whether installed Steam games are listed with the apps. */
   steamGames: boolean;
+  /** Hotkeys and aliases the user gave commands, apps, destinations and bookmarks. */
+  bindings: Binding[];
 }
 
 /** The song or video playing on this computer. */
@@ -291,7 +293,8 @@ export interface Suggestion {
     | 'more'
     | 'power'
     | 'bookmark'
-    | 'powerPending';
+    | 'powerPending'
+    | 'window';
   hint: string;
   appId?: string;
   settingId?: string;
@@ -307,6 +310,10 @@ export interface Suggestion {
   keys?: string[];
   /** For power rows: what Enter runs. */
   power?: PowerPreview;
+  /** An open app's windows, front to back; Enter switches to the first. */
+  windows?: WindowRef[];
+  /** The window a window row switches to. */
+  window?: number;
 }
 
 export interface NoteSummary {
@@ -389,7 +396,7 @@ export interface SyncPending {
   words: string;
 }
 
-export type PowerAction = 'shutdown' | 'restart' | 'sleep' | 'lock' | 'sign_out';
+export type PowerAction = 'shutdown' | 'restart' | 'sleep' | 'lock' | 'sign_out' | 'firmware';
 
 export interface PowerSchedule {
   action: PowerAction;
@@ -423,3 +430,28 @@ export type UpdateStatus =
   | { phase: 'ready'; version: string; installAt: number }
   | { phase: 'installing'; version: string }
   | { phase: 'failed'; version: string; message: string };
+
+/** An open window, listed under its app's row. */
+export interface WindowRef {
+  handle: number;
+  title: string;
+}
+
+/**
+ * A hotkey and/or alias for one thing the bar can do. target: view:ai, scope:files,
+ * app:<id>, dest:<id> or bookmark:<url>.
+ */
+export interface Binding {
+  target: string;
+  label: string;
+  hotkey: string;
+  alias: string;
+  /** Fires as soon as the alias is typed, with no space. */
+  direct: boolean;
+}
+
+/** What the bar's preview pane shows for a file result. */
+export type FilePreview =
+  | { kind: 'image'; url: string; size: number; modified: number }
+  | { kind: 'text'; text: string; truncated: boolean; size: number; modified: number }
+  | { kind: 'info'; size: number; modified: number; folder: boolean };

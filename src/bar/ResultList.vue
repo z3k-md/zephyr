@@ -1,5 +1,6 @@
 <script setup lang="ts">
   import RowIcon from './RowIcon.vue';
+  import { dragGesture } from './dragOut';
   import { rowKey, type Group } from './rows';
   import type { Suggestion } from '../types';
 
@@ -8,8 +9,17 @@
     selected: number;
     /** Destination names by id, for the monogram on rows that search a destination. */
     names?: Record<string, string>;
+    /** While the run-a-row modifier is held: the keys for the first nine rows. */
+    numbered?: string;
   }>();
-  const emit = defineEmits<{ choose: [index: number]; hover: [index: number] }>();
+  const emit = defineEmits<{
+    choose: [index: number];
+    hover: [index: number];
+    /** A press on a row moved far enough to be a drag (the bar decides if it can be). */
+    drag: [index: number];
+  }>();
+
+  const gesture = dragGesture((index) => emit('drag', index));
 
   // A row that searches a destination wears that destination's letter and color. Keyed on
   // the typed text instead, its color changed with every keypress.
@@ -54,9 +64,13 @@
             selected: group.start + offset === selected,
             'is-answer': row.kind === 'answer',
           }"
-          @mousedown.prevent
+          @mousedown.prevent="gesture.down($event, group.start + offset)"
+          @mouseup="gesture.up()"
           @click="onClick(group.start + offset, row)"
-          @mousemove="onMove($event, group.start + offset, row)"
+          @mousemove="
+            gesture.move($event);
+            onMove($event, group.start + offset, row);
+          "
         >
           <RowIcon :icon="row.icon" :label="iconLabel(row)" :size="20" />
           <span class="item-text">
@@ -64,8 +78,16 @@
             <span v-if="row.subtitle" class="item-sub">{{ row.subtitle }}</span>
           </span>
           <span class="item-acc">
-            <kbd v-for="key in row.keys" :key="key" class="kbd" aria-hidden="true">{{ key }}</kbd>
-            <template v-if="!row.keys?.length">{{ row.hint }}</template>
+            <kbd
+              v-if="numbered && group.start + offset < 9"
+              class="kbd row-number"
+              aria-hidden="true"
+              >{{ numbered }}{{ group.start + offset + 1 }}</kbd
+            >
+            <template v-else>
+              <kbd v-for="key in row.keys" :key="key" class="kbd" aria-hidden="true">{{ key }}</kbd>
+              <template v-if="!row.keys?.length">{{ row.hint }}</template>
+            </template>
           </span>
         </li>
       </ul>
