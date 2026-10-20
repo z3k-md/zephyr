@@ -175,7 +175,7 @@ pub fn app_quit(app_id: String) -> Result<(), String> {
     Ok(())
 }
 
-// Async for the same reason as open_settings: a Zephyr setting may build the settings webview.
+// Async for the same reason as open_settings: opening an app setting may build the settings webview.
 #[tauri::command]
 pub async fn open_setting(app: AppHandle, setting_id: String) -> Result<DispatchOutcome, String> {
     open_setting_page(&app, &setting_id)
@@ -297,7 +297,7 @@ pub fn allow_protected_folders(
     publish(&app, snapshot)
 }
 
-/// Each permission Zephyr can use on this system and whether it has it.
+/// Each permission the app can use on this system and whether it has it.
 #[tauri::command]
 pub async fn permissions_status(
     state: State<'_, AppState>,
@@ -600,7 +600,7 @@ pub fn rehearse_update(app: AppHandle) -> Result<(), String> {
     }
 }
 
-/// Starts Zephyr when you sign in, or stops doing so. On Windows that's a logon task in Task
+/// Starts the app at sign-in, or stops doing so. On Windows that's a logon task in Task
 /// Scheduler (see login_task.rs); the Run-key entry earlier versions made is removed, since it
 /// started several seconds late and would now start a second copy. Dev builds leave this to
 /// the installed app, so the login item never points at a debug build.
@@ -1065,8 +1065,8 @@ pub fn open_url(app: AppHandle, url: String) -> Result<(), String> {
     if !(url.starts_with("https://") || url.starts_with("http://")) {
         return Err("Only web addresses open from here".into());
     }
-    // The Zephyr browser extension switches to a tab already on the page, with no new tab.
-    // When it isn't connected, the page opens through Zephyr's local hand-off link, which the
+    // The browser extension switches to a tab already on the page, with no new tab.
+    // When it isn't connected, the page opens through the local hand-off link, which the
     // extension can still catch (or which simply redirects without it).
     let found = crate::browser::focus(&url);
     if found == Some(true) {
@@ -1376,7 +1376,7 @@ pub async fn pick_folder(app: AppHandle) -> Result<Option<String>, String> {
         .map(|path| path.to_string_lossy().into_owned()))
 }
 
-/// Remembers the view Zephyr should come back to (`claude`, `ai`, `notes`, …; empty for the
+/// Remembers the view the bar should come back to (`claude`, `ai`, `notes`, …; empty for the
 /// search bar), so it survives hiding and restarts.
 #[tauri::command]
 pub fn set_active_mode(state: State<'_, AppState>, mode: String) -> Result<(), String> {
@@ -1661,7 +1661,7 @@ pub enum FilePreview {
 }
 
 /// A look at a file result without opening it: a picture, the first lines of a text file,
-/// or its size and date. Only for files in Zephyr's file index.
+/// or its size and date. Only for files in the file index.
 #[tauri::command]
 pub async fn file_preview(state: State<'_, AppState>, path: String) -> Result<FilePreview, String> {
     known_file(&state, &path)?;

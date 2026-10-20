@@ -117,7 +117,7 @@ pub fn deny_all_for(job_id: &str, reason: &str) {
     }
 }
 
-/// Answers an approval. "Always" also adds the rule to the project's allow list in Zephyr's
+/// Answers an approval. "Always" also adds the rule to the project's allow list in the app's
 /// settings (never in the repo).
 pub fn answer(app: &AppHandle, approval_id: &str, decision: Decision) -> Result<(), String> {
     let pending = {
@@ -251,7 +251,7 @@ fn handle(app: &AppHandle, mut request: tiny_http::Request) {
                 .with_header(header),
         );
     };
-    // Bookmarks open through here so the Zephyr browser extension can see them and focus a
+    // Bookmarks open through here so the browser extension can see them and focus a
     // tab already on that page. Without the extension this simply redirects.
     if let Some(query) = request.url().strip_prefix("/zephyr/open?") {
         let target = url::form_urlencoded::parse(query.as_bytes())

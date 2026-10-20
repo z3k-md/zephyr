@@ -1,6 +1,6 @@
 //! Background Claude Code jobs: `!claude <task>` runs the user's own `claude` CLI headless in
 //! a registered project folder, one `claude -p` process per turn. Follow-ups resume the same
-//! session. Permission prompts reach Zephyr through an HTTP hook ([`hook`]) and wait for the
+//! session. Permission prompts arrive through an HTTP hook ([`hook`]) and wait for the
 //! user. Nothing here knows about any particular project, language or app.
 
 pub mod binary;
@@ -151,7 +151,7 @@ pub enum Status {
     Done,
     Failed,
     Cancelled,
-    /// Zephyr quit while it ran.
+    /// The app quit while it ran.
     Interrupted,
 }
 
@@ -182,7 +182,7 @@ pub struct Turn {
 #[serde(rename_all = "camelCase")]
 pub struct Job {
     pub id: String,
-    /// The Claude Code session, chosen by Zephyr so follow-ups can resume it.
+    /// The Claude Code session, chosen here so follow-ups can resume it.
     pub session: String,
     pub project_id: String,
     pub project: String,
@@ -252,7 +252,7 @@ impl Store {
     }
 }
 
-/// Loads saved jobs; any that were running when Zephyr quit become "interrupted".
+/// Loads saved jobs; any that were running when the app quit become "interrupted".
 pub fn init(app: &AppHandle, dir: PathBuf) {
     let Ok(mut store) = store().lock() else {
         return;

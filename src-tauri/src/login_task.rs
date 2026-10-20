@@ -6,7 +6,7 @@
 #[cfg(windows)]
 const TASK: &str = "Zephyr";
 
-/// Turns starting at sign-in on (pointing at this Zephyr) or off.
+/// Turns starting at sign-in on (pointing at this copy of the app) or off.
 #[cfg(windows)]
 pub fn set(enabled: bool) -> Result<(), String> {
     if !enabled {

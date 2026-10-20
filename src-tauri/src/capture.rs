@@ -1,13 +1,13 @@
 //! Bug captures, in dev and installed builds alike (Settings can turn the shortcuts off):
-//! Ctrl+Alt+R records a Zephyr window (the bar, Notes or Settings, whichever is in front) for
+//! Ctrl+Alt+R records one of the app's windows (the bar, Notes or Settings, whichever is in front) for
 //! up to 30 seconds as PNG frames, plus a timestamped log of what its page did (for the bar:
 //! keys pressed in it, the text, the results and the selected row, suggestion fetches, size
 //! changes, errors), and Ctrl+Alt+S takes one frame with the page's state. Each capture is a
-//! folder under `captures/` in Zephyr's data folder; the newest 20 are kept.
+//! folder under `captures/` in the app's data folder; the newest 20 are kept.
 //!
-//! Only Zephyr's own windows are involved: frames are taken of that window alone while it is
+//! Only the app's own windows are involved: frames are taken of that window alone while it is
 //! showing (on macOS, of the window itself, which needs no Screen Recording permission), and
-//! keys are logged by Zephyr's pages, so nothing typed elsewhere is seen.
+//! keys are logged by the app's pages, so nothing typed elsewhere is seen.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -88,7 +88,7 @@ fn begin(suffix: &str) -> Result<(PathBuf, Arc<AtomicBool>), String> {
     Ok((dir, stop_flag))
 }
 
-/// The window a capture is of: the Zephyr window in front (the bar, a note, Settings), else
+/// The window a capture is of: the app's window in front (the bar, a note, Settings), else
 /// the bar.
 fn target(app: &AppHandle) -> String {
     app.webview_windows()
@@ -153,7 +153,7 @@ fn start(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Ctrl+Alt+S: one frame of the Zephyr window in front as it is now, plus its page's state
+/// Ctrl+Alt+S: one frame of the app's window in front as it is now, plus its page's state
 /// (the bar's text, results and selected row; the open note) in the log. The frame is taken first, so the recording dot isn't in it.
 pub fn snapshot(app: &AppHandle) {
     if recording() {
@@ -290,7 +290,7 @@ fn grab(rect: (i32, i32, u32, u32)) -> Option<Vec<u8>> {
 }
 
 /// macOS will take frames with ScreenCaptureKit; until then a capture is the event log only.
-/// The bar's own window as PNG, blur and transparency included. Capturing only Zephyr's
+/// The bar's own window as PNG, blur and transparency included. Capturing only the app's
 /// window needs no Screen Recording permission, so this never prompts.
 #[cfg(target_os = "macos")]
 #[allow(deprecated)] // CGWindowListCreateImage; ScreenCaptureKit would need the permission.

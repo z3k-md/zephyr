@@ -12,7 +12,7 @@ use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
 const FIRST_CHECK_DELAY: Duration = Duration::from_secs(5);
-/// Zephyr lives in the tray for weeks at a time, so a launch-only check is not enough.
+/// The app lives in the tray for weeks at a time, so a launch-only check is not enough.
 const CHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 /// Covers the check and the installer download. Without it a stalled request would hold
 /// `CHECKING` forever and block every later check.
@@ -234,8 +234,8 @@ fn count_down(app: &AppHandle, version: &str) {
     });
 }
 
-/// Installs the downloaded update. On Windows the installer closes Zephyr and reopens it;
-/// on macOS the new app is put in place and Zephyr restarts into it.
+/// Installs the downloaded update. On Windows the installer closes the app and reopens it;
+/// on macOS the new app is put in place and restarted into.
 pub fn install_now(app: &AppHandle) {
     COUNTDOWN_GENERATION.fetch_add(1, Ordering::SeqCst);
     let Some(downloaded) = downloaded_slot()
@@ -265,7 +265,7 @@ pub fn install_now(app: &AppHandle) {
         log::info!("installing update {version}");
         match update.install(&downloaded.bytes) {
             Ok(()) => {
-                // Windows never gets here: the installer has already closed Zephyr.
+                // Windows never gets here: the installer has already closed the app.
                 log::info!("update {version} installed, restarting");
                 app.restart();
             }

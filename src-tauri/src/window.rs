@@ -548,7 +548,7 @@ pub fn open_settings(app: &AppHandle, section: Option<&str>) -> Result<(), Strin
 
 // open_settings can be called from an async command's worker thread; the Win32 foreground
 // dance attaches the calling thread's input queue, so it has to run on the UI thread.
-/// Brings one of Zephyr's windows to the front and gives it the keyboard.
+/// Brings one of the app's windows to the front and gives it the keyboard.
 pub(crate) fn focus_window(app: &AppHandle, window: tauri::WebviewWindow) {
     focus_on_main_thread(app, window);
 }
@@ -575,7 +575,7 @@ tauri_nspanel::tauri_panel! {
 }
 
 /// macOS keeps a normal window off another app's full-screen Space even when it is marked
-/// to join all Spaces, and showing it activates Zephyr, which pulls the user back to the
+/// to join all Spaces, and showing it activates the app, which pulls the user back to the
 /// desktop. Spotlight and Raycast use a non-activating panel instead: it floats over
 /// full-screen apps and takes keystrokes without activating the app behind it.
 #[cfg(target_os = "macos")]
@@ -621,7 +621,7 @@ pub fn hide_on_space_change(app: &AppHandle) {
         }
     });
     // SAFETY: a main-queue observer for a workspace notification; the block only touches
-    // the app handle, and the observer lives as long as Zephyr.
+    // the app handle, and the observer lives as long as the app.
     let observer = unsafe {
         NSWorkspace::sharedWorkspace()
             .notificationCenter()
@@ -635,7 +635,7 @@ pub fn hide_on_space_change(app: &AppHandle) {
     std::mem::forget(observer);
 }
 
-/// Shows the bar panel and gives it the keyboard without activating Zephyr, so a
+/// Shows the bar panel and gives it the keyboard without activating the app, so a
 /// full-screen app stays on screen behind it.
 #[cfg(target_os = "macos")]
 fn show_panel(app: &AppHandle, window: &tauri::WebviewWindow) {
@@ -657,7 +657,7 @@ fn show_panel(app: &AppHandle, window: &tauri::WebviewWindow) {
     }
 }
 
-/// Showing the bar activates Zephyr, and macOS leaves an app with no visible window active,
+/// Showing the bar activates the app, and macOS leaves an app with no visible window active,
 /// so after Esc keystrokes went nowhere until the user clicked back into their app.
 #[cfg(target_os = "macos")]
 mod previous_app {
@@ -679,7 +679,7 @@ mod previous_app {
         }
     }
 
-    /// Reactivates the remembered app. Zephyr is still active here, so macOS honors it.
+    /// Reactivates the remembered app. The app is still active here, so macOS honors it.
     pub fn restore() {
         let previous = PREVIOUS
             .lock()

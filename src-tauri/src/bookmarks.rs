@@ -29,7 +29,7 @@ pub struct Bookmark {
     pub source: String,
 }
 
-/// A browser profile Zephyr found bookmarks in, for Settings.
+/// A browser profile bookmarks were found in, for Settings.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Source {

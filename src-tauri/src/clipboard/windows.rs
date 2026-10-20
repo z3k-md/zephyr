@@ -37,7 +37,7 @@ const CF_DIBV5: u32 = 17;
 /// Kept small: a huge image would make every list and save slow.
 const MAX_IMAGE_BYTES: usize = 25 << 20;
 
-/// The window that owns what Zephyr writes. Writing needs an owner, and it must be a window
+/// The window that owns what this module writes. Writing needs an owner, and it must be a window
 /// whose thread handles messages, or other apps stall when they next take the clipboard.
 static OWNER: AtomicIsize = AtomicIsize::new(0);
 

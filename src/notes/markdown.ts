@@ -1,5 +1,5 @@
 // Turns notes saved as Markdown by earlier builds into HTML for the rich text editor. It escapes everything first and only emits the tags it
-// builds itself, so text pasted into a note can never inject HTML into Zephyr's window.
+// builds itself, so text pasted into a note can never inject HTML into the notes window.
 
 function escapeHtml(text: string): string {
   return text

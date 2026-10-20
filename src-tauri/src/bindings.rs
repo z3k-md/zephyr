@@ -7,7 +7,7 @@ use crate::state::Binding;
 /// What a binding can point at.
 const KINDS: &[&str] = &["view:", "scope:", "app:", "dest:", "bookmark:"];
 
-/// Checks a binding against the others and the shortcuts Zephyr already uses, and returns
+/// Checks a binding against the others and the shortcuts already in use, and returns
 /// the list with it in place (or removed, when it has neither a hotkey nor an alias).
 /// `taken` pairs each reserved shortcut with what it does, for the error message.
 pub fn upsert(

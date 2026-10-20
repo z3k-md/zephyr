@@ -7,7 +7,7 @@ pub fn is_scope(trigger: &str) -> bool {
     SCOPE_TRIGGERS.contains(&trigger)
 }
 
-/// A settings page the bar can open: an OS settings pane or a section of Zephyr's own window.
+/// A settings page the bar can open: an OS settings pane or a section of the app's own Settings window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Setting {
     pub id: &'static str,
@@ -19,7 +19,7 @@ pub struct Setting {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Target {
-    /// A section id in Zephyr's settings window.
+    /// A section id in the app's Settings window.
     Zephyr(&'static str),
     /// An `ms-settings:` or `x-apple.systempreferences:` URI, opened by the OS.
     Uri(&'static str),
@@ -40,7 +40,7 @@ impl Setting {
     }
 }
 
-/// The settings this platform can open: Zephyr's own first, then the OS's.
+/// The settings this platform can open: the app's own first, then the OS's.
 pub fn catalog() -> &'static [Setting] {
     use std::sync::OnceLock;
     static ALL: OnceLock<Vec<Setting>> = OnceLock::new();

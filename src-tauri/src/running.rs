@@ -347,7 +347,7 @@ mod platform {
     }
 
     /// A window someone would switch to: shown, titled, top-level, not a tool palette, not
-    /// cloaked (hidden UWP frames, windows on another desktop), and not Zephyr's or the desktop.
+    /// cloaked (hidden UWP frames, windows on another desktop), and not the app's own or the desktop.
     unsafe fn describe(hwnd: HWND) -> Option<OpenWindow> {
         unsafe {
             if !IsWindowVisible(hwnd).as_bool() || GetWindowTextLengthW(hwnd) == 0 {

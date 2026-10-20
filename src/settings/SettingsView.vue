@@ -767,7 +767,7 @@
     { id: 'ember', name: 'Ember', tint: '#20130c', accent: '#fb923c' },
   ];
 
-  // Browser profiles Zephyr reads bookmarks from; each can be left out.
+  // Browser profiles bookmarks are read from; each can be left out.
   const bookmarkProfiles = ref<BookmarkSource[] | null>(null);
 
   async function loadBookmarkSources() {

@@ -1,5 +1,5 @@
 //! Notes work like sticky notes: each open note is its own window, any number can be open
-//! beside the bar, and they reopen where they were when Zephyr starts.
+//! beside the bar, and they reopen where they were at the next start.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
@@ -145,7 +145,7 @@ pub fn open(app: &AppHandle, id: &str, focus: bool) -> Result<(), String> {
     Ok(())
 }
 
-/// Reopens the notes that were open when Zephyr last ran, without taking focus.
+/// Reopens the notes that were open at the last quit, without taking focus.
 pub fn restore(app: &AppHandle) {
     for saved in saved(app) {
         if crate::notes::get(&saved.id).is_err() {

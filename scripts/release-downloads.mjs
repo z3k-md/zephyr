@@ -1,4 +1,4 @@
-// Makes a GitHub release readable for people who just want to install Zephyr: the installers
+// Makes a GitHub release readable for people who just want to install the app: the installers
 // get plain labels ("Zephyr 2.7.0 for Windows"), the files only the updater uses are labeled
 // as such, and the notes open with a Downloads section linking the installers.
 //
@@ -61,7 +61,7 @@ function installerFor(name, version) {
   return null;
 }
 
-/** The label for a file only Zephyr's updater reads. */
+/** The label for a file only the updater reads. */
 function updaterLabel(name) {
   if (name === 'latest.json') return 'Update manifest (used by Zephyr to update itself)';
   if (name.endsWith('.sig')) return 'Update signature (used by Zephyr to update itself)';

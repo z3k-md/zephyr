@@ -3,7 +3,7 @@
   import { errorMessage, permissionRequest, permissionsStatus } from '../api';
   import type { Permission, PermissionId } from '../types';
 
-  // Settings › Permissions (macOS): what Zephyr may do, why it wants each, and an Allow that
+  // Settings › Permissions (macOS): what the app may do, why it wants each, and an Allow that
   // asks in place. Status is re-read every second while the page is open, so a switch turned
   // on in System Settings shows here at once.
   const props = defineProps<{ active: boolean }>();

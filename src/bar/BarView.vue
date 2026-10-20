@@ -676,7 +676,7 @@
     }
   });
 
-  /** Enters a view. Workspaces become the place Zephyr returns to. */
+  /** Enters a view. Workspaces become the place the bar returns to. */
   function enter(next: View) {
     actionsOpen.value = false;
     visited[next] = true;

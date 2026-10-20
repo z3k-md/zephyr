@@ -414,7 +414,7 @@ export interface PowerPreview {
   exact: boolean;
 }
 
-/** A browser profile Zephyr reads bookmarks from. */
+/** A browser profile bookmarks are read from. */
 export interface BookmarkSource {
   /** e.g. chrome/Default */
   id: string;

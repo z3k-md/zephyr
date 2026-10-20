@@ -48,7 +48,7 @@ pub struct Persisted {
     /// (Claude, clipboard, typing); 0 always starts at the search box.
     #[serde(default = "default_resume_seconds")]
     pub resume_seconds: u32,
-    /// The view Zephyr opens to while one is active (`claude`, `ai`, `notes`, …); empty for
+    /// The view the bar opens to while one is active (`claude`, `ai`, `notes`, …); empty for
     /// the search bar.
     pub active_mode: String,
     /// Open to the active mode rather than the search bar.
@@ -77,7 +77,7 @@ pub struct Persisted {
     /// Whether installed Steam games are listed with the apps.
     #[serde(default = "yes")]
     pub steam_games: bool,
-    /// Notes open in their own windows, reopened where they were when Zephyr starts.
+    /// Notes open in their own windows, reopened where they were at the next start.
     pub note_windows: Vec<NoteWindow>,
     /// Whether Ctrl+Alt+R and Ctrl+Alt+S record and snapshot the bar for bug reports.
     #[serde(default = "yes")]

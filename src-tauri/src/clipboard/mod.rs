@@ -165,7 +165,7 @@ pub trait Platform: Send + Sync {
     /// (how password managers flag what they copy).
     fn read(&self) -> Option<Capture>;
     fn write(&self, content: &Content, plain: bool) -> Result<(), String>;
-    /// Whether Zephyr may send keystrokes; `prompt` asks the OS to show its permission dialog.
+    /// Whether the app may send keystrokes; `prompt` asks the OS to show its permission dialog.
     fn can_paste(&self, prompt: bool) -> bool;
     /// Sends the paste keystroke to the app in front.
     fn send_paste(&self) -> Result<(), String>;
@@ -216,7 +216,7 @@ fn platform() -> &'static dyn Platform {
     }
 }
 
-/// Windows needs a window to own what Zephyr writes to the clipboard; the bar's will do.
+/// Windows needs a window to own what is written to the clipboard; the bar's will do.
 #[cfg(windows)]
 pub fn set_owner_window(window: &tauri::WebviewWindow) {
     if let Ok(hwnd) = window.hwnd() {
@@ -232,7 +232,7 @@ struct History {
     dir: PathBuf,
     cipher: Option<Cipher>,
     settings: ClipboardSettings,
-    /// The change count of Zephyr's own last write, which is not a new copy.
+    /// The change count of this module's own last write, which is not a new copy.
     own_write: Option<i64>,
     problem: Option<String>,
 }
@@ -849,7 +849,7 @@ pub fn copy(id: u64, plain: bool) -> Result<(), String> {
 
 pub enum PasteOutcome {
     Pasted,
-    /// Copied, but Zephyr may not send keystrokes yet.
+    /// Copied, but keystrokes can't be sent yet.
     NeedsPermission,
 }
 

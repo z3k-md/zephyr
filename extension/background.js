@@ -1,4 +1,4 @@
-// Zephyr opens bookmarks through its own local hand-off link,
+// The app opens bookmarks through its own local hand-off link,
 // http://127.0.0.1:<port>/zephyr/open?u=<page>. When a tab is already on that page, this
 // switches to it and closes the hand-off tab; otherwise the link redirects to the page as
 // it would without the extension.
@@ -51,9 +51,9 @@ async function focusTab(page, except) {
   return true;
 }
 
-// The live link: Zephyr asks over a local WebSocket before opening anything, so switching
-// to an open tab never shows a new tab. Zephyr pings every 20 seconds, which keeps this
-// worker (and the socket) alive; an alarm reconnects after Chrome restarts or Zephyr does.
+// The live link: the app asks over a local WebSocket before opening anything, so switching
+// to an open tab never shows a new tab. The app pings every 20 seconds, which keeps this
+// worker (and the socket) alive; an alarm reconnects after Chrome or the app restarts.
 const ZEPHYR = 'ws://127.0.0.1:47391/';
 let socket = null;
 
@@ -112,7 +112,7 @@ chrome.alarms.create('zephyr-link', { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener(connect);
 connect();
 
-// The fallback, when the link wasn't up: Zephyr opened its hand-off link in a new tab.
+// The fallback, when the link wasn't up: the app opened its hand-off link in a new tab.
 chrome.webNavigation.onBeforeNavigate.addListener(async (details) => {
   if (details.frameId !== 0 || !HANDOFF.test(details.url)) return;
   const page = wantedPage(details.url);

@@ -1,5 +1,5 @@
-//! Quick notes: one rich text (HTML) file per note in Zephyr's settings folder, so they stay
-//! readable outside Zephyr. The first line is the title. Notes saved as Markdown by earlier
+//! Quick notes: one rich text (HTML) file per note in the app's settings folder, so they stay
+//! readable outside the app. The first line is the title. Notes saved as Markdown by earlier
 //! builds are still read, and become HTML the next time they are saved.
 
 use std::fs;
@@ -49,7 +49,7 @@ pub struct Note {
     pub updated: i64,
 }
 
-/// Ids are file stems Zephyr made; anything else could reach outside the notes folder.
+/// Ids are file stems this module made; anything else could reach outside the notes folder.
 fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 64 && id.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
 }

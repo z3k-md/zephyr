@@ -1,5 +1,5 @@
-//! What macOS lets Zephyr do, and asking for the rest in context: Settings › Permissions shows
-//! each permission with why Zephyr wants it, and its Allow button either brings up the
+//! What macOS lets the app do, and asking for the rest in context: Settings › Permissions shows
+//! each permission with why it's needed, and its Allow button either brings up the
 //! system's own prompt or opens the exact System Settings pane. Nothing is asked at launch.
 
 use serde::Serialize;
@@ -37,7 +37,7 @@ pub fn pane(id: &str) -> Option<&'static str> {
     })
 }
 
-/// Every permission Zephyr can use here; empty on systems without these permissions.
+/// Every permission the app can use here; empty on systems without these permissions.
 pub fn statuses(protected_folders: bool) -> Vec<Permission> {
     if !cfg!(target_os = "macos") {
         return Vec::new();
@@ -86,7 +86,7 @@ pub fn probe_files() -> Status {
 }
 
 /// Asks macOS for Accessibility. A grant from an earlier build can linger in the list,
-/// switched on but no longer matching this copy of Zephyr; it is cleared first so the
+/// switched on but no longer matching this copy of the app; it is cleared first so the
 /// switch the user turns on is the one that counts.
 pub fn request_accessibility(bundle_id: &str) {
     if crate::clipboard::can_paste() {
@@ -101,7 +101,7 @@ pub fn request_accessibility(bundle_id: &str) {
     crate::clipboard::request_paste_permission();
 }
 
-/// Whether Zephyr may send System Events Apple Events (shut down, restart, log out). With
+/// Whether the app may send System Events Apple Events (shut down, restart, log out). With
 /// `ask`, macOS shows its prompt if it never has. Blocks, so it runs off the main thread.
 #[cfg(target_os = "macos")]
 pub fn automation(ask: bool) -> Status {

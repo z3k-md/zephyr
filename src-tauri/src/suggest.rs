@@ -515,7 +515,7 @@ fn file_item(hit: &Hit) -> Suggestion {
     }
 }
 
-/// What an empty `!set` lists: Zephyr's own settings window, then the most-used OS pages.
+/// What an empty `!set` lists: the app's own Settings window, then the most-used OS pages.
 fn starters(all: &[Setting], limit: usize) -> Vec<&Setting> {
     let own = all.iter().find(|setting| setting.id == "zephyr.settings");
     let system = all
@@ -553,7 +553,7 @@ fn palette(destinations: &[Destination], prefix: &str) -> SuggestResponse {
     }
 }
 
-/// The empty bar: the last three apps opened from Zephyr and the last two searches, newest
+/// The empty bar: the last three apps opened from the bar and the last two searches, newest
 /// first, with whichever kind you used last on top. The bar adds its commands below, and
 /// that is all that fits without scrolling.
 fn recent(
@@ -568,7 +568,7 @@ fn recent(
         .filter_map(|entry| catalog.apps.iter().find(|app| app.id == entry.app_id))
         .take(3)
         .collect();
-    // Until three apps have been opened from Zephyr (a first launch), common ones fill in,
+    // Until three apps have been opened from the bar (a first launch), common ones fill in,
     // so the empty bar always offers some.
     for app in starter_apps(catalog.apps) {
         if opened.len() >= 3 {

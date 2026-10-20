@@ -40,7 +40,7 @@ pub struct Catalog<'a> {
     pub settings: &'a [crate::settings::Setting],
     pub files: &'a crate::files::FileIndex,
     pub launches: &'a [LaunchEntry],
-    /// Files opened through Zephyr, keyed by full path.
+    /// Files opened from the bar, keyed by full path.
     pub file_opens: &'a [LaunchEntry],
     pub overrides: &'a [String],
     pub now: i64,

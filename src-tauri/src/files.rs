@@ -524,7 +524,7 @@ impl Contents {
     }
 }
 
-/// Files Zephyr opened before, most used first, skipping ones that are gone.
+/// Files opened from the bar before, most used first, skipping ones that are gone.
 pub fn recent(opens: &[LaunchEntry], now: i64, limit: usize) -> Vec<Hit> {
     let mut ranked: Vec<(&LaunchEntry, f64)> = opens
         .iter()
@@ -539,7 +539,7 @@ pub fn recent(opens: &[LaunchEntry], now: i64, limit: usize) -> Vec<Hit> {
         .collect()
 }
 
-/// Files worth a row under unscoped results: only ones opened through Zephyr before whose name
+/// Files worth a row under unscoped results: only ones opened from the bar before whose name
 /// clearly matches, so ordinary searches never sprout file rows or wait on the index.
 pub fn incidental(opens: &[LaunchEntry], query: &str, now: i64, limit: usize) -> Vec<Hit> {
     let query = query.trim().to_lowercase();

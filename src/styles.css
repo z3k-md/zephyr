@@ -955,7 +955,7 @@ textarea.query {
   line-height: 1.4;
 }
 
-/* The footer's only control on the left: Zephyr's settings. */
+/* The footer's only control on the left: the Settings button. */
 .footer-settings {
   display: inline-flex;
   align-items: center;

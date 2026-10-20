@@ -342,7 +342,7 @@ fn span(seconds: i64) -> String {
 }
 
 /// The system commands for an action now, or `delay` seconds from now on Windows where the
-/// OS keeps the timer itself (it then survives Zephyr quitting). Empty means it runs in-app.
+/// OS keeps the timer itself (it then survives the app quitting). Empty means it runs in-app.
 pub fn commands_for(action: Action, delay: Option<i64>) -> Vec<Vec<String>> {
     let owned = |parts: &[&str]| {
         parts
@@ -358,7 +358,7 @@ pub fn commands_for(action: Action, delay: Option<i64>) -> Vec<Vec<String>> {
             // /fw needs an administrator, so Windows shows its UAC prompt; the restart (and
             // its timer) start once it's allowed.
             Action::Firmware => vec![owned(&[ELEVATED, "shutdown", "/r", "/fw", "/t", &after])],
-            // These have no OS timer; a scheduled one is run by Zephyr when it's due.
+            // These have no OS timer; a scheduled one is run by the app when it's due.
             Action::SignOut if delay.is_none() => vec![owned(&["shutdown", "/l"])],
             Action::Sleep if delay.is_none() => vec![owned(&[
                 "rundll32.exe",
@@ -397,7 +397,7 @@ pub fn commands_for(action: Action, delay: Option<i64>) -> Vec<Vec<String>> {
     }
 }
 
-/// Stands in for a command: lock the screen from inside Zephyr.
+/// Stands in for a command: lock the screen in-process.
 const LOCK_IN_PROCESS: &str = "zephyr:lock";
 
 /// Before a command: run it as an administrator (Windows asks with its UAC prompt).
@@ -782,7 +782,7 @@ mod tests {
             commands_for(Action::SignOut, None),
             vec![vec!["shutdown", "/l"]]
         );
-        // Sleep and lock on a timer are Zephyr's to run.
+        // Sleep and lock on a timer are run in-app.
         assert!(commands_for(Action::Sleep, Some(60)).is_empty());
         assert!(commands_for(Action::Lock, Some(60)).is_empty());
     }

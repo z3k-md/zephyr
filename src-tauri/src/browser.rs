@@ -1,5 +1,5 @@
-//! The link to the Zephyr browser extension: a local WebSocket the extension keeps open, so
-//! Zephyr can ask it to switch to a tab that's already on a page instead of opening the page
+//! The link to the browser extension: a local WebSocket the extension keeps open, so
+//! the bar can ask it to switch to a tab that's already on a page instead of opening the page
 //! again (no new tab appears at all). Only browser extensions may connect.
 
 use std::net::{TcpListener, TcpStream};
