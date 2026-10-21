@@ -56,6 +56,8 @@ export interface Snapshot {
   version: number;
   summonShortcut: string;
   launchAtStartup: boolean;
+  /** Windows: start from a logon task right at sign-in (opt-in; Defender may flag it). */
+  instantStartup: boolean;
   defaultDestinationId: string;
   destinations: Destination[];
   history: HistoryEntry[];

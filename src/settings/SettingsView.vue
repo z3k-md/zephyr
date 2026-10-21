@@ -68,6 +68,7 @@
   import { THEMES } from '../themes';
   import { captureShortcut } from '../keys';
   import ShortcutsSection from './ShortcutsSection.vue';
+  import InstantStartup from './InstantStartup.vue';
   import SelectMenu from './SelectMenu.vue';
   import { GLYPHS } from '../bar/glyphs';
   import {
@@ -1324,6 +1325,7 @@
           />
           Launch at startup
         </label>
+        <InstantStartup :snapshot="snapshot" @apply="apply" />
         <label class="check">
           <input
             type="checkbox"

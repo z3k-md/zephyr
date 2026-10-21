@@ -2,6 +2,10 @@
 //! seconds after sign-in (Explorer staggers them), which left Alt+Space doing nothing right
 //! after login. A Task Scheduler task with a logon trigger starts as soon as you sign in. It
 //! runs as you, with no admin rights, and creating it needs none.
+//!
+//! It's opt-in (Settings > General, "Start instantly at sign-in"): Defender's behavior scan
+//! flagged an unsigned app registering itself this way as Behavior:Win32/Persistence.A!ml and
+//! quarantined it (2.8.0), so the startup list stays the default.
 
 #[cfg(windows)]
 const TASK: &str = "Zephyr";

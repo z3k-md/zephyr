@@ -21,6 +21,9 @@ pub struct Persisted {
     pub version: u32,
     pub summon_shortcut: String,
     pub launch_at_startup: bool,
+    /// Windows: start from a logon task right at sign-in instead of the startup list, which
+    /// Windows delays. Off unless chosen, since Defender may flag the task.
+    pub instant_startup: bool,
     pub default_destination_id: String,
     pub destinations: Vec<Destination>,
     pub history: Vec<HistoryEntry>,
@@ -222,6 +225,7 @@ impl Persisted {
             version: schema_version(),
             summon_shortcut: DEFAULT_SHORTCUT.to_string(),
             launch_at_startup: false,
+            instant_startup: false,
             default_destination_id: "google".into(),
             destinations: destination::builtins(),
             history: Vec::new(),

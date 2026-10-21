@@ -17,6 +17,7 @@
   import { askAiName, chosenAi, isAiLike } from '../aiChoice';
   import { GLYPHS } from '../bar/glyphs';
   import { THEMES } from '../themes';
+  import InstantStartup from '../settings/InstantStartup.vue';
   import { captureShortcut } from '../keys';
   import { isSnapshot, type ChatgptAccount, type Snapshot } from '../types';
 
@@ -330,6 +331,7 @@
               />
               Start Zephyr when you sign in
             </label>
+            <InstantStartup :snapshot="snapshot" @apply="(next) => (snapshot = next)" />
           </template>
 
           <p v-if="error" class="notice">{{ error }}</p>

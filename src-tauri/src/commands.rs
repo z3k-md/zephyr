@@ -707,7 +707,7 @@ pub fn save_settings(
         restore_shortcut();
         return Err(err);
     }
-    if let Err(err) = apply_autostart(&app, launch_at_startup) {
+    if let Err(err) = apply_autostart(&app, launch_at_startup, previous.instant_startup) {
         restore_shortcut();
         return Err(err);
     }
@@ -722,10 +722,27 @@ pub fn save_settings(
         Ok(snapshot) => publish(&app, snapshot),
         Err(err) => {
             restore_shortcut();
-            let _ = apply_autostart(&app, previous.launch_at_startup);
+            let _ = apply_autostart(&app, previous.launch_at_startup, previous.instant_startup);
             Err(err)
         }
     }
+}
+
+/// Windows: start from a logon task the moment you sign in, instead of the startup list
+/// Windows holds back for a few seconds. Opt-in, since Defender may flag it.
+#[tauri::command]
+pub fn save_instant_startup(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> Result<Persisted, String> {
+    let current = state.snapshot()?;
+    apply_autostart(&app, current.launch_at_startup, enabled)?;
+    let snapshot = state.update(|persisted| {
+        persisted.instant_startup = enabled;
+        Ok(())
+    })?;
+    publish(&app, snapshot)
 }
 
 #[tauri::command]
@@ -841,29 +858,28 @@ pub fn rehearse_update(app: AppHandle) -> Result<(), String> {
     }
 }
 
-/// Starts the app at sign-in, or stops doing so. On Windows that's a logon task in Task
-/// Scheduler (see login_task.rs); the Run-key entry earlier versions made is removed, since it
-/// started several seconds late and would now start a second copy. Dev builds leave this to
-/// the installed app, so the login item never points at a debug build.
-pub fn apply_autostart(app: &AppHandle, enabled: bool) -> Result<(), String> {
+/// Starts the app at sign-in, or stops doing so. Normally that's the system's startup list
+/// (the Run key on Windows). `instant` (Windows only, opt-in) uses a Task Scheduler logon
+/// task instead, which starts right at sign-in, skipping Windows' delay for the startup
+/// list; Defender's behavior scan can mistake that for malware persistence, so it's never
+/// the default. Only one of the two is ever set up. Dev builds leave this to the installed
+/// app, so the login item never points at a debug build.
+pub fn apply_autostart(app: &AppHandle, enabled: bool, instant: bool) -> Result<(), String> {
     if cfg!(debug_assertions) {
         return Ok(());
     }
     #[cfg(windows)]
     {
-        let autostart = app.autolaunch();
-        if autostart.is_enabled().unwrap_or(false)
-            && let Err(err) = autostart.disable()
-        {
-            log::warn!("couldn't remove the old startup entry: {err}");
-        }
-        crate::login_task::set(enabled)
+        crate::login_task::set(enabled && instant)?;
+        autolaunch(app, enabled && !instant)
     }
     #[cfg(not(windows))]
-    autolaunch(app, enabled)
+    {
+        let _ = instant;
+        autolaunch(app, enabled)
+    }
 }
 
-#[cfg(not(windows))]
 fn autolaunch(app: &AppHandle, enabled: bool) -> Result<(), String> {
     let autostart = app.autolaunch();
     let currently = autostart

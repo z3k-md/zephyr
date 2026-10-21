@@ -127,9 +127,12 @@ pub fn run() {
             startup::mark("summon shortcut registered");
             // Off the startup path: on Windows it runs schtasks, which takes a moment.
             let autostart_app = app.handle().clone();
-            let launch_at_startup = snapshot.launch_at_startup;
+            let (launch_at_startup, instant) =
+                (snapshot.launch_at_startup, snapshot.instant_startup);
             std::thread::spawn(move || {
-                if let Err(err) = commands::apply_autostart(&autostart_app, launch_at_startup) {
+                if let Err(err) =
+                    commands::apply_autostart(&autostart_app, launch_at_startup, instant)
+                {
                     log::error!("{err}");
                 }
             });
@@ -362,6 +365,7 @@ pub fn run() {
             commands::rebuild_file_index,
             commands::save_file_folders,
             commands::save_settings,
+            commands::save_instant_startup,
             commands::save_destination,
             commands::remove_destination,
             commands::move_destination,

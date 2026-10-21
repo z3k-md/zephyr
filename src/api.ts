@@ -764,3 +764,8 @@ export function filePreview(path: string): Promise<FilePreview> {
 export function quickLook(path: string): Promise<void> {
   return invoke('quick_look', { path });
 }
+
+/** Windows: start from a logon task right at sign-in instead of the delayed startup list. */
+export function saveInstantStartup(enabled: boolean): Promise<Snapshot> {
+  return invoke<Snapshot>('save_instant_startup', { enabled });
+}
