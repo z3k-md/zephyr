@@ -200,10 +200,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_ID: ${{ needs.version.outputs.release_id }}
 
+      # The tag is named again on publish: a reused draft can come out "untagged-…", which
+      # breaks every download link (v2.8.0 did).
       - name: Publish release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_ID: ${{ needs.version.outputs.release_id }}
+          TAG: ${{ needs.version.outputs.tag }}
         run: |
           gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
-            -F draft=false -f make_latest=true
+            -f tag_name="$TAG" -F draft=false -f make_latest=true
