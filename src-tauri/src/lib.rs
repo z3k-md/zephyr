@@ -110,6 +110,7 @@ pub fn run() {
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
             startup::mark("setup began");
+            move_from_old_identifier(app.handle());
             let config_dir = app.path().app_config_dir()?;
             let state = AppState::load(config_dir.join("state.json"));
             let snapshot = state
@@ -402,6 +403,50 @@ fn register_links(app: &tauri::App) {
     if let Ok(Some(urls)) = app.deep_link().get_current() {
         for url in urls {
             deeplink::handle(app.handle(), &url);
+        }
+    }
+}
+
+/// The bundle id was `com.zephyr.app` through 2.8, and Tauri names the app's folders after it.
+/// Whatever is still in the old folders moves into the new ones, entry by entry, since
+/// Windows may have made a new folder (the webview's) before this runs. Keychain entries
+/// are named separately and don't move.
+fn move_from_old_identifier(app: &tauri::AppHandle) {
+    const OLD: &str = "com.zephyr.app";
+    let resolver = app.path();
+    let mut folders = std::collections::BTreeSet::new();
+    for folder in [
+        resolver.app_config_dir(),
+        resolver.app_data_dir(),
+        resolver.app_local_data_dir(),
+        resolver.app_cache_dir(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        folders.insert(folder);
+    }
+    for new in folders {
+        let old = new.with_file_name(OLD);
+        let Ok(entries) = std::fs::read_dir(&old) else {
+            continue;
+        };
+        if let Err(err) = std::fs::create_dir_all(&new) {
+            log::error!("couldn't make {}: {err}", new.display());
+            continue;
+        }
+        for entry in entries.flatten() {
+            let target = new.join(entry.file_name());
+            if target.exists() {
+                continue;
+            }
+            if let Err(err) = std::fs::rename(entry.path(), &target) {
+                log::error!("couldn't move {}: {err}", entry.path().display());
+            }
+        }
+        // Gone once everything moved; anything left (a clash) stays where it was.
+        if std::fs::remove_dir(&old).is_ok() {
+            log::info!("moved {} to {}", old.display(), new.display());
         }
     }
 }
