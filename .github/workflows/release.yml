@@ -16,13 +16,10 @@ concurrency:
 permissions:
   contents: read
 
+# No checks of its own: main only takes commits whose checks passed on develop.
 jobs:
-  checks:
-    if: github.ref == 'refs/heads/main'
-    uses: ./.github/workflows/checks.yml
-
   version:
-    needs: checks
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write

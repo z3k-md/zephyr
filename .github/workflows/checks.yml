@@ -1,10 +1,10 @@
 name: Checks
+# main only moves to commits already checked on develop, so pushes there aren't checked again.
 on:
   push:
-    branches: [main, develop]
+    branches: [develop]
   pull_request:
     branches: [main, develop]
-  workflow_call:
 
 # A newer push to the same branch makes the older run moot.
 concurrency:

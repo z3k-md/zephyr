@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "bun run vite",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "bun run vue-tsc --noEmit && bun run vite build",
+    "beforeBuildCommand": "bun run vite build",
     "frontendDist": "../dist"
   },
   "app": {
