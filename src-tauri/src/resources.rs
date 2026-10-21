@@ -608,6 +608,7 @@ pub fn switch_to(_pids: &[u32]) -> bool {
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn helpers_count_toward_their_app() {
         let helper = Path::new(

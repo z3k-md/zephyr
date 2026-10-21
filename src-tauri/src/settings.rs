@@ -1008,15 +1008,31 @@ mod tests {
         assert!(is_bare("Settings"));
         assert!(is_bare("prefs"));
         assert!(!is_bare("wifi settings"));
-        let mac = all(MACOS);
-        let titles: Vec<_> = favorites(&mac, &[], 0, 4).iter().map(|s| s.title).collect();
-        assert_eq!(titles, ["Wi-Fi", "Bluetooth", "Displays", "Sound"]);
+        // The usual pages are this platform's.
+        let (catalog, usual, keyboard) = if cfg!(windows) {
+            (
+                all(WINDOWS),
+                ["Wi-Fi", "Bluetooth & Devices", "Display", "Sound"],
+                ("win.keyboard", "Keyboard Accessibility"),
+            )
+        } else {
+            (
+                all(MACOS),
+                ["Wi-Fi", "Bluetooth", "Displays", "Sound"],
+                ("mac.keyboard", "Keyboard"),
+            )
+        };
+        let titles: Vec<_> = favorites(&catalog, &[], 0, 4)
+            .iter()
+            .map(|s| s.title)
+            .collect();
+        assert_eq!(titles, usual);
         let opened = [LaunchEntry {
-            app_id: "mac.keyboard".into(),
+            app_id: keyboard.0.into(),
             uses: 3,
             last_used: 0,
         }];
-        assert_eq!(favorites(&mac, &opened, 0, 4)[0].title, "Keyboard");
+        assert_eq!(favorites(&catalog, &opened, 0, 4)[0].title, keyboard.1);
     }
 
     #[test]
