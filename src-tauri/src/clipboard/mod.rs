@@ -363,7 +363,11 @@ impl History {
             if let Some((png, _, _)) = &png {
                 hasher.update(png);
             }
-            format!("{:x}", hasher.finalize())
+            hasher
+                .finalize()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
         };
 
         if let Some(existing) = self.items.iter_mut().find(|item| item.hash == hash) {

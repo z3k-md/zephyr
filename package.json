@@ -22,25 +22,25 @@
   "dependencies": {
     "@crabnebula/tauri-plugin-drag": "^2.1.0",
     "@tailwindcss/vite": "4.3.3",
-    "@tauri-apps/api": "^2.12.1",
-    "@tiptap/extension-highlight": "^3",
-    "@tiptap/extension-list": "^3",
-    "@tiptap/extension-text-style": "^3",
-    "@tiptap/extensions": "^3",
-    "@tiptap/pm": "^3",
-    "@tiptap/starter-kit": "^3",
-    "@tiptap/vue-3": "^3",
+    "@tauri-apps/api": "^2.12.4",
+    "@tiptap/extension-highlight": "^3.32.0",
+    "@tiptap/extension-list": "^3.32.0",
+    "@tiptap/extension-text-style": "^3.32.0",
+    "@tiptap/extensions": "^3.32.0",
+    "@tiptap/pm": "^3.32.0",
+    "@tiptap/starter-kit": "^3.32.0",
+    "@tiptap/vue-3": "^3.32.0",
     "tailwindcss": "4.3.3",
-    "vue": "3.5.43"
+    "vue": "3.5.44"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.12.1",
-    "@vitejs/plugin-vue": "^6.0.9",
+    "@tauri-apps/cli": "^2.12.4",
+    "@vitejs/plugin-vue": "^6.0.10",
     "dotenv-cli": "^11.0.0",
-    "prettier": "^3.9.9",
+    "prettier": "^3.9.10",
     "semantic-release": "^25.0.9",
     "typescript": "^6.0.3",
-    "vite": "^8.3.2",
-    "vue-tsc": "^3.3.12"
+    "vite": "^8.3.5",
+    "vue-tsc": "^3.3.13"
   }
 }

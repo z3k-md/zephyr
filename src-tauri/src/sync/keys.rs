@@ -73,14 +73,14 @@ fn recovery_wrap_key(recovery: &Key32) -> Result<Key32, String> {
 fn seal(key: &Key32, nonce: &[u8; 24], aad: &[u8], plain: &[u8]) -> Result<Vec<u8>, String> {
     XChaCha20Poly1305::new_from_slice(key)
         .map_err(|_| "bad key".to_string())?
-        .encrypt(XNonce::from_slice(nonce), Payload { msg: plain, aad })
+        .encrypt(&XNonce::from(*nonce), Payload { msg: plain, aad })
         .map_err(|_| "Couldn't seal the account key".to_string())
 }
 
 fn open(key: &Key32, nonce: &[u8; 24], aad: &[u8], sealed: &[u8]) -> Result<Key32, String> {
     let plain = XChaCha20Poly1305::new_from_slice(key)
         .map_err(|_| "bad key".to_string())?
-        .decrypt(XNonce::from_slice(nonce), Payload { msg: sealed, aad })
+        .decrypt(&XNonce::from(*nonce), Payload { msg: sealed, aad })
         .map_err(|_| "That key couldn't be opened".to_string())?;
     plain
         .try_into()

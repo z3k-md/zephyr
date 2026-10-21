@@ -1,0 +1,15 @@
+# `cargo audit` (run from src-tauri). Each ignored advisory says why it doesn't apply.
+[advisories]
+ignore = [
+    # rsa (Marvin timing attack, no fixed release): jsonwebtoken pulls it in, and Zephyr
+    # only verifies ChatGPT's RS256 ID tokens with OpenAI's public keys. The attack needs a
+    # private key doing decryption or signing, which never happens here.
+    "RUSTSEC-2023-0071",
+    # Unmaintained or unsound crates in Tauri's Linux (GTK and D-Bus) stack. Zephyr ships
+    # for macOS and Windows, where none of them are built.
+    "RUSTSEC-2024-0370", # proc-macro-error
+    "RUSTSEC-2024-0429", # glib
+    "RUSTSEC-2026-0370", # zvariant
+    "RUSTSEC-2026-0371", # zbus_names
+    "RUSTSEC-2026-0372", # zvariant_derive
+]

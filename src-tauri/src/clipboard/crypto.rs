@@ -48,7 +48,7 @@ impl Cipher {
         let mut out = nonce.to_vec();
         out.extend(
             self.0
-                .encrypt(XNonce::from_slice(&nonce), plain)
+                .encrypt(&XNonce::from(nonce), plain)
                 .map_err(|_| "Couldn't encrypt the clipboard history".to_string())?,
         );
         Ok(out)
@@ -59,8 +59,9 @@ impl Cipher {
             return Err("The clipboard history file is damaged".into());
         }
         let (nonce, body) = sealed.split_at(NONCE_LEN);
+        let nonce = XNonce::try_from(nonce).map_err(|_| "The clipboard history file is damaged")?;
         self.0
-            .decrypt(XNonce::from_slice(nonce), body)
+            .decrypt(&nonce, body)
             .map_err(|_| "The clipboard history couldn't be decrypted".to_string())
     }
 }
