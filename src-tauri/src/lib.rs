@@ -5,6 +5,7 @@ mod bindings;
 mod bookmarks;
 mod browser;
 mod capture;
+mod chatgpt;
 mod claude;
 mod clipboard;
 mod commands;
@@ -14,6 +15,7 @@ mod files;
 mod history;
 mod icons;
 mod ip;
+mod launch_groups;
 mod logger;
 mod login_task;
 mod note_windows;
@@ -22,6 +24,7 @@ mod nowplaying;
 mod permissions;
 mod power;
 mod query;
+mod resources;
 mod running;
 mod secrets;
 mod settings;
@@ -29,6 +32,7 @@ mod shell;
 mod shortcut;
 mod startup;
 mod state;
+mod stats;
 mod steam;
 mod suggest;
 mod sync;
@@ -128,6 +132,11 @@ pub fn run() {
                     log::error!("{err}");
                 }
             });
+            // The settings catalog reads every System Settings pane's plist on macOS (most of a
+            // second); built now, the first search doesn't wait on it.
+            std::thread::spawn(|| {
+                settings::catalog();
+            });
 
             secrets::init(app.path().app_data_dir()?);
             sync::init(app.path().app_data_dir()?);
@@ -158,6 +167,14 @@ pub fn run() {
                 log::error!("tray setup failed: {err}");
             }
 
+            window::apply_theme(app.handle(), &snapshot.theme);
+            window::prewarm_settings(app.handle());
+            // First run (or every launch in dev, when switched on): setup before first use.
+            let show_setup = !snapshot.onboarding_done
+                || (cfg!(debug_assertions) && snapshot.onboarding_every_launch);
+            if show_setup && let Err(err) = window::open_onboarding(app.handle()) {
+                log::error!("couldn't open setup: {err}");
+            }
             if let Some(main_window) = app.get_webview_window("main") {
                 #[cfg(target_os = "macos")]
                 if let Err(err) = window::make_bar_panel(&main_window) {
@@ -236,6 +253,29 @@ pub fn run() {
             commands::reveal_captures,
             commands::allow_protected_folders,
             commands::permissions_status,
+            commands::system_stats,
+            commands::resources_snapshot,
+            commands::resources_closed,
+            commands::resources_quit,
+            commands::resources_relaunch,
+            commands::resources_switch,
+            commands::resources_reveal,
+            commands::save_show_stats,
+            commands::save_ai_choice,
+            commands::open_onboarding,
+            commands::settings_painted,
+            commands::hide_settings,
+            commands::bar_move,
+            commands::bar_move_end,
+            commands::save_launch_groups,
+            commands::launch_group,
+            commands::installed_apps,
+            commands::finish_onboarding,
+            commands::save_onboarding_every_launch,
+            commands::chatgpt_account,
+            commands::chatgpt_sign_in,
+            commands::chatgpt_cancel_sign_in,
+            commands::chatgpt_sign_out,
             commands::permission_request,
             commands::save_steam_games,
             commands::save_binding,

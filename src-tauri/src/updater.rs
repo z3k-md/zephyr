@@ -359,6 +359,10 @@ fn build_card(app: &AppHandle) -> Result<tauri::WebviewWindow, String> {
     // Clicks still reach the buttons; the game or document in front keeps the keyboard.
     #[cfg(windows)]
     let builder = builder.focusable(false);
+    // macOS: the theme's glass under the card, as on every other window; without it the
+    // Sidebar theme's light tint left the card see-through.
+    #[cfg(target_os = "macos")]
+    let builder = builder.effects(crate::window::rounded_glass(12.0));
     let window = builder.build().map_err(|err| err.to_string())?;
     #[cfg(windows)]
     if let Err(err) = crate::window::make_bar_glass(&window) {

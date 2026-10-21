@@ -26,11 +26,90 @@ pub fn is_query(text: &str) -> bool {
     )
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Link {
+    Wifi,
+    Ethernet,
+    Other,
+}
+
+impl Link {
+    /// The row icon for an address on this kind of link.
+    pub fn glyph(self) -> &'static str {
+        match self {
+            Link::Wifi => "glyph:wifi",
+            Link::Ethernet => "glyph:ethernet",
+            Link::Other => "glyph:lan",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Address {
     pub value: String,
     /// Where it comes from: "Wi-Fi · IPv4".
     pub detail: String,
+    pub link: Link,
+}
+
+/// The kind of link behind an interface, and the name people know it by ("Wi-Fi" for en0).
+fn describe(interface: &str) -> (Link, String) {
+    let port = hardware_ports()
+        .iter()
+        .find(|(device, _)| device == interface)
+        .map(|(_, port)| port.clone());
+    let name = port.clone().unwrap_or_else(|| interface.to_string());
+    let lower = name.to_lowercase();
+    let link = if lower.contains("wi-fi")
+        || lower.contains("wifi")
+        || lower.contains("wireless")
+        || lower.contains("wlan")
+    {
+        Link::Wifi
+    } else if lower.contains("ethernet")
+        || lower.contains("thunderbolt")
+        || lower.starts_with("eth")
+    {
+        Link::Ethernet
+    } else {
+        Link::Other
+    };
+    (link, name)
+}
+
+/// macOS: each interface's hardware port ("en0" is "Wi-Fi"), read once. Windows already
+/// names interfaces by what they are ("Wi-Fi", "Ethernet").
+fn hardware_ports() -> &'static [(String, String)] {
+    static PORTS: std::sync::OnceLock<Vec<(String, String)>> = std::sync::OnceLock::new();
+    PORTS.get_or_init(|| {
+        #[cfg(target_os = "macos")]
+        {
+            let Ok(output) = std::process::Command::new("networksetup")
+                .arg("-listallhardwareports")
+                .output()
+            else {
+                return Vec::new();
+            };
+            parse_ports(&String::from_utf8_lossy(&output.stdout))
+        }
+        #[cfg(not(target_os = "macos"))]
+        Vec::new()
+    })
+}
+
+/// `networksetup -listallhardwareports` output as (device, port) pairs.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn parse_ports(text: &str) -> Vec<(String, String)> {
+    let mut ports = Vec::new();
+    let mut port: Option<&str> = None;
+    for line in text.lines() {
+        if let Some(name) = line.strip_prefix("Hardware Port: ") {
+            port = Some(name.trim());
+        } else if let (Some(device), Some(name)) = (line.strip_prefix("Device: "), port.take()) {
+            ports.push((device.trim().to_string(), name.to_string()));
+        }
+    }
+    ports
 }
 
 /// This computer's addresses, the one it reaches the internet through first, then the
@@ -56,11 +135,13 @@ pub fn local() -> Vec<Address> {
                 IpAddr::V6(_) => 2,
             };
             let family = if ip.is_ipv4() { "IPv4" } else { "IPv6" };
+            let (link, name) = describe(&interface.name);
             Some((
                 rank,
                 Address {
                     value: ip.to_string(),
-                    detail: format!("{} · {family}", interface.name),
+                    detail: format!("{name} · {family}"),
+                    link,
                 },
             ))
         })
@@ -128,6 +209,18 @@ mod tests {
         for search in ["ipad", "ip man", "ipa recipes", "zip", "192.168.0.1"] {
             assert!(!is_query(search), "{search}");
         }
+    }
+
+    #[test]
+    fn hardware_ports_name_their_devices() {
+        let text = "Hardware Port: Ethernet Adapter (en3)\nDevice: en3\nEthernet Address: 02\n\nHardware Port: Wi-Fi\nDevice: en0\nEthernet Address: 2c\n";
+        assert_eq!(
+            parse_ports(text),
+            [
+                ("en3".to_string(), "Ethernet Adapter (en3)".to_string()),
+                ("en0".to_string(), "Wi-Fi".to_string()),
+            ]
+        );
     }
 
     /// Shows this computer's addresses: `cargo test lists_this_computers_addresses -- --ignored --nocapture`.

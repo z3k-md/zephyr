@@ -1,6 +1,6 @@
 <script setup lang="ts">
-  import { nextTick, onMounted, ref } from 'vue';
-  import { aiAsk, aiCancel, errorMessage, hideBar } from '../api';
+  import { computed, nextTick, onMounted, ref } from 'vue';
+  import { aiAsk, aiCancel, errorMessage, hideBar, openUrl } from '../api';
 
   const emit = defineEmits<{ exit: [] }>();
 
@@ -134,6 +134,9 @@
   }
 
   defineExpose({ onKey, ask, focus });
+
+  // Answers on the user's ChatGPT plan say so in the footer.
+  const onPlan = computed(() => turns.value.some((turn) => turn.source?.endsWith('· ChatGPT')));
 </script>
 
 <template>
@@ -168,7 +171,12 @@
         ↵ {{ text.trim() ? (turns.length ? 'follow up' : 'ask') : 'copy answer' }} · {{ mod }}↵ new
         conversation · ⇧↵ new line · {{ mod }}⇧C copy · Esc back
       </span>
-      <span>Ask AI</span>
+      <!-- OpenAI asks apps on a ChatGPT plan to say so, with a way to manage usage. -->
+      <span v-if="onPlan">
+        Using ChatGPT plan ·
+        <a href="#" @click.prevent="openUrl('https://chatgpt.com/settings/usage')">Manage usage</a>
+      </span>
+      <span v-else>Ask AI</span>
     </footer>
   </div>
 </template>

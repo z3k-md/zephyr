@@ -30,6 +30,11 @@ import type {
   Snapshot,
   SyncPending,
   SyncStatus,
+  ResourceSnapshot,
+  ResourceSort,
+  SystemStats,
+  ChatgptAccount,
+  LaunchGroup,
   Permission,
   PermissionId,
   TypingBest,
@@ -48,9 +53,16 @@ export function suggest(
   return invoke<SuggestResponse>('suggest', { query, destinationId, includeRemote });
 }
 
-/** Opens an app, or switches to it when it's running; newWindow starts another one. */
-export function launchApp(appId: string, newWindow = false): Promise<DispatchOutcome> {
-  return invoke<DispatchOutcome>('launch_app', { appId, newWindow });
+/**
+ * Opens an app, or switches to it when it's running; newWindow starts another one, and
+ * privateWindow opens a browser in its private window.
+ */
+export function launchApp(
+  appId: string,
+  newWindow = false,
+  privateWindow = false
+): Promise<DispatchOutcome> {
+  return invoke<DispatchOutcome>('launch_app', { appId, newWindow, private: privateWindow });
 }
 
 /** Switches to an open window. */
@@ -82,14 +94,25 @@ export function captureRecording(): Promise<boolean> {
   return invoke<boolean>('capture_recording');
 }
 
-/** Moves the bar with the mouse until the button is released (Ctrl+drag). */
+/** Moves the bar with the mouse until the button is released (⌘-drag, Ctrl+drag on Windows). */
 /** Makes the snap grid's window before the first Ctrl+drag. */
 export function prepareGrid(): Promise<void> {
   return invoke('prepare_grid');
 }
 
-export function startBarDrag(): Promise<void> {
-  return invoke('start_bar_drag');
+/** Starts moving the bar. On a Mac the page drives the move: [x, y, scale] come back. */
+export function startBarDrag(): Promise<[number, number, number] | null> {
+  return invoke<[number, number, number] | null>('start_bar_drag');
+}
+
+/** Mac ⌘-drag: the bar's new top-left, in physical pixels. */
+export function barMove(x: number, y: number): Promise<void> {
+  return invoke('bar_move', { x, y });
+}
+
+/** Mac ⌘-drag ended: the bar lands on the guide it was near. */
+export function barMoveEnd(): Promise<void> {
+  return invoke('bar_move_end');
 }
 
 /** An app's icon as a PNG data URL at `size` pixels, or null when it has none to offer. */
@@ -167,6 +190,15 @@ export function hideBar(): Promise<void> {
 
 export function showBar(): Promise<void> {
   return invoke('show_bar');
+}
+
+/** Settings painted after being shown; logs the open time. */
+export function settingsPainted(): void {
+  requestAnimationFrame(() => void invoke('settings_painted').catch(() => undefined));
+}
+
+export function hideSettings(): Promise<void> {
+  return invoke('hide_settings');
 }
 
 export function openSettings(): Promise<void> {
@@ -312,7 +344,9 @@ export function saveNotesShortcut(shortcut: string): Promise<Snapshot> {
 export function pageReady(): void {
   requestAnimationFrame(() =>
     requestAnimationFrame(() => {
-      void invoke('page_ready').catch(() => undefined);
+      // How long the page took from the start of its load, for the log.
+      const ms = Math.round(performance.now());
+      void invoke('page_ready', { ms }).catch(() => undefined);
     })
   );
 }
@@ -569,6 +603,92 @@ export function nowPlayingControl(control: MediaControl): Promise<void> {
 /** Switches to the app or browser tab playing; true when it could. */
 export function nowPlayingFocus(): Promise<boolean> {
   return invoke<boolean>('now_playing_focus');
+}
+
+export function chatgptAccount(): Promise<ChatgptAccount | null> {
+  return invoke<ChatgptAccount | null>('chatgpt_account');
+}
+
+/** Signs in through the browser; resolves once the browser comes back. */
+export function chatgptSignIn(): Promise<ChatgptAccount> {
+  return invoke<ChatgptAccount>('chatgpt_sign_in');
+}
+
+export function chatgptCancelSignIn(): Promise<void> {
+  return invoke('chatgpt_cancel_sign_in');
+}
+
+export function chatgptSignOut(): Promise<void> {
+  return invoke('chatgpt_sign_out');
+}
+
+export function openOnboarding(): Promise<void> {
+  return invoke('open_onboarding');
+}
+
+/** Marks first-run setup finished (or skipped) and closes its window. */
+export function finishOnboarding(): Promise<Snapshot> {
+  return invoke<Snapshot>('finish_onboarding');
+}
+
+export function saveOnboardingEveryLaunch(every: boolean): Promise<Snapshot> {
+  return invoke<Snapshot>('save_onboarding_every_launch', { every });
+}
+
+export function saveLaunchGroups(groups: LaunchGroup[]): Promise<Snapshot> {
+  return invoke<Snapshot>('save_launch_groups', { groups });
+}
+
+/** Opens everything in a launch group; the bar closes at once. */
+export function launchGroup(id: string): Promise<void> {
+  return invoke('launch_group', { id });
+}
+
+/** Every installed app as [id, name], for picking a group's apps. */
+export function installedApps(): Promise<[string, string][]> {
+  return invoke<[string, string][]>('installed_apps');
+}
+
+export function saveAiChoice(id: string): Promise<Snapshot> {
+  return invoke<Snapshot>('save_ai_choice', { id });
+}
+
+export function systemStats(): Promise<SystemStats> {
+  return invoke<SystemStats>('system_stats');
+}
+
+export function resourcesSnapshot(
+  sort: ResourceSort,
+  filter: string,
+  limit: number
+): Promise<ResourceSnapshot> {
+  return invoke<ResourceSnapshot>('resources_snapshot', { sort, filter, limit });
+}
+
+/** The view closed; the process table is let go a little later. */
+export function resourcesClosed(): Promise<void> {
+  return invoke('resources_closed');
+}
+
+export function resourcesQuit(name: string, pids: number[], force: boolean): Promise<void> {
+  return invoke('resources_quit', { name, pids, force });
+}
+
+export function resourcesRelaunch(name: string, pids: number[]): Promise<void> {
+  return invoke('resources_relaunch', { name, pids });
+}
+
+/** Brings the app forward and hides the bar; false when it has no windows. */
+export function resourcesSwitch(pids: number[]): Promise<boolean> {
+  return invoke<boolean>('resources_switch', { pids });
+}
+
+export function resourcesReveal(path: string): Promise<void> {
+  return invoke('resources_reveal', { path });
+}
+
+export function saveShowStats(show: boolean): Promise<Snapshot> {
+  return invoke<Snapshot>('save_show_stats', { show });
 }
 
 export function saveShowNowPlaying(show: boolean): Promise<Snapshot> {

@@ -19,8 +19,9 @@ pub fn suppressing_blur() -> bool {
 static DRAGGING: AtomicBool = AtomicBool::new(false);
 static MOVE_GENERATION: AtomicU64 = AtomicU64::new(0);
 
-/// Ctrl+mousedown on the bar: the OS moves the window until the button is released.
-pub fn start_bar_drag(app: &AppHandle) -> Result<(), String> {
+/// Starts moving the bar. On macOS the page then drives the move (see `free_drag`) and
+/// gets back where the bar is and the screen's scale.
+pub fn start_bar_drag(app: &AppHandle) -> Result<Option<(i32, i32, f64)>, String> {
     let window = app
         .get_webview_window("main")
         .ok_or("Main window is missing")?;
@@ -43,11 +44,21 @@ pub fn start_bar_drag(app: &AppHandle) -> Result<(), String> {
             let _ = window.set_focus();
             settle_after_move();
         });
-        result.map_err(|err| err.to_string())
+        result.map(|_| None).map_err(|err| err.to_string())
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
     {
-        let result = window.start_dragging().map_err(|err| {
+        let _ = window;
+        let started = free_drag::begin(app);
+        // The page won't report a drop for a drag that never began.
+        if started.is_none() {
+            settle_after_move();
+        }
+        Ok(started)
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let result = window.start_dragging().map(|_| None).map_err(|err| {
             log::error!("couldn't move the bar: {err}");
             err.to_string()
         });
@@ -253,7 +264,6 @@ mod grid {
 
 /// Makes the snap grid's window ahead of the first drag (when Ctrl is first held on the
 /// bar). It's built off the main thread, hidden, transparent and click-through.
-#[cfg(windows)]
 pub fn prepare_grid(app: &AppHandle) -> Result<(), String> {
     if app.get_webview_window("grid").is_some() {
         return Ok(());
@@ -278,9 +288,109 @@ pub fn prepare_grid(app: &AppHandle) -> Result<(), String> {
         .map_err(|err| err.to_string())
 }
 
-#[cfg(not(windows))]
-pub fn prepare_grid(_app: &AppHandle) -> Result<(), String> {
-    Ok(())
+/// macOS: the bar's move, driven by the page. ⌘-drag sends the pointer's position and the
+/// bar follows; the same grid as on Windows shows where it would snap, and on release it
+/// lands there. (Windows uses its own move loop instead; see `drag_on_windows`.)
+#[cfg(target_os = "macos")]
+pub mod free_drag {
+    use std::sync::Mutex;
+
+    use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize};
+
+    struct Drag {
+        /// The work area the grid covers: x, y, width, height, in physical pixels.
+        area: (i32, i32, i32, i32),
+        snap: Option<(i32, i32)>,
+    }
+
+    static DRAG: Mutex<Option<Drag>> = Mutex::new(None);
+
+    fn work_area(window: &tauri::WebviewWindow) -> Option<(i32, i32, i32, i32)> {
+        let monitor = window.current_monitor().ok().flatten()?;
+        let area = monitor.work_area();
+        Some((
+            area.position.x,
+            area.position.y,
+            area.size.width as i32,
+            area.size.height as i32,
+        ))
+    }
+
+    fn place(app: &AppHandle, area: (i32, i32, i32, i32)) {
+        if let Some(grid) = app.get_webview_window("grid") {
+            let _ = grid.set_position(PhysicalPosition::new(area.0, area.1));
+            let _ = grid.set_size(PhysicalSize::new(area.2 as u32, area.3 as u32));
+            let _ = grid.show();
+        }
+    }
+
+    /// Starts a move: shows the grid over the bar's screen. Returns where the bar is and
+    /// the screen's scale, which the page needs to turn pointer moves into window moves.
+    pub fn begin(app: &AppHandle) -> Option<(i32, i32, f64)> {
+        let bar = app.get_webview_window("main")?;
+        let position = bar.outer_position().ok()?;
+        let scale = bar.scale_factor().unwrap_or(1.0);
+        let area = work_area(&bar).unwrap_or_default();
+        let _ = app.emit_to("grid", "grid-preview", serde_json::Value::Null);
+        place(app, area);
+        if let Ok(mut drag) = DRAG.lock() {
+            *drag = Some(Drag { area, snap: None });
+        }
+        Some((position.x, position.y, scale))
+    }
+
+    /// The bar's new top-left: moves it, follows it to another screen, previews the snap.
+    pub fn moving(app: &AppHandle, x: i32, y: i32) {
+        let Some(bar) = app.get_webview_window("main") else {
+            return;
+        };
+        let _ = bar.set_position(PhysicalPosition::new(x, y));
+        let Ok(mut guard) = DRAG.lock() else {
+            return;
+        };
+        let Some(drag) = guard.as_mut() else {
+            return;
+        };
+        if let Some(area) = work_area(&bar)
+            && area != drag.area
+        {
+            drag.area = area;
+            place(app, area);
+        }
+        let Ok(size) = bar.outer_size() else {
+            return;
+        };
+        let (width, height) = (size.width as i32, size.height as i32);
+        let (sx, sy) = super::snap_position((x, y), drag.area, width, height);
+        drag.snap = ((sx, sy) != (x, y)).then_some((sx, sy));
+        let preview = drag.snap.map(|(sx, sy)| {
+            serde_json::json!({
+                "x": sx - drag.area.0,
+                "y": sy - drag.area.1,
+                "width": width,
+                "height": height,
+            })
+        });
+        let _ = app.emit_to(
+            "grid",
+            "grid-preview",
+            preview.unwrap_or(serde_json::Value::Null),
+        );
+    }
+
+    /// The drop: hides the grid and puts the bar where it snapped, if it did.
+    pub fn end(app: &AppHandle) {
+        let Some(drag) = DRAG.lock().ok().and_then(|mut guard| guard.take()) else {
+            return;
+        };
+        if let Some(grid) = app.get_webview_window("grid") {
+            let _ = grid.hide();
+        }
+        if let (Some((x, y)), Some(bar)) = (drag.snap, app.get_webview_window("main")) {
+            let _ = bar.set_position(PhysicalPosition::new(x, y));
+        }
+        super::settle_after_move();
+    }
 }
 
 /// Remembers where a drag left the bar, once it has stopped moving for a moment.
@@ -441,13 +551,108 @@ pub fn open_notes(app: &AppHandle, id: Option<&str>) -> Result<(), String> {
 /// the page adds the purple tint. Until the page paints the window stays hidden.
 pub(crate) const WINDOW_BACKGROUND: tauri::window::Color = tauri::window::Color(0, 0, 0, 0);
 
+/// The theme the windows' glass is made for; Sidebar has its own material.
+static THEME: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
 pub(crate) fn glass() -> tauri::utils::config::WindowEffectsConfig {
+    let theme = THEME.lock().map(|theme| theme.clone()).unwrap_or_default();
+    glass_for(&theme, None)
+}
+
+/// The glass for a frameless window with rounded corners (the update card).
+pub(crate) fn rounded_glass(radius: f64) -> tauri::utils::config::WindowEffectsConfig {
+    let theme = THEME.lock().map(|theme| theme.clone()).unwrap_or_default();
+    glass_for(&theme, Some(radius))
+}
+
+/// macOS: Settings and setup open on whichever Space is current (a second desktop, a
+/// full-screen app's Space) rather than pulling the user back to the one they were built
+/// on, which is what happened when the app became active.
+pub fn open_on_active_space(app: &AppHandle, window: &tauri::WebviewWindow) {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_app_kit::{NSWindow, NSWindowCollectionBehavior};
+        let Ok(pointer) = window.ns_window() else {
+            return;
+        };
+        let pointer = pointer as usize;
+        let _ = app.run_on_main_thread(move || {
+            // SAFETY: the window's live NSWindow, used on the main thread.
+            let ns_window = unsafe { &*(pointer as *const NSWindow) };
+            ns_window.setCollectionBehavior(
+                NSWindowCollectionBehavior::MoveToActiveSpace
+                    | NSWindowCollectionBehavior::FullScreenAuxiliary,
+            );
+        });
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (app, window);
+}
+
+/// macOS: while Settings or setup is open the app acts like a regular one, with a Dock
+/// icon and a place in ⌘Tab, so other windows can come in front and switching back is
+/// easy. Once they close it goes back to living in the menu bar.
+pub fn regular_while_open(app: &AppHandle) {
+    #[cfg(target_os = "macos")]
+    {
+        let open = ["settings", "onboarding"].iter().any(|label| {
+            app.get_webview_window(label)
+                .is_some_and(|window| window.is_visible().unwrap_or(false))
+        });
+        let _ = app.set_activation_policy(if open {
+            tauri::ActivationPolicy::Regular
+        } else {
+            tauri::ActivationPolicy::Accessory
+        });
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = app;
+}
+
+/// The native glass under a window. Sidebar uses macOS's own sidebar material (the System
+/// Settings sidebar) and a graphite-tinted Acrylic on Windows; the other themes share the
+/// HUD blur and tint it in the page.
+fn glass_for(theme: &str, radius: Option<f64>) -> tauri::utils::config::WindowEffectsConfig {
     use tauri::window::{Effect, EffectState, EffectsBuilder};
-    EffectsBuilder::new()
-        .effect(Effect::HudWindow)
+    let sidebar = theme == "sidebar";
+    let mut effects = EffectsBuilder::new()
+        .effect(if sidebar {
+            Effect::Sidebar
+        } else {
+            Effect::HudWindow
+        })
         .effect(Effect::Acrylic)
-        .state(EffectState::Active)
-        .build()
+        .state(EffectState::Active);
+    if sidebar {
+        effects = effects.color(tauri::window::Color(43, 43, 48, 150));
+    }
+    if let Some(radius) = radius {
+        effects = effects.radius(radius);
+    }
+    effects.build()
+}
+
+/// Gives every open window the glass for `theme`; windows made later pick it up from
+/// `glass`. The old effect is cleared first, since macOS would otherwise stack the two.
+pub fn apply_theme(app: &AppHandle, theme: &str) {
+    if let Ok(mut current) = THEME.lock() {
+        *current = theme.to_string();
+    }
+    for (label, window) in app.webview_windows() {
+        // The snap grid is a clear, click-through overlay with no glass.
+        if label == "grid" {
+            continue;
+        }
+        // Frameless windows keep their rounded corners: the bar's 16px (tauri.conf.json)
+        // and the update card's 12px.
+        let radius = match label.as_str() {
+            "main" => Some(16.0),
+            "update" => Some(12.0),
+            _ => None,
+        };
+        let _ = window.set_effects(None);
+        let _ = window.set_effects(glass_for(theme, radius));
+    }
 }
 
 /// The bar's effect in tauri.conf.json is macOS's HUD blur, which Windows ignores, leaving
@@ -484,7 +689,12 @@ pub(crate) fn reveal_soon(app: &AppHandle, window: tauri::WebviewWindow) {
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(1500));
         if !window.is_visible().unwrap_or(true) {
+            log::info!(
+                "{} never reported in; shown by the 1.5 s fallback",
+                window.label()
+            );
             let _ = window.show();
+            regular_while_open(&app);
             if !crate::note_windows::take_quiet(window.label()) {
                 focus_on_main_thread(&app, window);
             }
@@ -493,7 +703,15 @@ pub(crate) fn reveal_soon(app: &AppHandle, window: tauri::WebviewWindow) {
 }
 
 /// Called by a settings or notes page after its first paint.
-pub fn page_ready(app: &AppHandle, label: &str) {
+pub fn page_ready(app: &AppHandle, label: &str, page_ms: Option<u64>) {
+    if label == "settings" {
+        log::info!("settings page ready in {} ms", page_ms.unwrap_or_default());
+        // Built ahead of time: stays hidden until asked for.
+        if !SETTINGS_WANTED.load(std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
+        settings_painted();
+    }
     // The bar shows only when summoned; its page reports in once, for the startup timing.
     if label == "main" {
         crate::startup::mark("bar page loaded");
@@ -503,6 +721,7 @@ pub fn page_ready(app: &AppHandle, label: &str) {
         && !window.is_visible().unwrap_or(true)
     {
         let _ = window.show();
+        regular_while_open(app);
         // A note reopened at start comes up without taking focus.
         if !crate::note_windows::take_quiet(label) {
             focus_on_main_thread(app, window);
@@ -510,18 +729,60 @@ pub fn page_ready(app: &AppHandle, label: &str) {
     }
 }
 
-/// Opens or focuses the settings window, scrolled to `section` when one is given.
+/// When Settings was last asked for, to log how long it took to show.
+static SETTINGS_OPENED: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+/// Whether the Settings window should appear once its page is ready (false while it's
+/// being built in the background ahead of time).
+static SETTINGS_WANTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Opens or focuses the settings window, scrolled to `section` when one is given. The
+/// window is built ahead of time and only ever hidden, so this is just show and focus.
 pub fn open_settings(app: &AppHandle, section: Option<&str>) -> Result<(), String> {
+    if let Ok(mut opened) = SETTINGS_OPENED.lock() {
+        *opened = Some(std::time::Instant::now());
+    }
+    SETTINGS_WANTED.store(true, std::sync::atomic::Ordering::SeqCst);
     if let Some(window) = app.get_webview_window("settings") {
-        if let Some(section) = section {
-            let _ = window.emit("settings-section", section);
-        }
-        let _ = window.show();
+        let _ = window.emit("settings-shown", section.unwrap_or_default());
         let _ = window.unminimize();
+        let _ = window.show();
+        regular_while_open(app);
         focus_on_main_thread(app, window);
         return Ok(());
     }
+    build_settings(app, section)
+}
 
+/// Esc in Settings, or its close button: hides it, ready to show again instantly.
+pub fn hide_settings(app: &AppHandle) {
+    SETTINGS_WANTED.store(false, std::sync::atomic::Ordering::SeqCst);
+    if let Some(window) = app.get_webview_window("settings") {
+        let _ = window.hide();
+    }
+    regular_while_open(app);
+}
+
+/// The fast path for the gear, called on the main thread: shows the pre-built Settings
+/// window in place. False when it hasn't been built yet.
+pub fn show_settings_now(app: &AppHandle) -> bool {
+    let Some(window) = app.get_webview_window("settings") else {
+        return false;
+    };
+    if let Ok(mut opened) = SETTINGS_OPENED.lock() {
+        *opened = Some(std::time::Instant::now());
+    }
+    SETTINGS_WANTED.store(true, std::sync::atomic::Ordering::SeqCst);
+    let _ = window.unminimize();
+    let _ = window.show();
+    regular_while_open(app);
+    force_foreground(&window);
+    let _ = window.set_focus();
+    let _ = window.emit("settings-shown", "");
+    true
+}
+
+/// Builds the Settings window, hidden; `open_settings` or its page's first paint shows it.
+fn build_settings(app: &AppHandle, section: Option<&str>) -> Result<(), String> {
     let window = WebviewWindowBuilder::new(
         app,
         "settings",
@@ -542,8 +803,130 @@ pub fn open_settings(app: &AppHandle, section: Option<&str>) -> Result<(), Strin
     .focused(true)
     .build()
     .map_err(|err| err.to_string())?;
+    open_on_active_space(app, &window);
+    // Closing only hides it, so the next open is instant.
+    let hidden = window.clone();
+    window.on_window_event(move |event| {
+        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            api.prevent_close();
+            let _ = hidden.hide();
+            SETTINGS_WANTED.store(false, std::sync::atomic::Ordering::SeqCst);
+            regular_while_open(hidden.app_handle());
+        }
+    });
+    if SETTINGS_WANTED.load(std::sync::atomic::Ordering::SeqCst) {
+        reveal_soon(app, window);
+    }
+    Ok(())
+}
+
+/// First-run setup: a small fixed window with a few quick steps, shown once.
+pub fn open_onboarding(app: &AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("onboarding") {
+        let _ = window.show();
+        regular_while_open(app);
+        focus_on_main_thread(app, window);
+        return Ok(());
+    }
+    let window = WebviewWindowBuilder::new(
+        app,
+        "onboarding",
+        WebviewUrl::App("index.html?view=onboarding".into()),
+    )
+    .title("Welcome to Zephyr")
+    .background_color(WINDOW_BACKGROUND)
+    .transparent(true)
+    .effects(glass())
+    .visible(false)
+    .inner_size(560.0, 520.0)
+    .resizable(false)
+    .maximizable(false)
+    .minimizable(false)
+    .center()
+    .focused(true)
+    .build()
+    .map_err(|err| err.to_string())?;
+    // Closed with its close button rather than finished: the Dock icon goes with it.
+    let handle = app.clone();
+    let closing = window.clone();
+    window.on_window_event(move |event| {
+        if let tauri::WindowEvent::CloseRequested { .. } = event {
+            let _ = closing.hide();
+            regular_while_open(&handle);
+        }
+    });
+    open_on_active_space(app, &window);
     reveal_soon(app, window);
     Ok(())
+}
+
+/// Builds Settings in the background a moment after startup, once the bar is ready, so
+/// the gear never waits on a webview being made and its page loading.
+pub fn prewarm_settings(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        if app.get_webview_window("settings").is_none()
+            && let Err(err) = build_settings(&app, None)
+        {
+            log::error!("couldn't prepare Settings: {err}");
+            return;
+        }
+        // WebKit doesn't lay out or paint a page that has never been on screen, so the
+        // first open still paid for it. Once loaded, it gets one invisible frame on screen.
+        #[cfg(target_os = "macos")]
+        {
+            tokio::time::sleep(Duration::from_millis(1500)).await;
+            paint_offscreen(&app);
+        }
+    });
+}
+
+/// Puts the hidden Settings window on screen fully transparent, behind everything and
+/// without focus, long enough for WebKit to paint it, then takes it off again.
+#[cfg(target_os = "macos")]
+fn paint_offscreen(app: &AppHandle) {
+    use objc2_app_kit::NSWindow;
+    let Some(window) = app.get_webview_window("settings") else {
+        return;
+    };
+    if SETTINGS_WANTED.load(Ordering::SeqCst) {
+        return;
+    }
+    let Ok(pointer) = window.ns_window() else {
+        return;
+    };
+    let pointer = pointer as usize;
+    let _ = app.run_on_main_thread(move || {
+        // SAFETY: the Settings NSWindow, alive while its WebviewWindow is, on the main thread.
+        let ns_window = unsafe { &*(pointer as *const NSWindow) };
+        ns_window.setAlphaValue(0.0);
+        ns_window.orderBack(None);
+    });
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(400));
+        let _ = app.run_on_main_thread(move || {
+            // SAFETY: as above.
+            let ns_window = unsafe { &*(pointer as *const NSWindow) };
+            if !SETTINGS_WANTED.load(Ordering::SeqCst) {
+                ns_window.orderOut(None);
+            }
+            ns_window.setAlphaValue(1.0);
+        });
+    });
+}
+
+/// The Settings page painted after being shown: logs how long from the click.
+pub fn settings_painted() {
+    if let Ok(mut opened) = SETTINGS_OPENED.lock()
+        && let Some(at) = opened.take()
+    {
+        log::info!(
+            "settings painted {:.1} ms after the click",
+            at.elapsed().as_secs_f64() * 1000.0
+        );
+    }
 }
 
 // open_settings can be called from an async command's worker thread; the Win32 foreground
@@ -776,7 +1159,7 @@ fn clamp_into(spot: (i32, i32), area: (i32, i32, i32, i32), width: i32, height: 
 /// thirds across, and on the half or thirds down, plus the spot it opens at by default (top
 /// edge a sixth of the way down). Elsewhere it moves freely. `area` is (x, y, width,
 /// height) of the screen's work area; returns the snapped top-left.
-#[cfg_attr(not(windows), allow(dead_code))]
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 fn snap_position(
     spot: (i32, i32),
     area: (i32, i32, i32, i32),

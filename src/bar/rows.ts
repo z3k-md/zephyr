@@ -1,11 +1,13 @@
 // Turns a suggest response into the bar's sectioned list: the query row, command rows and
 // section headers. Pure functions, so the bar only wires them up.
 
-import { CTRL, MOD, isMac, shortcutKeys } from '../keys';
+import { CTRL, isMac, shortcutKeys } from '../keys';
+import { displayName, isOtherAi } from '../aiChoice';
 import type {
   Binding,
   ClaudeJob,
   Destination,
+  LaunchGroup,
   Snapshot,
   Suggestion,
   SuggestResponse,
@@ -52,13 +54,13 @@ function destination(ctx: RowCtx, id: string): Destination | undefined {
 
 function destinationName(ctx: RowCtx, id: string): string {
   if (id === 'url') return 'Link';
-  return destination(ctx, id)?.name ?? id;
+  const found = destination(ctx, id);
+  return found ? displayName(ctx.snapshot, found) : id;
 }
 
 export function rowKey(row: Suggestion): string {
   if (row.kind === 'query') return 'query';
   if (row.kind === 'searchWith') return `sw-${row.destinationId}`;
-  if (row.kind === 'more') return 'more';
   return `${row.kind}-${row.destinationId}-${row.path ?? row.noteId ?? row.label}`;
 }
 
@@ -117,6 +119,8 @@ interface Command {
   icon: string;
   /** Names it answers to besides its label, lowercase. */
   names: string[];
+  /** Words that offer it without letting Enter take it ("cpu" may be a search). */
+  keywords?: string[];
 }
 
 // Every mode and scoped search, by name, so none needs a bang: typing "files" offers the
@@ -130,6 +134,26 @@ const COMMANDS: Command[] = [
     names: ['clipboard', 'clip', 'paste history'],
   },
   { id: 'notes', label: 'Notes', icon: 'glyph:note', names: ['note'] },
+  {
+    id: 'resources',
+    label: 'System Resources',
+    icon: 'glyph:cpu',
+    names: ['resources', 'top', 'htop', 'btop', 'activity monitor'],
+    keywords: [
+      'cpu',
+      'memory',
+      'ram',
+      'gpu',
+      'processes',
+      'performance',
+      'battery',
+      'disk',
+      'activity',
+      'task manager',
+      'kill',
+      'force quit',
+    ],
+  },
   { id: 'claude', label: 'Claude jobs', icon: 'glyph:terminal', names: ['claude', 'jobs'] },
   { id: 'shell', label: 'Shell', icon: 'glyph:prompt', names: ['terminal', 'command line'] },
   {
@@ -173,10 +197,20 @@ export function commandRows(ctx: RowCtx): { rows: Suggestion[]; exact: number | 
     if (command.id === 'clip' && !settings?.clipboard.enabled) continue;
     const names = [command.label.toLowerCase(), ...command.names];
     const words = command.label.toLowerCase().split(' ');
-    if (!names.some((name) => name.startsWith(typed)) && !words.some((w) => w.startsWith(typed))) {
+    const keyword = (command.keywords ?? []).some(
+      (word) => word.startsWith(typed) && typed.length >= Math.min(3, word.length)
+    );
+    if (
+      !names.some((name) => name.startsWith(typed)) &&
+      !words.some((w) => w.startsWith(typed)) &&
+      !keyword
+    ) {
       continue;
     }
-    if (exact === null && names.includes(typed)) exact = rows.length;
+    // A bare "settings" opens System Settings; the settings search stays one row down.
+    if (exact === null && names.includes(typed) && command.id !== 'scope:settings') {
+      exact = rows.length;
+    }
     let keys: string[] = [];
     if (command.id === 'clip' && settings?.clipboard.shortcut) {
       keys = shortcutKeys(settings.clipboard.shortcut);
@@ -185,7 +219,29 @@ export function commandRows(ctx: RowCtx): { rows: Suggestion[]; exact: number | 
     }
     rows.push(view(command.id, command.label, command.icon, keys.length ? { keys } : {}));
   }
+  // Launch groups by name; Enter on one opens all of it.
+  for (const group of settings?.launchGroups ?? []) {
+    const name = group.name.toLowerCase();
+    const words = name.split(/\s+/);
+    if (!name.startsWith(typed) && !words.some((word) => word.startsWith(typed))) continue;
+    if (exact === null && name === typed) exact = rows.length;
+    rows.push(groupRow(group));
+  }
   return { rows, exact };
+}
+
+/** A launch group's row: its name, its icon, and its apps' icons small beside it. */
+export function groupRow(group: LaunchGroup, hint = ''): Suggestion {
+  const apps = group.items.filter((item) => item.kind === 'app');
+  return view(
+    `group:${group.id}`,
+    group.name,
+    group.icon ? `glyph:${group.icon}` : apps[0] ? `app:${apps[0].value}` : 'glyph:grid',
+    {
+      hint: hint || `${group.items.length} item${group.items.length === 1 ? '' : 's'}`,
+      icons: apps.slice(0, 5).map((item) => `app:${item.value}`),
+    }
+  );
 }
 
 /** The rows the bar lists, and which one Enter takes before the user moves. */
@@ -199,16 +255,18 @@ export function buildRows(
   }
   const rows = [...response.items];
   let preselect = response.preselect;
-  // Free text going to a destination gets its own row at the top, selected.
+  // Free text going to a destination gets its own row at the top, selected. When a
+  // settings page leads ("wifi settings"), the web row comes second, under the best page.
+  const settingsFirst = response.preselect === 0 && rows[0]?.kind === 'setting';
   if (
     response.mode === 'search' &&
     response.target &&
-    response.preselect === null &&
+    (response.preselect === null || settingsFirst) &&
     response.text
   ) {
     const target = response.target;
     const ai = destination(ctx, target)?.kind === 'ai';
-    rows.unshift({
+    rows.splice(settingsFirst ? 1 : 0, 0, {
       kind: 'query',
       label: response.text,
       query: response.text,
@@ -250,13 +308,17 @@ export function buildRows(
   return { rows, preselect };
 }
 
-/** "Search with": three other destinations for the same text, then "N more". */
+/** "Search with": up to three other destinations for the same text; ⌘K lists the rest. */
 function searchWithRows(
   response: SuggestResponse,
   ctx: RowCtx,
   exclude: string | null
 ): Suggestion[] {
-  let ids = response.searchWith.filter((id) => id !== exclude);
+  // Only the one AI picked in Settings; the other AIs stay in ⌘K.
+  let ids = response.searchWith.filter((id) => {
+    const found = destination(ctx, id);
+    return id !== exclude && !(found && isOtherAi(ctx.snapshot, found));
+  });
   if (!exclude && ids.includes(ctx.armedId)) {
     ids = [ctx.armedId, ...ids.filter((id) => id !== ctx.armedId)];
   }
@@ -274,19 +336,6 @@ function searchWithRows(
       hint: '',
     };
   });
-  const remaining = ids.length - shown.length;
-  if (remaining > 0) {
-    shown.push({
-      kind: 'more',
-      section: 'searchWith',
-      label: `${remaining} more destination${remaining === 1 ? '' : 's'}`,
-      query: response.text,
-      destinationId: '',
-      hint: '',
-      icon: 'glyph:more',
-      keys: [MOD, 'K'],
-    });
-  }
   return shown;
 }
 
@@ -331,7 +380,7 @@ export function primaryLabel(row: Suggestion | undefined, ctx: RowCtx): string |
     case 'history':
     case 'searchWith':
       if (row.destinationId === 'url') return 'Open link';
-      return isAi ? 'Ask AI' : `Search ${name}`;
+      return isAi ? `Ask ${name}` : `Search ${name}`;
     case 'app':
     case 'file':
     case 'setting':
@@ -345,8 +394,6 @@ export function primaryLabel(row: Suggestion | undefined, ctx: RowCtx): string |
     case 'view':
       if (row.destinationId.startsWith('scope:')) return row.label;
       return `Open ${row.label.replace(/^Back to /, '')}`;
-    case 'more':
-      return 'Show all destinations';
     case 'destination':
       return `Use ${row.label}`;
   }
@@ -367,7 +414,7 @@ export function commandFor(target: string): Command | undefined {
 }
 
 /** A row for whatever a binding points at, as the bar would show it. */
-export function bindingRow(binding: Binding): Suggestion | null {
+export function bindingRow(binding: Binding, groups: LaunchGroup[] = []): Suggestion | null {
   const [kind, ...rest] = binding.target.split(':');
   const value = rest.join(':');
   const hint = binding.alias ? `Alias “${binding.alias}”` : '';
@@ -403,6 +450,10 @@ export function bindingRow(binding: Binding): Suggestion | null {
         section: 'bookmarks',
         icon: `site:${value}`,
       };
+    case 'group': {
+      const group = groups.find((item) => item.id === value);
+      return group ? groupRow(group, hint) : null;
+    }
     case 'view':
     case 'scope': {
       const command = commandFor(binding.target);
@@ -416,7 +467,7 @@ export function bindingRow(binding: Binding): Suggestion | null {
 
 function aliasRow(ctx: RowCtx): Suggestion | null {
   const binding = bindingForAlias(ctx, ctx.typed);
-  return binding ? bindingRow(binding) : null;
+  return binding ? bindingRow(binding, ctx.snapshot?.launchGroups) : null;
 }
 
 /**
@@ -428,9 +479,13 @@ export function bindingTarget(row: Suggestion): { target: string; label: string 
   if (row.kind === 'destination') return { target: `dest:${row.destinationId}`, label: row.label };
   if (row.kind === 'searchWith') return { target: `dest:${row.destinationId}`, label: row.label };
   if (row.kind === 'bookmark') return { target: `bookmark:${row.query}`, label: row.label };
+  if (row.kind === 'setting' && row.settingId) {
+    return { target: `setting:${row.settingId}`, label: row.label };
+  }
   if (row.kind === 'view') {
     const id = row.destinationId;
     if (id === 'back' || id === 'ip') return null;
+    if (id.startsWith('group:')) return { target: id, label: row.label };
     const target = id.startsWith('scope:') ? id : `view:${id}`;
     return commandFor(target) ? { target, label: row.label } : null;
   }

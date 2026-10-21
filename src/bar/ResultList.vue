@@ -1,5 +1,6 @@
 <script setup lang="ts">
   import RowIcon from './RowIcon.vue';
+  import { vFit } from '../fit';
   import { dragGesture } from './dragOut';
   import { rowKey, type Group } from './rows';
   import type { Suggestion } from '../types';
@@ -17,6 +18,8 @@
     hover: [index: number];
     /** A press on a row moved far enough to be a drag (the bar decides if it can be). */
     drag: [index: number];
+    /** How many rows fit and are shown; the rest are left out, never scrolled to. */
+    fit: [count: number];
   }>();
 
   const gesture = dragGesture((index) => emit('drag', index));
@@ -49,7 +52,13 @@
 </script>
 
 <template>
-  <ul id="results" class="results sectioned" role="listbox" aria-label="Results">
+  <ul
+    id="results"
+    class="results sectioned"
+    role="listbox"
+    aria-label="Results"
+    v-fit="(count: number) => emit('fit', count)"
+  >
     <li v-for="group in groups" :key="group.start" role="presentation">
       <div :id="`head-${group.start}`" class="section-head">{{ group.title }}</div>
       <ul role="group" :aria-labelledby="`head-${group.start}`">
@@ -85,6 +94,9 @@
               >{{ numbered }}{{ group.start + offset + 1 }}</kbd
             >
             <template v-else>
+              <span v-if="row.icons?.length" class="row-icons" aria-hidden="true">
+                <RowIcon v-for="icon in row.icons" :key="icon" :icon="icon" label="" :size="16" />
+              </span>
               <kbd v-for="key in row.keys" :key="key" class="kbd" aria-hidden="true">{{ key }}</kbd>
               <template v-if="!row.keys?.length">{{ row.hint }}</template>
             </template>

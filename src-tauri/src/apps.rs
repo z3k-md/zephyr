@@ -43,6 +43,8 @@ pub struct Catalog<'a> {
     /// Files opened from the bar, keyed by full path.
     pub file_opens: &'a [LaunchEntry],
     pub overrides: &'a [String],
+    /// Settings pages opened from the bar, for ranking and the bare "settings" list.
+    pub setting_opens: &'a [LaunchEntry],
     pub now: i64,
 }
 
@@ -58,6 +60,39 @@ impl<'a> Catalog<'a> {
     /// Like `preferred`, but ignoring learned overrides: would this text have launched an app?
     pub fn would_launch(&self, query: &str) -> bool {
         preferred(self.apps, self.launches, &[], query, self.now).is_some()
+    }
+
+    /// Whether this text was sent to the web on purpose before.
+    pub fn overridden(&self, query: &str) -> bool {
+        let lowered = query.trim().to_lowercase();
+        self.overrides.iter().any(|entry| entry == &lowered)
+    }
+
+    /// An app named exactly this text ("Terminal"), which wins over a settings page.
+    pub fn named(&self, query: &str) -> Option<&'a App> {
+        let query = query.trim();
+        self.apps
+            .iter()
+            .find(|app| app.name.eq_ignore_ascii_case(query))
+    }
+
+    /// The system's own settings app: System Settings on a Mac, Settings on Windows.
+    pub fn system_settings_app(&self) -> Option<&'a App> {
+        let name = if cfg!(windows) {
+            "Settings"
+        } else {
+            "System Settings"
+        };
+        self.apps.iter().find(|app| app.name == name)
+    }
+
+    /// The settings pages this text asks for ("wifi settings"), unless it went to the web
+    /// before or an app is named exactly that.
+    pub fn setting_intent(&self, query: &str) -> Vec<crate::settings::Match<'a>> {
+        if self.overridden(query) || self.named(query).is_some() {
+            return Vec::new();
+        }
+        crate::settings::intent(self.settings, query, self.setting_opens, self.now, 3)
     }
 
     pub fn recent(&self, limit: usize) -> Vec<&'a App> {
@@ -455,6 +490,138 @@ fn scan_bundles(roots: &[std::path::PathBuf], depth: usize) -> Vec<App> {
     apps
 }
 
+/// How a browser opens a private window from its command line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PrivateMode {
+    /// What the browser calls it.
+    pub name: &'static str,
+    pub flag: &'static str,
+    /// The program name Windows resolves through App Paths, if the browser registers one.
+    pub windows_exe: Option<&'static str>,
+}
+
+/// Browsers by their app name, with their private-window flag. Safari has none (only its menu, which
+/// would need Accessibility), so it isn't listed.
+const PRIVATE_MODES: &[(&str, PrivateMode)] = &[
+    (
+        "google chrome",
+        PrivateMode {
+            name: "Incognito",
+            flag: "--incognito",
+            windows_exe: Some("chrome"),
+        },
+    ),
+    (
+        "chromium",
+        PrivateMode {
+            name: "Incognito",
+            flag: "--incognito",
+            windows_exe: None,
+        },
+    ),
+    (
+        "brave browser",
+        PrivateMode {
+            name: "Private window",
+            flag: "--incognito",
+            windows_exe: Some("brave"),
+        },
+    ),
+    (
+        "microsoft edge",
+        PrivateMode {
+            name: "InPrivate",
+            flag: "--inprivate",
+            windows_exe: Some("msedge"),
+        },
+    ),
+    (
+        "vivaldi",
+        PrivateMode {
+            name: "Private window",
+            flag: "--incognito",
+            windows_exe: Some("vivaldi"),
+        },
+    ),
+    (
+        "firefox",
+        PrivateMode {
+            name: "Private window",
+            flag: "--private-window",
+            windows_exe: Some("firefox"),
+        },
+    ),
+];
+
+/// The private window an app opens with Shift+Enter, if it is a browser that has one here.
+pub fn private_mode(name: &str) -> Option<PrivateMode> {
+    // The browser itself or one of its channels ("Google Chrome Canary"), never another
+    // app that shares the name ("Chrome Remote Desktop").
+    const CHANNELS: &[&str] = &["", "beta", "dev", "canary", "nightly", "developer edition"];
+    let name = name.to_lowercase();
+    let (_, mode) = PRIVATE_MODES.iter().find(|(browser, _)| {
+        name.strip_prefix(browser)
+            .is_some_and(|rest| CHANNELS.contains(&rest.trim()))
+    })?;
+    (cfg!(target_os = "macos") || mode.windows_exe.is_some()).then_some(*mode)
+}
+
+/// Opens a browser straight into a private window. A running browser gets the request
+/// passed along and opens the window in the session already open.
+pub fn launch_private(app: &App) -> Result<(), String> {
+    let mode = private_mode(&app.name)
+        .ok_or_else(|| format!("{} has no private window Zephyr can open", app.name))?;
+    launch_private_native(app, mode)
+        .map_err(|err| format!("Couldn't open a {} window: {err}", mode.name))
+}
+
+#[cfg(target_os = "macos")]
+fn launch_private_native(app: &App, mode: PrivateMode) -> Result<(), String> {
+    // Run the bundle's program itself: `open --args` drops the flag when the browser is
+    // already running.
+    let info = std::path::Path::new(&app.id).join("Contents/Info.plist");
+    let output = std::process::Command::new("plutil")
+        .args(["-extract", "CFBundleExecutable", "raw", "-o", "-"])
+        .arg(&info)
+        .output()
+        .map_err(|err| err.to_string())?;
+    let program = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if !output.status.success() || program.is_empty() || program.contains('/') {
+        return Err("its program wasn't found".into());
+    }
+    std::process::Command::new(
+        std::path::Path::new(&app.id)
+            .join("Contents/MacOS")
+            .join(program),
+    )
+    .arg(mode.flag)
+    .stdin(std::process::Stdio::null())
+    .stdout(std::process::Stdio::null())
+    .stderr(std::process::Stdio::null())
+    .spawn()
+    .map(|_| ())
+    .map_err(|err| err.to_string())
+}
+
+#[cfg(windows)]
+fn launch_private_native(_app: &App, mode: PrivateMode) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let exe = mode.windows_exe.ok_or("it isn't registered with Windows")?;
+    // `start` finds the browser through App Paths, where installers register it.
+    std::process::Command::new("cmd")
+        .args(["/C", "start", "", exe, mode.flag])
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()
+        .map(|_| ())
+        .map_err(|err| err.to_string())
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn launch_private_native(_app: &App, _mode: PrivateMode) -> Result<(), String> {
+    Err("not supported here yet".into())
+}
+
 /// Opens an app, or a Steam game through Steam.
 pub fn launch(app: &App) -> Result<(), String> {
     match app.id.strip_prefix(crate::steam::ID_PREFIX) {
@@ -609,5 +776,18 @@ mod tests {
         names.sort();
         assert_eq!(names, ["Safari", "Terminal"]);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn browsers_know_their_private_window() {
+        assert_eq!(private_mode("Google Chrome").unwrap().flag, "--incognito");
+        assert_eq!(private_mode("Microsoft Edge").unwrap().flag, "--inprivate");
+        assert_eq!(private_mode("Firefox").unwrap().flag, "--private-window");
+        assert_eq!(private_mode("Brave Browser").unwrap().flag, "--incognito");
+        assert!(private_mode("Safari").is_none());
+        assert!(private_mode("Google Chrome Canary").is_some());
+        assert!(private_mode("Firefox Developer Edition").is_some());
+        assert!(private_mode("Chrome Remote Desktop").is_none());
+        assert!(private_mode("Microsoft Edgeworth").is_none());
     }
 }

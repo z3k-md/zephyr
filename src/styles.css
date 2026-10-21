@@ -34,6 +34,40 @@
 /* Settings > Appearance palettes. Each swaps the glass tint, the selection fill and the
    accent; text, borders and fills stay neutral so every palette reads the same way. The
    default (violet) is the :root block above. */
+/* Sidebar: the System Settings sidebar. The window's native sidebar material does the work,
+   so the tint is light and neutral; the selection is a solid accent pill with white text,
+   following the system accent color where the webview knows it. */
+:root[data-theme='sidebar'] {
+  --glass: linear-gradient(180deg, rgba(44, 44, 48, 0.32) 0%, rgba(34, 34, 38, 0.42) 100%);
+  --glass-strong: linear-gradient(180deg, rgba(42, 42, 46, 0.55) 0%, rgba(32, 32, 36, 0.62) 100%);
+  --select: #3478f6;
+  --focus: #3478f6;
+  /* Primary buttons are the system's blue default button. */
+  --active: #3478f6;
+  --active-fg: #fff;
+  --active-hover: #4a88f7;
+}
+
+@supports (color: AccentColor) {
+  :root[data-theme='sidebar'] {
+    --select: AccentColor;
+    --focus: AccentColor;
+    --active: AccentColor;
+    --active-hover: color-mix(in srgb, AccentColor 88%, white);
+  }
+}
+
+:root[data-theme='sidebar'] .item.selected,
+:root[data-theme='sidebar'] .select-option.active {
+  color: #fff;
+}
+
+:root[data-theme='sidebar'] .item.selected .item-sub,
+:root[data-theme='sidebar'] .item.selected .item-acc,
+:root[data-theme='sidebar'] .item.selected .item-icon {
+  color: rgba(255, 255, 255, 0.82);
+}
+
 :root[data-theme='graphite'] {
   --glass: linear-gradient(180deg, rgba(24, 24, 27, 0.86) 0%, rgba(12, 12, 14, 0.92) 100%);
   --glass-strong: linear-gradient(180deg, rgba(22, 22, 25, 0.95) 0%, rgba(10, 10, 12, 0.97) 100%);
@@ -112,17 +146,22 @@ select {
   --bar-height: 480px;
 }
 
-.bar > .results,
-.bar > .answer {
+/* Lists never scroll; they show the rows that fit (v-fit in fit.ts). */
+.bar > .results {
   flex: 1 1 auto;
   min-height: 0;
-  overflow-y: auto;
+  overflow: hidden;
 }
 
-.bar > .footer,
+/* With no footer, the results take the rest of the bar. */
+.bar > .results.sectioned {
+  max-height: none;
+}
+
 .claude > .footer,
 .shell > .footer,
 .clip > .footer,
+.resources > .footer,
 .typing > .footer,
 .ai-view > .footer {
   flex: none;
@@ -132,6 +171,7 @@ select {
 .claude,
 .shell,
 .clip,
+.resources,
 .typing,
 .ai-view {
   display: flex;
@@ -144,7 +184,7 @@ select {
 .shell > .results {
   flex: 0 1 auto;
   min-height: 0;
-  overflow-y: auto;
+  overflow-y: hidden;
 }
 
 .capture-dot {
@@ -261,15 +301,19 @@ section > button {
   color: var(--fg);
 }
 
-.primary {
+/* Raised above the shared button rules (`.field > button` outranked a bare `.primary`,
+   leaving dark text on a dark fill). */
+.primary,
+:is(.field, section, .row-actions) > button.primary {
   background: var(--active);
   color: var(--active-fg);
   border-color: transparent;
   font-weight: 500;
 }
 
-.primary:hover {
-  background: #ffffff;
+.primary:hover,
+:is(.field, section, .row-actions) > button.primary:hover {
+  background: var(--active-hover, #ffffff);
 }
 
 .strip {
@@ -379,10 +423,8 @@ section > button {
   position: relative;
 }
 
-/* Lists scroll with the wheel and arrow keys, but never show a scrollbar. */
+/* Long text panes inside the bar scroll, but never show a scrollbar. */
 .results,
-.answer,
-.answer-body,
 .clip-list,
 .shell-output,
 .claude-detail {
@@ -390,8 +432,6 @@ section > button {
 }
 
 .results::-webkit-scrollbar,
-.answer::-webkit-scrollbar,
-.answer-body::-webkit-scrollbar,
 .clip-list::-webkit-scrollbar,
 .shell-output::-webkit-scrollbar,
 .claude-detail::-webkit-scrollbar {
@@ -402,25 +442,14 @@ section > button {
   background: var(--select);
 }
 
-.item.answer .label {
-  font-size: 17px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-
 /* Sectioned results (layout A): a titled group per kind, an icon in the gutter, and the
    accessory (hint or keycaps) on the right. */
 .results.sectioned {
   --gutter: 48px;
   --row-h: 40px;
   max-height: var(--list-max, 420px);
-  overflow-y: auto;
+  overflow: hidden;
   padding: 4px 6px 6px;
-  scrollbar-width: none;
-}
-
-.results.sectioned::-webkit-scrollbar {
-  display: none;
 }
 
 .results.sectioned ul {
@@ -479,6 +508,13 @@ section > button {
 .item-acc .row-number {
   color: var(--fg);
   border-color: var(--focus);
+}
+
+/* A launch group's apps, small, before its hint. */
+.row-icons {
+  display: inline-flex;
+  gap: 3px;
+  margin-right: 6px;
 }
 
 .kbd {
@@ -567,15 +603,6 @@ section > button {
   border-top: 1px solid var(--stroke);
 }
 
-.answer {
-  border-top: 1px solid var(--stroke);
-}
-
-.answer-body {
-  overflow-y: auto;
-  padding: 12px 16px 12px 48px;
-}
-
 .answer-text {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -646,7 +673,7 @@ section > button {
   list-style: none;
   margin: 0;
   padding: 6px;
-  overflow-y: auto;
+  overflow-y: hidden;
   border-right: 1px solid var(--stroke);
 }
 
@@ -955,30 +982,80 @@ textarea.query {
   line-height: 1.4;
 }
 
-/* The footer's only control on the left: the Settings button. */
-.footer-settings {
+/* The bar's slim footer: CPU, memory, disk and network, in fixed-width digits so the
+   numbers don't jitter as they change. */
+.stats {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 18px;
+  padding: 7px 16px;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  background: rgba(0, 0, 0, 0.14);
+  border-top: 1px solid var(--stroke);
+  /* A click opens System Resources. */
+  cursor: pointer;
+}
+
+.stats:hover {
+  color: var(--fg);
+}
+
+.stat {
   display: inline-flex;
   align-items: center;
+  gap: 5px;
+}
+
+.stat svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Dev builds: the app's own use, at the far right, set apart from the system stats. */
+.stat-app {
+  margin-left: auto;
+  color: var(--faint);
+}
+
+/* Settings, at the right end of the search bar. */
+.bar-settings {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
-  margin: -4px 0 -4px -6px;
+  /* A 30px target whose 18px glyph sits 18px from the edge, mirroring the search icon. */
+  width: 30px;
+  height: 30px;
+  margin: 0 0 0 4px;
   padding: 0;
   color: var(--muted);
   background: none;
   border: 0;
-  border-radius: 6px;
+  border-radius: 7px;
   cursor: pointer;
 }
 
-.footer-settings:hover {
+.bar-settings:hover {
   color: var(--fg);
   background: var(--chip-hover);
 }
 
-.footer-settings svg {
-  width: 16px;
-  height: 16px;
+.bar-settings:active {
+  background: var(--stroke-strong);
+}
+
+.bar-settings svg {
+  width: 18px;
+  height: 18px;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.7;
@@ -1009,14 +1086,7 @@ textarea.query {
   stroke-linejoin: round;
 }
 
-/* What's playing, at the footer's right; the key hints give way when space is short. */
-.bar > .footer > span:first-child {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
+/* What's playing, at the footer's right. */
 .now-playing {
   display: inline-flex;
   flex: 0 1 auto;
@@ -1100,6 +1170,26 @@ textarea.query {
 .now-playing-control svg {
   width: 14px;
   height: 14px;
+}
+
+/* In the search bar: one line, the cover, the title and play/pause. */
+.now-playing.compact {
+  flex: 0 1 auto;
+  max-width: 190px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.now-playing.compact .now-playing-cover {
+  width: 18px;
+  height: 18px;
+}
+
+.now-playing.compact .now-playing-cover.glyph {
+  width: 14px;
+  height: 14px;
+  margin: 2px;
 }
 
 /* ---- Ask AI ---- */
@@ -2019,6 +2109,301 @@ textarea.query {
   outline: none;
 }
 
+/* Sign in with ChatGPT: OpenAI asks for a dark "Continue with ChatGPT" button. */
+.settings .chatgpt-button {
+  padding: 8px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  background: #0d0d0d;
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.settings .chatgpt-button:hover {
+  background: #1f1f1f;
+}
+
+.chatgpt-welcome {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 12px 0;
+  padding: 12px 14px;
+  border: 1px solid var(--stroke-strong);
+  border-radius: 10px;
+  background: var(--panel);
+}
+
+/* First-run setup: a step train on top, one step in the middle, and a footer that is
+   always on screen. The window is fixed and nothing in it scrolls. */
+.settings.onboarding {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  padding: 0;
+  overflow: hidden;
+}
+
+.train {
+  flex: none;
+  padding: 16px 22px 10px;
+  border-bottom: 1px solid var(--stroke);
+}
+
+.train ol {
+  display: flex;
+  justify-content: space-between;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.train li {
+  position: relative;
+  flex: 1;
+  display: flex;
+  justify-content: center;
+}
+
+/* The track between dots. */
+.train li + li::before {
+  content: '';
+  position: absolute;
+  top: 11px;
+  right: calc(50% + 16px);
+  left: calc(-50% + 16px);
+  height: 1px;
+  background: var(--stroke-strong);
+}
+
+.train li.done + li::before,
+.train li.current::before {
+  background: var(--focus);
+}
+
+.train button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--faint);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.train button:disabled {
+  cursor: default;
+}
+
+.train li.done button,
+.train li.current button {
+  color: var(--fg);
+}
+
+.train-dot {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--stroke-strong);
+  border-radius: 50%;
+  background: var(--panel);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.train li.current .train-dot {
+  border-color: transparent;
+  background: var(--focus);
+  color: #fff;
+}
+
+.train li.done .train-dot {
+  border-color: var(--focus);
+  color: var(--focus);
+}
+
+.train-dot svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.onboarding-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.onboarding-step {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 22px 28px 16px;
+}
+
+.onboarding-step h1 {
+  margin: 4px 0 0;
+  font-size: 21px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.onboarding-step .lede {
+  margin: 0 0 6px;
+}
+
+.onboarding-icon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: var(--select);
+  color: #fff;
+}
+
+.onboarding-icon svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.onboarding-foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 22px;
+  border-top: 1px solid var(--stroke);
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.onboarding-foot .spacer {
+  flex: 1;
+}
+
+.onboarding-foot button:not(.link-button) {
+  min-width: 84px;
+  padding: 6px 14px;
+  border: 1px solid var(--stroke-strong);
+  border-radius: 7px;
+  background: var(--chip);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.onboarding-foot button.primary {
+  border-color: transparent;
+  background: var(--active);
+  color: var(--active-fg);
+}
+
+.recorder.big {
+  width: auto;
+  min-width: 220px;
+  padding: 12px 18px;
+  font-size: 17px;
+  text-align: center;
+}
+
+.choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.choice {
+  padding: 7px 14px;
+  border: 1px solid var(--stroke-strong);
+  border-radius: 999px;
+  background: var(--panel);
+  cursor: pointer;
+}
+
+.choice.chosen {
+  border-color: transparent;
+  background: var(--select);
+  color: #fff;
+}
+
+.onboarding-ai {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+/* Six themes in two rows of three, with short swatches, so the step fits. */
+.themes.compact {
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  width: 100%;
+  margin-top: 0;
+}
+
+.themes.compact .theme-swatch {
+  height: 46px;
+  padding: 7px;
+}
+
+.link-button {
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.link-button:hover {
+  color: var(--fg);
+}
+
+/* Steps slide sideways, the way they're going. */
+.slide-forward-enter-active,
+.slide-forward-leave-active,
+.slide-back-enter-active,
+.slide-back-leave-active {
+  transition:
+    transform 150ms ease,
+    opacity 150ms ease;
+}
+
+.slide-forward-enter-from,
+.slide-back-leave-to {
+  transform: translateX(24px);
+  opacity: 0;
+}
+
+.slide-forward-leave-to,
+.slide-back-enter-from {
+  transform: translateX(-24px);
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .slide-forward-enter-active,
+  .slide-forward-leave-active,
+  .slide-back-enter-active,
+  .slide-back-leave-active {
+    transition: none;
+  }
+}
+
 /* Settings › Permissions: a row per permission with a status dot and its Allow button. */
 .permissions {
   margin: 12px 0 0;
@@ -2665,4 +3050,291 @@ html.update-page #app {
 .file-preview-foot {
   padding: 6px 14px 8px;
   font-size: 11.5px;
+}
+
+/* System Resources: three live tiles over a sortable list of apps. Numbers use fixed-width
+   digits so they don't jitter as they change. */
+.resources {
+  font-variant-numeric: tabular-nums;
+}
+
+.res-live {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+
+.res-live.on {
+  background: #34d399;
+  box-shadow: 0 0 6px rgba(52, 211, 153, 0.7);
+  animation: res-pulse 2s ease-in-out infinite;
+}
+
+@keyframes res-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .res-live.on {
+    animation: none;
+  }
+}
+
+.res-tiles {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--stroke);
+}
+
+.res-tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  padding: 8px 10px 30px;
+  overflow: hidden;
+  border: 1px solid var(--stroke);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+}
+
+button.res-tile {
+  cursor: pointer;
+}
+
+button.res-tile:hover {
+  background: var(--chip-hover);
+}
+
+.res-tile.active {
+  border-color: var(--stroke-strong);
+  box-shadow: inset 0 0 0 1px var(--select);
+}
+
+.res-tile-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.res-tile-head svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.res-tile-value {
+  overflow: hidden;
+  font-size: 13.5px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.res-spark {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 28px;
+}
+
+.res-spark .line {
+  fill: none;
+  stroke: var(--res-color);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.res-spark .area {
+  fill: var(--res-color);
+  opacity: 0.16;
+}
+
+.res-spark.cpu {
+  --res-color: #60a5fa;
+}
+
+.res-spark.memory {
+  --res-color: #c084fc;
+}
+
+.res-spark.network {
+  --res-color: #34d399;
+}
+
+.res-columns,
+.res-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 104px 80px 84px;
+  align-items: center;
+  gap: 8px;
+}
+
+.res-columns {
+  padding: 6px 24px 4px 18px;
+  border-top: 1px solid var(--stroke);
+}
+
+.res-columns button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--faint);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-align: right;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.res-columns .res-col-name {
+  padding-left: 30px;
+  text-align: left;
+}
+
+.res-columns button.active,
+.res-columns button:hover {
+  color: var(--fg);
+}
+
+.res-list {
+  flex: 0 1 auto;
+  min-height: 0;
+  margin: 0;
+  padding: 0 6px 6px;
+  overflow: hidden;
+  list-style: none;
+}
+
+.res-row {
+  min-height: 36px;
+  padding: 4px 18px 4px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: default;
+}
+
+.res-row.selected {
+  background: var(--select);
+}
+
+.res-row.confirming {
+  background: rgba(239, 68, 68, 0.16);
+  box-shadow: inset 0 0 0 1px rgba(239, 68, 68, 0.45);
+}
+
+.res-row.locked .res-cpu,
+.res-row.locked .res-memory,
+.res-row.locked .res-disk {
+  color: var(--faint);
+}
+
+.res-name {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.res-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.res-sub {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.res-count {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 0 5px;
+  border-radius: 6px;
+  background: var(--chip);
+  color: var(--muted);
+  font-size: 10.5px;
+  vertical-align: 1px;
+}
+
+.res-cpu,
+.res-memory,
+.res-disk {
+  color: var(--fg);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.res-disk {
+  color: var(--muted);
+}
+
+.res-cpu {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.res-bar {
+  display: inline-block;
+  width: 32px;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--chip);
+}
+
+.res-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: #60a5fa;
+}
+
+.res-confirm {
+  grid-column: 2 / -1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+  color: #fca5a5;
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+.res-actions {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.resources > .notice {
+  margin: 0;
+  padding: 6px 16px 6px 48px;
+  border-top: 1px solid var(--stroke);
 }

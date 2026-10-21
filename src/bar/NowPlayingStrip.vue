@@ -4,10 +4,11 @@
   import { iconFor } from './appIcons';
   import { GLYPHS } from './glyphs';
 
-  // The footer's now-playing strip: the cover (or the playing app's icon), the title and
-  // artist, and previous, play/pause and next. Clicking the title switches to what's playing.
+  // What's playing: the cover (or the playing app's icon), the title and artist, and
+  // previous, play/pause and next. Clicking the title switches to what's playing. `compact`
+  // (in the search bar) keeps only the cover, the title and play/pause.
 
-  const props = defineProps<{ track: NowPlaying }>();
+  const props = defineProps<{ track: NowPlaying; compact?: boolean }>();
   const emit = defineEmits<{ toggle: []; next: []; previous: []; focus: [] }>();
 
   // A browser's own icon says nothing about the song, so a tab with no cover gets the note.
@@ -27,7 +28,7 @@
 </script>
 
 <template>
-  <span class="now-playing">
+  <span class="now-playing" :class="{ compact }">
     <!-- mousedown.prevent keeps the typing caret in the bar's field. -->
     <button
       type="button"
@@ -42,10 +43,11 @@
       </svg>
       <span class="now-playing-text">
         <span class="now-playing-song">{{ track.title }}</span>
-        <span v-if="track.artist" class="now-playing-artist">{{ track.artist }}</span>
+        <span v-if="track.artist && !compact" class="now-playing-artist">{{ track.artist }}</span>
       </span>
     </button>
     <button
+      v-if="!compact"
       type="button"
       class="now-playing-control"
       aria-label="Previous"
@@ -66,6 +68,7 @@
       <svg viewBox="0 0 24 24" aria-hidden="true" v-html="track.playing ? PAUSE : PLAY" />
     </button>
     <button
+      v-if="!compact"
       type="button"
       class="now-playing-control"
       aria-label="Next"

@@ -26,6 +26,17 @@
     saveTheme,
     saveShowNowPlaying,
     saveBugCapture,
+    saveShowStats,
+    saveAiChoice,
+    openOnboarding,
+    settingsPainted,
+    hideSettings,
+    saveOnboardingEveryLaunch,
+    chatgptAccount,
+    chatgptSignIn,
+    chatgptCancelSignIn,
+    chatgptSignOut,
+    openUrl,
     permissionRequest,
     revealCaptures,
     saveSteamGames,
@@ -53,12 +64,17 @@
   } from '../api';
   import SyncSection from './SyncSection.vue';
   import PermissionsSection from './PermissionsSection.vue';
+  import LaunchGroupsSection from './LaunchGroupsSection.vue';
+  import { askAiName, chosenAi, isAiLike } from '../aiChoice';
+  import { THEMES } from '../themes';
+  import { captureShortcut } from '../keys';
   import ShortcutsSection from './ShortcutsSection.vue';
   import SelectMenu from './SelectMenu.vue';
   import { GLYPHS } from '../bar/glyphs';
   import {
     isSnapshot,
     type AiPreset,
+    type ChatgptAccount,
     type AiSettings,
     type ClaudeCliStatus,
     type ClaudeProject,
@@ -135,6 +151,12 @@
   const aiModelList = ref<string[]>([]);
   const aiLocal = ref<LocalServer[] | null>(null);
   const aiMessage = ref<string | null>(null);
+  // Sign in with ChatGPT: the account, a sign-in waiting on the browser, and the one-time
+  // note shown right after the first sign-in.
+  const chatgpt = ref<ChatgptAccount | null>(null);
+  const chatgptWaiting = ref(false);
+  const chatgptWelcome = ref(false);
+  const USAGE_URL = 'https://chatgpt.com/settings/usage';
 
   let unlistens: UnlistenFn[] = [];
   let statusTimer = 0;
@@ -185,6 +207,7 @@
     await refresh();
     pageReady();
     void loadAi();
+    void loadChatgpt();
     void loadClip();
     void loadCli();
     void loadShell();
@@ -194,22 +217,34 @@
         if (isSnapshot(event.payload)) snapshot.value = event.payload;
       })
     );
-    // The bar's !set opens a specific section: by URL when it creates this window, by event
-    // when the window already exists.
+    // The window is built ahead of time and only hidden on close, so opening it is just
+    // showing it: jump to the asked-for section (the bar's !set names one; by URL when it
+    // creates this window), report the paint, then catch up on data.
     unlistens.push(
-      await listen<string>('settings-section', (event) => {
-        void revealSection(event.payload);
+      await listen<string>('settings-shown', (event) => {
+        if (event.payload) void revealSection(event.payload);
+        else {
+          search.value = '';
+          paneEl.value?.scrollTo({ top: 0 });
+        }
+        settingsPainted();
+        window.setTimeout(() => {
+          void refresh();
+          void loadChatgpt();
+        }, 50);
       })
     );
     const section = new URLSearchParams(window.location.search).get('section');
     if (section) void revealSection(section);
     window.addEventListener('keydown', onShortcutKey, true);
+    window.addEventListener('keydown', onEscape);
     void pollFileStatus();
   });
 
   onUnmounted(() => {
     window.clearTimeout(statusTimer);
     window.removeEventListener('keydown', onShortcutKey, true);
+    window.removeEventListener('keydown', onEscape);
     for (const unlisten of unlistens) unlisten();
   });
 
@@ -227,6 +262,7 @@
     { id: 'bookmarks', label: 'Bookmarks', icon: 'bookmark' },
     { id: 'nowplaying', label: 'Now playing', icon: 'music' },
     { id: 'shortcuts', label: 'Shortcuts', icon: 'keyboard' },
+    { id: 'launchgroups', label: 'Launch groups', icon: 'grid' },
     { id: 'files', label: 'Files', icon: 'folder' },
     { id: 'history', label: 'History', icon: 'clock' },
     ...(navigator.userAgent.includes('Mac')
@@ -300,6 +336,11 @@
     const target =
       (result.element.closest('.field, .check, .destination, h3') as HTMLElement | null) ??
       result.element;
+    flash(target);
+  }
+
+  /** Scrolls a control into view and flashes it, so the eye lands on it. */
+  function flash(target: HTMLElement) {
     const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     target.scrollIntoView({ block: 'center', behavior: still ? 'auto' : 'smooth' });
     target.classList.remove('revealed');
@@ -325,10 +366,17 @@
     }
   }
 
-  /** The bar's !set opens a section directly. */
-  async function revealSection(section: string) {
+  /** Opens a section, and with "section:control" also scrolls to that control and flashes
+   *  it, as a search result does (the bar's "Zephyr Summon Shortcut" row). */
+  async function revealSection(value: string) {
+    const [section, focus] = value.split(':');
     if (SECTIONS.some((item) => item.id === section)) open(section);
     await nextTick();
+    if (!focus) return;
+    const target = document.querySelector<HTMLElement>(
+      `#section-${section} [data-focus="${CSS.escape(focus)}"]`
+    );
+    if (target) flash(target);
   }
 
   async function refresh() {
@@ -389,6 +437,18 @@
     }
   }
 
+  // Esc closes Settings, unless something open took it first: a dropdown, a shortcut
+  // being recorded, or search text (which Esc clears).
+  function onEscape(event: KeyboardEvent) {
+    if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing) return;
+    if (search.value) {
+      search.value = '';
+      return;
+    }
+    event.preventDefault();
+    void hideSettings();
+  }
+
   function onShortcutKey(event: KeyboardEvent) {
     // ⌘F / Ctrl+F jumps to the settings search.
     if ((event.metaKey || event.ctrlKey) && event.code === 'KeyF') {
@@ -437,24 +497,6 @@
     }
     listening.value = false;
     void commitShortcut(shortcut);
-  }
-
-  function captureShortcut(event: KeyboardEvent): string | null {
-    const parts: string[] = [];
-    if (event.ctrlKey) parts.push('ctrl');
-    if (event.altKey) parts.push('alt');
-    if (event.shiftKey) parts.push('shift');
-    if (event.metaKey) parts.push('super');
-    if (parts.length === 0) return null;
-    if (['Control', 'Alt', 'Shift', 'Meta'].includes(event.key)) return null;
-    if (event.key === ' ' || event.key === 'Spacebar') {
-      parts.push('space');
-    } else if (event.key.length === 1) {
-      parts.push(event.key.toLowerCase());
-    } else {
-      return null;
-    }
-    return parts.join('+');
   }
 
   async function commitShortcut(shortcut: string) {
@@ -758,15 +800,6 @@
     return targets;
   });
 
-  // Matches the palettes in styles.css; the preview shows each one's tint and accent.
-  const THEMES = [
-    { id: 'violet', name: 'Violet', tint: '#16111f', accent: '#a78bfa' },
-    { id: 'graphite', name: 'Graphite', tint: '#18181b', accent: '#d4d4d8' },
-    { id: 'ocean', name: 'Ocean', tint: '#0c1424', accent: '#60a5fa' },
-    { id: 'forest', name: 'Forest', tint: '#0a1b19', accent: '#2dd4bf' },
-    { id: 'ember', name: 'Ember', tint: '#20130c', accent: '#fb923c' },
-  ];
-
   // Browser profiles bookmarks are read from; each can be left out.
   const bookmarkProfiles = ref<BookmarkSource[] | null>(null);
 
@@ -797,6 +830,46 @@
     busy.value = true;
     try {
       apply(await saveTheme(id));
+    } catch (error) {
+      formError.value = errorMessage(error);
+    } finally {
+      busy.value = false;
+    }
+  }
+
+  // The one AI the bar offers: the built-in one (named after its model) or a web AI.
+  const aiOptions = computed(() =>
+    (snapshot.value?.destinations ?? []).filter(
+      (destination) => !destination.disabled && isAiLike(destination)
+    )
+  );
+  const aiChosenId = computed(() => chosenAi(snapshot.value)?.id ?? '');
+
+  async function changeAiChoice(event: Event) {
+    busy.value = true;
+    try {
+      apply(await saveAiChoice((event.target as HTMLSelectElement).value));
+    } catch (error) {
+      formError.value = errorMessage(error);
+    } finally {
+      busy.value = false;
+    }
+  }
+
+  async function toggleOnboardingEveryLaunch() {
+    if (!snapshot.value) return;
+    try {
+      apply(await saveOnboardingEveryLaunch(!snapshot.value.onboardingEveryLaunch));
+    } catch (error) {
+      formError.value = errorMessage(error);
+    }
+  }
+
+  async function toggleStats() {
+    if (!snapshot.value) return;
+    busy.value = true;
+    try {
+      apply(await saveShowStats(!snapshot.value.showStats));
     } catch (error) {
       formError.value = errorMessage(error);
     } finally {
@@ -1087,6 +1160,40 @@
     }
   }
 
+  async function loadChatgpt() {
+    chatgpt.value = await chatgptAccount().catch(() => null);
+  }
+
+  async function signInChatgpt() {
+    chatgptWaiting.value = true;
+    aiMessage.value = null;
+    try {
+      const first = chatgpt.value === null;
+      chatgpt.value = await chatgptSignIn();
+      aiDraft.value = { ...(snapshot.value?.ai ?? aiDraft.value) };
+      chatgptWelcome.value = first;
+    } catch (error) {
+      aiMessage.value = errorMessage(error);
+    } finally {
+      chatgptWaiting.value = false;
+    }
+  }
+
+  function cancelChatgpt() {
+    void chatgptCancelSignIn();
+    chatgptWaiting.value = false;
+  }
+
+  async function signOutChatgpt() {
+    try {
+      await chatgptSignOut();
+      aiMessage.value = 'Signed out of ChatGPT.';
+    } catch (error) {
+      aiMessage.value = errorMessage(error);
+    }
+    await loadChatgpt();
+  }
+
   async function changeProvider(event: Event) {
     const provider = (event.target as HTMLSelectElement).value;
     aiDraft.value = { ...aiDraft.value, provider, model: '' };
@@ -1204,13 +1311,13 @@
 
       <section v-if="snapshot" v-show="!search && active === 'general'" id="section-general">
         <h2>General</h2>
-        <div class="field">
+        <div class="field" data-focus="summon">
           <span>Summon shortcut</span>
           <button type="button" class="recorder" :class="{ listening }" @click="listening = true">
             {{ listening ? 'Press a shortcut' : formatShortcut(snapshot.summonShortcut) }}
           </button>
         </div>
-        <label class="check">
+        <label class="check" data-focus="startup">
           <input
             type="checkbox"
             :checked="snapshot.launchAtStartup"
@@ -1228,7 +1335,7 @@
           />
           Show installed Steam games with apps
         </label>
-        <label class="field">
+        <label class="field" data-focus="default">
           <span>Default destination</span>
           <select :value="snapshot.defaultDestinationId" :disabled="busy" @change="changeDefault">
             <option
@@ -1289,12 +1396,33 @@
             </option>
           </select>
         </label>
-        <div class="field">
+        <div class="field" data-focus="updates">
           <span>Zephyr {{ appVersion || '…' }}{{ isDev ? ' (dev build)' : '' }}</span>
           <button type="button" @click="updates">Check for updates</button>
           <button v-if="isDev" type="button" @click="rehearse">Rehearse an update (dev)</button>
           <span v-if="updateMessage" class="hint-text">{{ updateMessage }}</span>
         </div>
+        <div class="field inline">
+          <button type="button" @click="openOnboarding">Run setup again</button>
+        </div>
+        <label v-if="isDev" class="check">
+          <input
+            type="checkbox"
+            :checked="snapshot.onboardingEveryLaunch"
+            :disabled="busy"
+            @change="toggleOnboardingEveryLaunch"
+          />
+          Show setup on every launch (dev)
+        </label>
+        <label class="check">
+          <input
+            type="checkbox"
+            :checked="snapshot.showStats"
+            :disabled="busy"
+            @change="toggleStats"
+          />
+          Show CPU, memory, disk and network at the bottom of the bar
+        </label>
         <h3>Bug reports</h3>
         <label class="check">
           <input
@@ -1385,9 +1513,26 @@
       <section v-if="snapshot" v-show="!search && active === 'ai'" id="section-ai">
         <h2>AI</h2>
         <label class="field">
+          <span>AI in the bar</span>
+          <select :value="aiChosenId" :disabled="busy" @change="changeAiChoice">
+            <option v-for="option in aiOptions" :key="option.id" :value="option.id">
+              {{
+                option.kind === 'ai'
+                  ? `${askAiName(snapshot)}, answered in Zephyr`
+                  : `${option.name}, opens in your browser`
+              }}
+            </option>
+          </select>
+        </label>
+        <p class="hint-text">
+          Search with, Tab and {{ isMacOs ? '⌘↵' : 'Ctrl+Enter' }} use this one; other AIs stay in
+          {{ isMacOs ? '⌘K' : 'Ctrl+K' }}. Zephyr's own uses the provider and model below.
+        </p>
+        <label class="field">
           <span>Provider</span>
           <select :value="aiDraft.provider" :disabled="busy" @change="changeProvider">
             <option value="auto">Automatic: a local model if one is running</option>
+            <option value="chatgpt">ChatGPT, on your ChatGPT plan</option>
             <option v-for="preset in presets" :key="preset.id" :value="preset.id">
               {{ preset.name }}{{ preset.local ? ' (local)' : '' }}
             </option>
@@ -1416,9 +1561,53 @@
             </select>
           </label>
         </template>
+        <template v-if="aiDraft.provider === 'chatgpt'">
+          <div v-if="chatgptWelcome" class="chatgpt-welcome">
+            <strong>You're using your ChatGPT plan</strong>
+            <span class="hint-text">
+              Questions you ask Zephyr's AI count toward your ChatGPT plan. You can see and limit
+              that in ChatGPT's settings.
+            </span>
+            <button type="button" @click="chatgptWelcome = false">Got it</button>
+          </div>
+          <template v-if="chatgpt && chatgpt.plan">
+            <p class="hint-text">
+              Signed in as {{ chatgpt.name || chatgpt.email
+              }}{{ chatgpt.name && chatgpt.email ? ` (${chatgpt.email})` : '' }}. Using your ChatGPT
+              plan; <a href="#" @click.prevent="openUrl(USAGE_URL)">manage usage</a>. These chats
+              don't appear in your ChatGPT history.
+            </p>
+            <div class="field inline">
+              <button type="button" :disabled="busy" @click="signOutChatgpt">Sign out</button>
+            </div>
+          </template>
+          <template v-else>
+            <p class="hint-text">
+              {{
+                chatgpt && !chatgpt.plan
+                  ? `Signed in as ${chatgpt.email}, but sharing your plan with Zephyr wasn't allowed. Continue again and allow it.`
+                  : 'Answer with your ChatGPT Plus or Pro plan instead of an API key. Free plans can’t be shared.'
+              }}
+            </p>
+            <div class="field inline">
+              <button
+                v-if="!chatgptWaiting"
+                type="button"
+                class="chatgpt-button"
+                @click="signInChatgpt"
+              >
+                Continue with ChatGPT
+              </button>
+              <template v-else>
+                <span class="hint-text">Finish signing in in your browser…</span>
+                <button type="button" @click="cancelChatgpt">Cancel</button>
+              </template>
+            </div>
+          </template>
+        </template>
         <template v-if="aiNeedsKey">
           <h3>API key</h3>
-          <form class="field inline" @submit.prevent="saveKey">
+          <form class="field inline" data-focus="key" @submit.prevent="saveKey">
             <input
               v-model="aiKey"
               type="password"
@@ -1561,6 +1750,12 @@
       </section>
 
       <SyncSection v-if="snapshot" v-show="!search && active === 'sync'" />
+      <LaunchGroupsSection
+        v-if="snapshot"
+        v-show="!search && active === 'launchgroups'"
+        :snapshot="snapshot"
+        @apply="apply"
+      />
       <ShortcutsSection
         v-if="snapshot"
         v-show="!search && active === 'shortcuts'"

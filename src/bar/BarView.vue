@@ -7,7 +7,6 @@
     claudeJobs,
     dispatch,
     errorMessage,
-    formatShortcut,
     getSnapshot,
     hideBar,
     launchApp,
@@ -31,10 +30,14 @@
     setBarHeight,
     suggest,
     startBarDrag,
+    barMove,
+    barMoveEnd,
+    launchGroup,
     prepareGrid,
     warmSuggestions,
     allowProtectedFolders,
     captureEvent,
+    systemStats,
     captureRecording,
     powerPreview,
     powerRun,
@@ -42,11 +45,15 @@
     openUrl,
   } from '../api';
   import ClipboardView from './ClipboardView.vue';
+  import ResourcesView from './ResourcesView.vue';
   import TypingView from '../typing/TypingView.vue';
   import AiView from '../ai/AiView.vue';
   import ApprovalCard from '../claude/ApprovalCard.vue';
   import DeviceCard from './DeviceCard.vue';
   import ResultList from './ResultList.vue';
+  import { vFit } from '../fit';
+  import { bytes } from '../format';
+  import { askAiName, chosenAi, displayName, isOtherAi } from '../aiChoice';
   import NowPlayingStrip from './NowPlayingStrip.vue';
   import { dragOut } from './dragOut';
   import { GLYPHS } from './glyphs';
@@ -64,6 +71,7 @@
     type Destination,
     type Snapshot,
     type Suggestion,
+    type SystemStats,
     type SuggestResponse,
     type PowerPreview,
   } from '../types';
@@ -110,7 +118,7 @@
   // window) stick: every open lands back in them until Esc leaves. Esc to the main bar only
   // parks a workspace; a second Esc there clears it. Clipboard is a picker: it sticks until
   // something is picked.
-  type View = 'root' | 'claude' | 'clip' | 'typing' | 'ai' | 'shell';
+  type View = 'root' | 'claude' | 'clip' | 'typing' | 'ai' | 'shell' | 'resources';
   const WORKSPACES = ['claude', 'ai', 'typing', 'shell'];
   const MODE_NAMES: Record<string, string> = {
     claude: 'Claude jobs',
@@ -132,6 +140,7 @@
   const shellView = ref<InstanceType<typeof ShellView> | null>(null);
   const SHELL_PREFIX = /^\s*(?:>|!(?:sh|shell)(?:\s|$))\s*/i;
   const clipQuery = ref('');
+  const resourcesView = ref<InstanceType<typeof ResourcesView> | null>(null);
   const clipView = ref<InstanceType<typeof ClipboardView> | null>(null);
   const typingView = ref<InstanceType<typeof TypingView> | null>(null);
   const aiView = ref<InstanceType<typeof AiView> | null>(null);
@@ -167,12 +176,20 @@
 
   const strip = computed(() =>
     (snapshot.value?.destinations ?? [])
-      .filter((destination) => destination.pinned && !destination.disabled)
+      .filter(
+        (destination) =>
+          destination.pinned && !destination.disabled && !isOtherAi(snapshot.value, destination)
+      )
       .slice(0, 8)
   );
 
   const destinationNames = computed(() =>
-    Object.fromEntries((snapshot.value?.destinations ?? []).map((item) => [item.id, item.name]))
+    Object.fromEntries(
+      (snapshot.value?.destinations ?? []).map((item) => [
+        item.id,
+        displayName(snapshot.value, item),
+      ])
+    )
   );
 
   const armed = computed(() =>
@@ -369,15 +386,58 @@
       input.scrollWidth <= input.clientWidth;
   }
 
-  /** Ctrl+drag anywhere on the bar moves it; plain clicks and drags work as before. */
+  /** The drag-to-move key: ⌘ on a Mac, where Ctrl+click is a right-click; Ctrl elsewhere. */
+  function moveKeyOnly(event: KeyboardEvent | MouseEvent): boolean {
+    const key = isMac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
+    return key && !event.altKey && !event.shiftKey;
+  }
+
+  /** ⌘-drag (Ctrl-drag on Windows) anywhere on the bar moves it; plain clicks and drags
+   *  work as before. */
   function dragWithCtrl(event: MouseEvent) {
-    if (event.button !== 0 || !event.ctrlKey || event.altKey || event.shiftKey) return;
+    if (event.button !== 0 || !moveKeyOnly(event)) return;
     event.preventDefault();
     event.stopPropagation();
-    void startBarDrag().catch((error) => {
-      console.error('Ctrl+drag failed', error);
-      notice.value = `Couldn't move the bar: ${errorMessage(error)}`;
-    });
+    const fromX = event.screenX;
+    const fromY = event.screenY;
+    void startBarDrag()
+      .then((start) => {
+        // On a Mac the page moves the bar: it follows the pointer once a frame, and the
+        // grid shows where it snaps until the button comes up.
+        if (start) followPointer(fromX, fromY, start);
+      })
+      .catch((error) => {
+        console.error('Ctrl+drag failed', error);
+        notice.value = `Couldn't move the bar: ${errorMessage(error)}`;
+      });
+  }
+
+  function followPointer(fromX: number, fromY: number, [left, top, scale]: number[]) {
+    let next: [number, number] | null = null;
+    let frame = 0;
+    const move = (event: MouseEvent) => {
+      next = [
+        Math.round(left + (event.screenX - fromX) * scale),
+        Math.round(top + (event.screenY - fromY) * scale),
+      ];
+      if (!frame) {
+        frame = requestAnimationFrame(() => {
+          frame = 0;
+          if (next) void barMove(next[0], next[1]).catch(() => undefined);
+        });
+      }
+    };
+    const drop = () => {
+      window.removeEventListener('mousemove', move, true);
+      window.removeEventListener('mouseup', drop, true);
+      cancelAnimationFrame(frame);
+      const last = next;
+      void (last ? barMove(last[0], last[1]) : Promise.resolve())
+        .then(() => barMoveEnd())
+        .catch(() => undefined);
+    };
+    window.addEventListener('mousemove', move, true);
+    window.addEventListener('mouseup', drop, true);
   }
 
   // Bug captures (Ctrl+Alt+R and Ctrl+Alt+S, unless turned off in Settings): while one runs,
@@ -432,11 +492,26 @@
         list.push({ label: `Switch to ${open.title}`, run: () => switchTo(open.handle) });
       }
       list.push({ label: 'Open a new window', run: () => launch(appId, true) });
+      if (item.privateWindow) {
+        const privateWindow = item.privateWindow;
+        list.push({
+          label: `Open ${privateWindow} window`,
+          hint: '⇧↵',
+          run: () => launch(appId, false, true),
+        });
+      }
       list.push({ label: 'Close window', run: () => closeWindow(front) });
       list.push({ label: `Quit ${item.label}`, run: () => quitApp(appId, item.label) });
     } else if (item?.kind === 'app' && item.appId) {
       const appId = item.appId;
       list.push({ label: `Open ${item.label}`, run: () => launch(appId) });
+      if (item.privateWindow) {
+        list.push({
+          label: `Open ${item.privateWindow} window`,
+          hint: '⇧↵',
+          run: () => launch(appId, false, true),
+        });
+      }
       list.push({ label: 'Copy name', run: () => copyText(item.label) });
     } else if (item?.kind === 'window' && item.window) {
       const handle = item.window;
@@ -497,16 +572,39 @@
     ];
   });
 
-  // What's playing, in the footer where the shortcut otherwise sits.
+  // CPU, memory, disk and network in a slim footer, sampled once a second only while the
+  // bar is showing (Settings › General can turn it off).
+  const stats = ref<SystemStats | null>(null);
+  let statsTimer = 0;
+  /** Bumped by every start and stop, so a sample still in flight can't reschedule. */
+  let statsGeneration = 0;
+  const statsShown = computed(() => snapshot.value?.showStats !== false && stats.value !== null);
+
+  /** Samples while the main bar shows; other views don't show the footer. */
+  function sampleStats() {
+    stopStats();
+    if (snapshot.value?.showStats === false || view.value !== 'root') return;
+    const current = statsGeneration;
+    void systemStats()
+      .then((next) => {
+        if (current === statsGeneration) stats.value = next;
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (current === statsGeneration) statsTimer = window.setTimeout(sampleStats, 1000);
+      });
+  }
+
+  function stopStats() {
+    statsGeneration += 1;
+    window.clearTimeout(statsTimer);
+    statsTimer = 0;
+  }
+
+  // What's playing, as a small chip at the end of the search bar.
   const media = useNowPlaying();
   const playingNow = computed(() =>
     snapshot.value?.showNowPlaying === false ? null : media.shown.value
-  );
-
-  const shortcutLabel = computed(() =>
-    snapshot.value
-      ? formatShortcut(snapshot.value.summonShortcut)
-      : formatShortcut(isMac ? 'command+space' : 'alt+space')
   );
 
   onMounted(async () => {
@@ -527,6 +625,7 @@
     unlistens.push(
       await listen('bar-shown', () => {
         media.tick();
+        sampleStats();
         // Opens the connection to the suggestion service before the first keystroke.
         void warmSuggestions(armedId.value).catch(() => undefined);
         void loadApprovals();
@@ -541,6 +640,7 @@
           return;
         }
         // Still inside a view (a workspace, or a picker mid-search): reopen right there.
+        if (view.value === 'resources') resourcesView.value?.start();
         if (view.value !== 'root') return;
         if (WORKSPACES.includes(parked.value)) {
           enter(parked.value as View);
@@ -561,6 +661,8 @@
     unlistens.push(
       await listen('bar-hidden', () => {
         hiddenAt = Date.now();
+        stopStats();
+        resourcesView.value?.stop();
       })
     );
     // A zephyr:// link: text to type in, and optionally where to send it right away.
@@ -670,9 +772,11 @@
     syncHeight();
     if (view.value === 'root') {
       scheduleSuggest();
+      sampleStats();
       void focusInput();
-    } else if (view.value === 'ai') {
-      void aiView.value?.focus();
+    } else {
+      stopStats();
+      if (view.value === 'ai') void aiView.value?.focus();
     }
   });
 
@@ -702,6 +806,24 @@
   /** Esc or Backspace out of a view: back to the main bar, with a workspace left parked. */
   function leave() {
     view.value = 'root';
+  }
+
+  /** System Resources' "Search the web": the default web destination, from the main bar. */
+  function searchFromResources(name: string) {
+    leave();
+    const destination = webDefault();
+    if (destination) void run(name, destination, false);
+  }
+
+  /** System Resources' "Ask AI": the AI chosen in Settings › AI, built in or on the web. */
+  function askFromResources(question: string) {
+    const ai = chosenAi(snapshot.value);
+    if (ai && ai.kind !== 'ai') {
+      leave();
+      void run(question, ai.id, false);
+    } else {
+      void enterAi(question);
+    }
   }
 
   /** Esc on the main bar: forget the parked workspace, then close. */
@@ -753,11 +875,15 @@
     } else if (id === 'clip') {
       clipQuery.value = '';
       enter('clip');
+    } else if (id === 'resources') {
+      enter('resources');
     } else if (id === 'notes') {
       void openNotes();
     } else if (id === 'ip') {
       query.value = 'ip';
       void focusInput();
+    } else if (id.startsWith('group:')) {
+      void launchGroup(id.slice(6)).catch((error) => (notice.value = errorMessage(error)));
     } else if (id.startsWith('scope:')) {
       scope.value = SCOPES[id.slice(6)] ?? null;
       void focusInput();
@@ -1055,6 +1181,10 @@
       clipView.value?.onKey(event);
       return;
     }
+    if (view.value === 'resources') {
+      resourcesView.value?.onKey(event);
+      return;
+    }
     if (view.value === 'typing') {
       typingView.value?.onKey(event);
       return;
@@ -1101,7 +1231,7 @@
       }
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
         event.preventDefault();
-        const count = actions.value.length;
+        const count = Math.min(actions.value.length, actionsShown.value);
         actionIndex.value =
           (actionIndex.value + (event.key === 'ArrowDown' ? 1 : -1) + count) % count;
         return;
@@ -1229,6 +1359,14 @@
       return;
     }
 
+    // Shift+Enter on a browser opens it in a private window (Incognito, InPrivate).
+    const browser = selectedItem.value?.privateWindow ? selectedItem.value.appId : undefined;
+    if (browser && event.key === 'Enter' && event.shiftKey && !modifier && !event.altKey) {
+      event.preventDefault();
+      if (!event.repeat) void launch(browser, false, true);
+      return;
+    }
+
     if (event.key === 'Enter') {
       event.preventDefault();
       if (event.repeat) return;
@@ -1305,12 +1443,13 @@
     const chosen = destinations.find((item) => item.id === configured && !item.disabled);
     if (chosen) {
       return chosen.kind === 'ai'
-        ? { kind: 'ai', id: chosen.id, label: 'Ask AI' }
+        ? { kind: 'ai', id: chosen.id, label: askAiName(snapshot.value) }
         : { kind: 'web', id: chosen.id, label: chosen.name };
     }
     if (which === 'alt') return claudeRoute('');
-    // The other primary action: AI when a web destination is armed, and the reverse.
-    if (armed.value?.kind === 'ai') {
+    // The other primary action: the chosen AI when a search is armed, and the reverse.
+    const ai = chosenAi(snapshot.value);
+    if (armed.value && ai && armed.value.id === ai.id) {
       const id = webDefault();
       return {
         kind: 'web',
@@ -1318,7 +1457,8 @@
         label: destinations.find((item) => item.id === id)?.name ?? 'search',
       };
     }
-    return { kind: 'ai', id: 'ai', label: 'Ask AI' };
+    if (ai && ai.kind !== 'ai') return { kind: 'web', id: ai.id, label: ai.name };
+    return { kind: 'ai', id: 'ai', label: askAiName(snapshot.value) };
   }
 
   async function route(which: 'cmd' | 'alt') {
@@ -1348,12 +1488,13 @@
 
   // Holding ⌘ or ⌥ previews where Enter would go.
   const held = ref<'' | 'cmd' | 'alt'>('');
-  // Ctrl alone means "drag to move": the cursor and the footer say so while it's held.
+  // ⌘ alone on a Mac (Ctrl elsewhere) means "drag to move": the cursor and the search bar
+  // say so while it's held.
   const movable = ref(false);
   let gridReady = false;
   function trackModifiers(event: KeyboardEvent | MouseEvent) {
     held.value = event.altKey ? 'alt' : event.metaKey || event.ctrlKey ? 'cmd' : '';
-    movable.value = event.ctrlKey && !event.altKey && !event.shiftKey && !event.metaKey;
+    movable.value = moveKeyOnly(event);
     // The grid's window is made the first time Ctrl is held, so the drag never waits on it.
     if (movable.value && !gridReady) {
       gridReady = true;
@@ -1460,6 +1601,10 @@
       await launch(value);
     } else if (kind === 'bookmark') {
       await openUrl(value).catch((error) => (notice.value = errorMessage(error)));
+    } else if (kind === 'setting') {
+      await openPage(value);
+    } else if (kind === 'group') {
+      await launchGroup(value).catch((error) => (notice.value = errorMessage(error)));
     }
   }
 
@@ -1519,7 +1664,8 @@
       selected.value = delta > 0 ? 0 : items.value.length - 1;
       return;
     }
-    selected.value = (selected.value + delta + items.value.length) % items.value.length;
+    const count = Math.min(items.value.length, visibleCount.value);
+    selected.value = (Math.min(selected.value, count - 1) + delta + count) % count;
   }
 
   async function sendTo(destination: Destination) {
@@ -1572,12 +1718,10 @@
         return;
       }
       if (item.kind === 'query') {
-        await run(typedText(), armedId.value, true);
-        return;
-      }
-      if (item.kind === 'more') {
-        actionsOpen.value = true;
-        actionIndex.value = 0;
+        // Below a settings page, the web row is a plain search: picking it also teaches
+        // Enter to search this text from now on.
+        const first = items.value[0]?.kind === 'query';
+        await run(typedText(), first ? armedId.value : item.destinationId, first);
         return;
       }
       if (item.kind === 'app' && item.appId) {
@@ -1608,12 +1752,10 @@
     await run(typedText(), armedId.value, true);
   }
 
-  // Keyboard moves keep the selected row in view inside the scrolling list.
-  watch(selected, async (index) => {
-    if (index < 0) return;
-    await nextTick();
-    document.getElementById(`result-${index}`)?.scrollIntoView({ block: 'nearest' });
-  });
+  // Lists never scroll: only the rows that fit are shown (see v-fit), and arrows stay
+  // among them.
+  const visibleCount = ref(Infinity);
+  const actionsShown = ref(Infinity);
 
   function chooseAt(index: number) {
     selected.value = index;
@@ -1624,7 +1766,7 @@
   // it follows the selection until closed. On a Mac it's Quick Look instead.
   const previewOpen = ref(false);
   const inputRowEl = ref<HTMLElement | null>(null);
-  const footerEl = ref<HTMLElement | null>(null);
+  const statsEl = ref<HTMLElement | null>(null);
   const previewBounds = ref({ top: 0, bottom: 0 });
   const previewShown = computed(
     () => previewOpen.value && view.value === 'root' && selectedItem.value?.kind === 'file'
@@ -1637,11 +1779,11 @@
   function measurePreview() {
     const bar = root.value;
     const input = inputRowEl.value;
-    const footer = footerEl.value;
-    if (!bar || !input || !footer) return;
+    if (!bar || !input) return;
+    const footer = statsEl.value;
     previewBounds.value = {
       top: input.offsetTop + input.offsetHeight,
-      bottom: bar.clientHeight - footer.offsetTop,
+      bottom: footer ? bar.clientHeight - footer.offsetTop : 0,
     };
   }
 
@@ -1724,10 +1866,13 @@
     }
   }
 
-  /** Opens an app; a running one is switched to unless `newWindow` asks for another. */
-  async function launch(appId: string, newWindow = false) {
+  /**
+   * Opens an app; a running one is switched to unless `newWindow` asks for another, and
+   * `privateWindow` opens a browser in its private window.
+   */
+  async function launch(appId: string, newWindow = false, privateWindow = false) {
     try {
-      await launchApp(appId, newWindow);
+      await launchApp(appId, newWindow, privateWindow);
       query.value = '';
       scope.value = null;
       selected.value = -1;
@@ -1829,6 +1974,7 @@
     role="dialog"
     aria-label="Zephyr"
     @mousedown.capture="dragWithCtrl"
+    @contextmenu.prevent
   >
     <span
       v-if="capturing"
@@ -1869,6 +2015,13 @@
       ref="typingView"
       :bests="snapshot?.typingBests ?? []"
       @exit="leave"
+    />
+    <ResourcesView
+      v-if="view === 'resources'"
+      ref="resourcesView"
+      @exit="leave"
+      @ask="askFromResources"
+      @search="searchFromResources"
     />
     <ClipboardView
       v-if="clipMode"
@@ -1922,11 +2075,44 @@
         >
           {{ armed.name }}
         </button>
+        <!-- With Ctrl held the bar can be dragged; otherwise what's playing, if anything. -->
+        <span v-if="movable" class="move-hint">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 3v18M3 12h18M12 3 9.5 5.5M12 3l2.5 2.5M12 21l-2.5-2.5M12 21l2.5-2.5" />
+            <path d="M3 12l2.5-2.5M3 12l2.5 2.5M21 12l-2.5-2.5M21 12l-2.5 2.5" />
+          </svg>
+          Drag to move
+        </span>
+        <NowPlayingStrip
+          v-else-if="playingNow"
+          compact
+          :track="playingNow"
+          @toggle="media.press('toggle')"
+          @next="media.press('next')"
+          @previous="media.press('previous')"
+          @focus="media.focus()"
+        />
+        <button
+          type="button"
+          class="bar-settings"
+          title="Zephyr settings"
+          aria-label="Zephyr settings"
+          @mousedown.prevent
+          @click="openSettings"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true" v-html="GLYPHS.gear" />
+        </button>
       </div>
 
       <p v-if="loadError || notice" class="notice">{{ loadError || notice }}</p>
 
-      <ul v-if="actionsOpen" class="results actions" role="listbox" aria-label="Actions">
+      <ul
+        v-if="actionsOpen"
+        class="results actions"
+        role="listbox"
+        aria-label="Actions"
+        v-fit="(count: number) => (actionsShown = count)"
+      >
         <li
           v-for="(action, index) in actions"
           :key="action.label"
@@ -1952,6 +2138,7 @@
         @choose="chooseAt"
         @hover="hover"
         @drag="dragRow"
+        @fit="visibleCount = $event"
       />
 
       <!-- After the list's v-if chain, which it must not join. -->
@@ -1963,33 +2150,39 @@
         :style="previewStyle"
       />
 
-      <footer ref="footerEl" class="footer">
-        <button
-          type="button"
-          class="footer-settings"
-          title="Zephyr settings"
-          aria-label="Zephyr settings"
-          @mousedown.prevent
-          @click="openSettings"
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true" v-html="GLYPHS.gear" />
-        </button>
-        <span v-if="movable" class="move-hint">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M12 3v18M3 12h18M12 3 9.5 5.5M12 3l2.5 2.5M12 21l-2.5-2.5M12 21l2.5-2.5" />
-            <path d="M3 12l2.5-2.5M3 12l2.5 2.5M21 12l-2.5-2.5M21 12l-2.5 2.5" />
-          </svg>
-          Drag to move
+      <footer
+        v-if="statsShown && stats"
+        ref="statsEl"
+        class="stats"
+        aria-label="System"
+        title="Open System Resources"
+        @mousedown.prevent
+        @click="openView('resources')"
+      >
+        <span class="stat" title="CPU">
+          <svg viewBox="0 0 24 24" aria-hidden="true" v-html="GLYPHS.cpu" />
+          {{ Math.round(stats.cpu) }}%
         </span>
-        <NowPlayingStrip
-          v-else-if="playingNow"
-          :track="playingNow"
-          @toggle="media.press('toggle')"
-          @next="media.press('next')"
-          @previous="media.press('previous')"
-          @focus="media.focus()"
-        />
-        <span v-else>{{ shortcutLabel }}</span>
+        <span class="stat" title="Memory used">
+          <svg viewBox="0 0 24 24" aria-hidden="true" v-html="GLYPHS.memory" />
+          {{ bytes(stats.memoryUsed) }} / {{ bytes(stats.memoryTotal, 0) }}
+        </span>
+        <span v-if="stats.diskTotal" class="stat" title="Free on the system disk">
+          <svg viewBox="0 0 24 24" aria-hidden="true" v-html="GLYPHS.drive" />
+          {{ bytes(stats.diskFree) }} free
+        </span>
+        <span class="stat" title="Network, down and up">
+          <svg viewBox="0 0 24 24" aria-hidden="true" v-html="GLYPHS.updown" />
+          ↓ {{ bytes(stats.netDown) }}/s · ↑ {{ bytes(stats.netUp) }}/s
+        </span>
+        <span
+          v-if="stats.app"
+          class="stat stat-app"
+          :title="`This dev build: ${stats.app.processes} processes, webview helpers included`"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true" v-html="GLYPHS.logo" />
+          {{ Math.round(stats.app.cpu) }}% · {{ bytes(stats.app.memory) }}
+        </span>
       </footer>
     </template>
   </div>

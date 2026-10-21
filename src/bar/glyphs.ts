@@ -10,7 +10,8 @@ export const GLYPHS: Record<string, string> = {
     '<rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="m7.5 10 3 2.5-3 2.5M12.5 15H16"/>',
   sliders:
     '<path d="M5 7h9M18 7h1M5 17h3M12 17h7"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/>',
-  gear: '<circle cx="12" cy="12" r="3"/><path d="M12 3.5v2.5M12 18v2.5M3.5 12H6M18 12h2.5M6 6l1.8 1.8M16.2 16.2 18 18M6 18l1.8-1.8M16.2 7.8 18 6"/>',
+  // A standard cog: teeth around a hub, so it never reads as a sun or a sparkle.
+  gear: '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
   file: '<path d="M7 3.5h7l4 4V20.5H7z"/><path d="M14 3.5V8h4"/>',
   folder:
     '<path d="M3.5 7.5a2 2 0 0 1 2-2H10l2 2h6.5a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/>',
@@ -21,7 +22,6 @@ export const GLYPHS: Record<string, string> = {
   link: '<path d="M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1"/><path d="M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1"/>',
   sparkle:
     '<path d="M12 3.5 13.8 9a2 2 0 0 0 1.2 1.2l5.5 1.8-5.5 1.8a2 2 0 0 0-1.2 1.2L12 20.5 10.2 15a2 2 0 0 0-1.2-1.2L3.5 12 9 10.2A2 2 0 0 0 10.2 9z"/>',
-  more: '<circle cx="6" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="18" cy="12" r="1"/>',
   prompt: '<path d="m5 7.5 4.5 4.5L5 16.5M12 17h7"/>',
   sync: '<path d="M4.5 10a7.5 7.5 0 0 1 13.4-3.6L20 9M20 4.5V9h-4.5M19.5 14a7.5 7.5 0 0 1-13.4 3.6L4 15M4 19.5V15h4.5"/>',
   back: '<path d="M10 7 5 12l5 5M5 12h14"/>',
@@ -34,6 +34,23 @@ export const GLYPHS: Record<string, string> = {
   bookmark: '<path d="M7 3.5h10v17l-5-3.6-5 3.6z"/>',
   network:
     '<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.4 2.3 3.6 5.1 3.6 8.5s-1.2 6.2-3.6 8.5c-2.4-2.3-3.6-5.1-3.6-8.5s1.2-6.2 3.6-8.5z"/>',
+  check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
+  palette:
+    '<path d="M12 3.5a8.5 8.5 0 1 0 0 17c1.2 0 1.8-.9 1.8-1.8 0-.5-.2-.9-.5-1.3-.3-.4-.5-.8-.5-1.3 0-1 .8-1.8 1.8-1.8h2.1a3.8 3.8 0 0 0 3.8-3.8C20.5 6.9 16.7 3.5 12 3.5z"/><path d="M7.5 11.5h.01M10 7.5h.01M14.5 7.5h.01"/>',
+  // System stats in the footer.
+  cpu: '<rect x="6.5" y="6.5" width="11" height="11" rx="1.5"/><rect x="9.5" y="9.5" width="5" height="5" rx=".5"/><path d="M9.5 3.5v3M14.5 3.5v3M9.5 17.5v3M14.5 17.5v3M3.5 9.5h3M3.5 14.5h3M17.5 9.5h3M17.5 14.5h3"/>',
+  memory:
+    '<rect x="3.5" y="7.5" width="17" height="9" rx="1.5"/><path d="M7 10.5v3M10.3 10.5v3M13.7 10.5v3M17 10.5v3M6.5 16.5v2M17.5 16.5v2"/>',
+  drive:
+    '<rect x="3.5" y="13" width="17" height="6.5" rx="1.5"/><path d="M5.5 13 8 5.5h8l2.5 7.5"/><path d="M16.5 16.25h.01"/>',
+  updown: '<path d="M8 19V5M4.5 8.5 8 5l3.5 3.5M16 5v14M12.5 15.5 16 19l3.5-3.5"/>',
+  // Network links for IP rows: the internet (public), Wi-Fi, a wired port, other LAN.
+  globe:
+    '<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M5 7.5h14M5 16.5h14"/><path d="M12 3.5c-2.3 2.4-3.4 5.2-3.4 8.5s1.1 6.1 3.4 8.5c2.3-2.4 3.4-5.2 3.4-8.5S14.3 5.9 12 3.5z"/>',
+  wifi: '<path d="M3 9.5a13 13 0 0 1 18 0M6 13a8 8 0 0 1 12 0M9 16.4a3.5 3.5 0 0 1 6 0"/><path d="M12 19.5h.01"/>',
+  ethernet:
+    '<rect x="4" y="5" width="16" height="12" rx="2"/><path d="M8 17v2.5h8V17M8 9v2.5M10.7 9v2.5M13.3 9v2.5M16 9v2.5"/>',
+  lan: '<rect x="9" y="3.5" width="6" height="5" rx="1"/><rect x="3.5" y="15.5" width="6" height="5" rx="1"/><rect x="14.5" y="15.5" width="6" height="5" rx="1"/><path d="M12 8.5V12M6.5 15.5V12h11v3.5"/>',
   gamepad:
     '<path d="M7.5 8.5h9a4 4 0 0 1 3.9 4.9l-.8 3.4a2 2 0 0 1-3.5.8l-1.6-2.1h-5l-1.6 2.1a2 2 0 0 1-3.5-.8l-.8-3.4a4 4 0 0 1 3.9-4.9z"/><path d="M8.5 11v3M7 12.5h3M15.5 12h.01M17 13.5h.01"/>',
   music:

@@ -9,6 +9,7 @@
     takePendingBinding,
   } from '../api';
   import { commandTargets } from '../bar/rows';
+  import { captureShortcut } from '../keys';
   import type { Binding, Snapshot } from '../types';
 
   // Settings › Shortcuts: a global hotkey and/or a typed alias for any command, app,
@@ -17,7 +18,14 @@
   const props = defineProps<{ snapshot: Snapshot }>();
   const emit = defineEmits<{ apply: [snapshot: Snapshot] }>();
 
-  const COMMANDS = commandTargets();
+  // Commands, plus each launch group.
+  const COMMANDS = computed(() => [
+    ...commandTargets(),
+    ...(props.snapshot.launchGroups ?? []).map((group) => ({
+      target: `group:${group.id}`,
+      label: group.name,
+    })),
+  ]);
   /** One the bar asked about that isn't saved yet. */
   const draft = ref<Binding | null>(null);
   const listening = ref<string | null>(null);
@@ -82,7 +90,7 @@
   }
 
   function add() {
-    const command = COMMANDS.find((item) => item.target === adding.value);
+    const command = COMMANDS.value.find((item) => item.target === adding.value);
     adding.value = '';
     if (!command) return;
     if (props.snapshot.bindings?.some((binding) => binding.target === command.target)) return;
@@ -90,21 +98,6 @@
   }
 
   /** The keys pressed, as a shortcut string, or null until there's a modifier and a key. */
-  function captured(event: KeyboardEvent): string | null {
-    const parts: string[] = [];
-    if (event.ctrlKey) parts.push('ctrl');
-    if (event.altKey) parts.push('alt');
-    if (event.shiftKey) parts.push('shift');
-    if (event.metaKey) parts.push('super');
-    if (parts.length === 0) return null;
-    if (['Control', 'Alt', 'Shift', 'Meta'].includes(event.key)) return null;
-    if (event.key === ' ' || event.key === 'Spacebar') parts.push('space');
-    else if (/^F\d{1,2}$/.test(event.key)) parts.push(event.key.toLowerCase());
-    else if (event.key.length === 1) parts.push(event.key.toLowerCase());
-    else return null;
-    return parts.join('+');
-  }
-
   function onKey(event: KeyboardEvent) {
     const target = listening.value;
     if (!target || event.isComposing) return;
@@ -115,7 +108,7 @@
       listening.value = null;
       return;
     }
-    const hotkey = captured(event);
+    const hotkey = captureShortcut(event, true);
     if (!hotkey) {
       if (!['Control', 'Alt', 'Shift', 'Meta'].includes(event.key)) {
         error.value = { target, message: 'Use at least one modifier and a letter, number or key.' };

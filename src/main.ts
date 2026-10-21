@@ -10,7 +10,7 @@ if (navigator.userAgent.includes('Windows')) document.documentElement.dataset.pl
 
 // The palette from Settings > Appearance, in every window, switching live when it changes.
 function applyTheme(theme: string | undefined) {
-  document.documentElement.dataset.theme = theme || 'violet';
+  document.documentElement.dataset.theme = theme || 'sidebar';
 }
 void getSnapshot()
   .then((snapshot) => applyTheme(snapshot.theme))

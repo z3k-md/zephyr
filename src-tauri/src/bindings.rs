@@ -5,7 +5,15 @@
 use crate::state::Binding;
 
 /// What a binding can point at.
-const KINDS: &[&str] = &["view:", "scope:", "app:", "dest:", "bookmark:"];
+const KINDS: &[&str] = &[
+    "view:",
+    "scope:",
+    "app:",
+    "dest:",
+    "bookmark:",
+    "group:",
+    "setting:",
+];
 
 /// Checks a binding against the others and the shortcuts already in use, and returns
 /// the list with it in place (or removed, when it has neither a hotkey nor an alias).

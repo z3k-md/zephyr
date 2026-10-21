@@ -1,23 +1,22 @@
 <script setup lang="ts">
-  import { computed } from 'vue';
-  import BarView from './bar/BarView.vue';
-  import NotesView from './notes/NotesView.vue';
-  import GridView from './grid/GridView.vue';
-  import UpdateView from './update/UpdateView.vue';
-  import SettingsView from './settings/SettingsView.vue';
+  import { defineAsyncComponent } from 'vue';
 
-  const view = new URLSearchParams(window.location.search).get('view');
+  // Each window loads only its own view: Settings never pulls in the bar or the notes
+  // editor, which made it slow to open.
+  const params = new URLSearchParams(window.location.search);
+  const view = params.get('view');
+  const isSettings = view === 'settings' || window.location.hash.startsWith('#settings');
 
-  const isSettings = computed(() => {
-    const params = new URLSearchParams(window.location.search);
-    return params.get('view') === 'settings' || window.location.hash.startsWith('#settings');
+  const Page = defineAsyncComponent(() => {
+    if (view === 'grid') return import('./grid/GridView.vue');
+    if (view === 'update') return import('./update/UpdateView.vue');
+    if (view === 'notes') return import('./notes/NotesView.vue');
+    if (view === 'onboarding') return import('./onboarding/OnboardingView.vue');
+    if (isSettings) return import('./settings/SettingsView.vue');
+    return import('./bar/BarView.vue');
   });
 </script>
 
 <template>
-  <GridView v-if="view === 'grid'" />
-  <UpdateView v-else-if="view === 'update'" />
-  <NotesView v-else-if="view === 'notes'" />
-  <SettingsView v-else-if="isSettings" />
-  <BarView v-else />
+  <Page />
 </template>

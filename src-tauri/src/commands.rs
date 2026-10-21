@@ -85,6 +85,7 @@ fn catalog<'a>(installed: &'a [apps::App], snapshot: &'a Persisted) -> Catalog<'
         launches: &snapshot.launches,
         file_opens: &snapshot.file_opens,
         overrides: &snapshot.app_overrides,
+        setting_opens: &snapshot.setting_opens,
         now: now_secs(),
     }
 }
@@ -95,11 +96,22 @@ pub fn launch_app(
     state: State<'_, AppState>,
     app_id: String,
     new_window: Option<bool>,
+    private: Option<bool>,
 ) -> Result<DispatchOutcome, String> {
+    if private == Some(true) {
+        return start_private(&app, &state, &app_id);
+    }
     if new_window == Some(true) {
         return start(&app, &state, &app_id);
     }
     launch(&app, &state, &app_id)
+}
+
+/// Opens an app for a launch group: the same as Enter on its row, but the bar is already
+/// gone and a launch group reports failures itself.
+pub fn launch_quietly(app: &AppHandle, app_id: &str) -> Result<(), String> {
+    use tauri::Manager;
+    launch(app, &app.state::<AppState>(), app_id).map(|_| ())
 }
 
 /// Opens an app, or switches to its front window when it's already running.
@@ -127,6 +139,22 @@ fn start(app: &AppHandle, state: &AppState, app_id: &str) -> Result<DispatchOutc
     remember_launch(app, state, &target.id);
     window::hide_bar(app);
     log::info!("launched {}", target.name);
+    Ok(DispatchOutcome::Launched { app_id: target.id })
+}
+
+/// Opens a browser straight into a private window (Incognito, InPrivate).
+fn start_private(
+    app: &AppHandle,
+    state: &AppState,
+    app_id: &str,
+) -> Result<DispatchOutcome, String> {
+    let target = apps::index()
+        .find(app_id)
+        .ok_or_else(|| "That app is no longer installed.".to_string())?;
+    apps::launch_private(&target)?;
+    remember_launch(app, state, &target.id);
+    window::hide_bar(app);
+    log::info!("opened a private window of {}", target.name);
     Ok(DispatchOutcome::Launched { app_id: target.id })
 }
 
@@ -194,6 +222,17 @@ fn open_setting_page(app: &AppHandle, setting_id: &str) -> Result<DispatchOutcom
         .map_err(|err| format!("Couldn't open {}: {err}", setting.title))?,
     }
     window::hide_bar(app);
+    use tauri::Manager;
+    let state = app.state::<AppState>();
+    match state.update(|persisted| {
+        persisted.record_setting_open(setting.id, now_secs());
+        Ok(())
+    }) {
+        Ok(recorded) => {
+            let _ = publish(app, recorded);
+        }
+        Err(err) => log::error!("couldn't record the setting: {err}"),
+    }
     log::info!("opened setting {}", setting.id);
     Ok(DispatchOutcome::SettingOpened {
         setting_id: setting.id.to_string(),
@@ -297,6 +336,185 @@ pub fn allow_protected_folders(
     publish(&app, snapshot)
 }
 
+/// CPU, memory, disk and network for the bar's footer; the bar asks about once a second
+/// while it is showing.
+#[tauri::command]
+pub async fn system_stats() -> Result<crate::stats::Stats, String> {
+    tauri::async_runtime::spawn_blocking(crate::stats::sample)
+        .await
+        .map_err(|err| err.to_string())
+}
+
+/// One tick of System Resources: totals, the last minute, and the rows that can show.
+#[tauri::command]
+pub async fn resources_snapshot(
+    sort: String,
+    filter: String,
+    limit: usize,
+) -> Result<crate::resources::Snapshot, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::resources::snapshot(&sort, &filter, limit.clamp(1, 200))
+    })
+    .await
+    .map_err(|err| err.to_string())
+}
+
+/// The view closed; its process table goes after half a minute unless it reopens.
+#[tauri::command]
+pub fn resources_closed() {
+    std::thread::spawn(|| {
+        std::thread::sleep(std::time::Duration::from_secs(31));
+        crate::resources::idle();
+    });
+}
+
+#[tauri::command]
+pub async fn resources_quit(name: String, pids: Vec<u32>, force: bool) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || crate::resources::quit(&name, &pids, force))
+        .await
+        .map_err(|err| err.to_string())?
+}
+
+/// Quits Finder, the Dock or Explorer so they start fresh.
+#[tauri::command]
+pub async fn resources_relaunch(name: String, pids: Vec<u32>) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || crate::resources::relaunch(&name, &pids))
+        .await
+        .map_err(|err| err.to_string())?
+}
+
+/// Brings an app forward and hides the bar; false when it has no windows to show.
+#[tauri::command]
+pub fn resources_switch(app: AppHandle, pids: Vec<u32>) -> bool {
+    let switched = crate::resources::switch_to(&pids);
+    if switched {
+        window::hide_bar(&app);
+    }
+    switched
+}
+
+#[tauri::command]
+pub fn resources_reveal(app: AppHandle, path: String) -> Result<(), String> {
+    if path.is_empty() || !std::path::Path::new(&path).exists() {
+        return Err("Its file isn't there anymore".into());
+    }
+    app.opener()
+        .reveal_item_in_dir(&path)
+        .map_err(|err| format!("Couldn't show it: {err}"))?;
+    window::hide_bar(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn save_launch_groups(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    groups: Vec<crate::state::LaunchGroup>,
+) -> Result<Persisted, String> {
+    crate::launch_groups::validate(&groups)?;
+    let snapshot = state.update(|persisted| {
+        // A deleted group's hotkey and alias go with it.
+        persisted
+            .bindings
+            .retain(|binding| match binding.target.strip_prefix("group:") {
+                Some(id) => groups.iter().any(|group| group.id == id),
+                None => true,
+            });
+        persisted.launch_groups = groups;
+        Ok(())
+    })?;
+    shortcut::register(&app, &snapshot.summon_shortcut, snapshot.extra_shortcuts())?;
+    publish(&app, snapshot)
+}
+
+/// Opens everything in a launch group; the bar closes at once.
+#[tauri::command]
+pub fn launch_group(app: AppHandle, id: String) -> Result<(), String> {
+    crate::launch_groups::launch(&app, &id)
+}
+
+/// Every installed app as (id, name), for picking a launch group's apps in Settings.
+#[tauri::command]
+pub fn installed_apps() -> Vec<(String, String)> {
+    let mut apps: Vec<(String, String)> = apps::index()
+        .snapshot()
+        .iter()
+        .map(|app| (app.id.clone(), app.name.clone()))
+        .collect();
+    apps.sort_by_key(|(_, name)| name.to_lowercase());
+    apps
+}
+
+/// Opens first-run setup again (Settings › General › Run setup again).
+#[tauri::command]
+pub async fn open_onboarding(app: AppHandle) -> Result<(), String> {
+    window::open_onboarding(&app)
+}
+
+/// Finishing or skipping setup: it won't show again (except with the dev switch).
+#[tauri::command]
+pub fn finish_onboarding(app: AppHandle, state: State<'_, AppState>) -> Result<Persisted, String> {
+    let snapshot = state.update(|persisted| {
+        persisted.onboarding_done = true;
+        Ok(())
+    })?;
+    use tauri::Manager;
+    if let Some(window) = app.get_webview_window("onboarding") {
+        let _ = window.hide();
+        window::regular_while_open(&app);
+        let _ = window.close();
+    }
+    publish(&app, snapshot)
+}
+
+/// Dev builds: show setup on every launch.
+#[tauri::command]
+pub fn save_onboarding_every_launch(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    every: bool,
+) -> Result<Persisted, String> {
+    let snapshot = state.update(|persisted| {
+        persisted.onboarding_every_launch = every;
+        Ok(())
+    })?;
+    publish(&app, snapshot)
+}
+
+/// Picks the one AI the bar offers in Search with and on Tab and ⌘↵.
+#[tauri::command]
+pub fn save_ai_choice(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<Persisted, String> {
+    let snapshot = state.update(|persisted| {
+        if !persisted
+            .destinations
+            .iter()
+            .any(|destination| destination.id == id)
+        {
+            return Err("That destination no longer exists".into());
+        }
+        persisted.ai_choice = id;
+        Ok(())
+    })?;
+    publish(&app, snapshot)
+}
+
+#[tauri::command]
+pub fn save_show_stats(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    show: bool,
+) -> Result<Persisted, String> {
+    let snapshot = state.update(|persisted| {
+        persisted.show_stats = show;
+        Ok(())
+    })?;
+    publish(&app, snapshot)
+}
+
 /// Each permission the app can use on this system and whether it has it.
 #[tauri::command]
 pub async fn permissions_status(
@@ -388,7 +606,16 @@ pub async fn dispatch(
     // Text that would have launched an app but went to the web by an explicit key was meant
     // for the web; remember it so plain Enter stops launching the app for it.
     let typed = query::parse_input(&query).query;
-    let overrode_app = catalog.would_launch(&typed);
+    let overrode_app = catalog.would_launch(&typed)
+        || (!catalog.overridden(&typed)
+            && !settings::intent(
+                catalog.settings,
+                &typed,
+                catalog.setting_opens,
+                catalog.now,
+                1,
+            )
+            .is_empty());
 
     match decision {
         Decision::Open {
@@ -556,12 +783,32 @@ pub fn show_bar(app: AppHandle) {
     window::show_bar(&app);
 }
 
-// Must stay async: a sync command runs inside the webview's IPC callback on the main thread,
-// and building a new webview there deadlocks on Windows (WebView2) because creation needs
-// the message loop that the callback is blocking.
+// Sync, so the usual case (Settings already built, just hidden) shows it straight from the
+// main thread with no thread hop. Building a new webview inside a sync command deadlocks on
+// Windows (WebView2 needs the message loop the IPC callback is blocking), so when the window
+// doesn't exist yet it is built from a task instead.
 #[tauri::command]
-pub async fn open_settings(app: AppHandle) -> Result<(), String> {
-    window::open_settings(&app, None)
+pub fn open_settings(app: AppHandle) -> Result<(), String> {
+    if window::show_settings_now(&app) {
+        return Ok(());
+    }
+    tauri::async_runtime::spawn(async move {
+        if let Err(err) = window::open_settings(&app, None) {
+            log::error!("couldn't open Settings: {err}");
+        }
+    });
+    Ok(())
+}
+
+#[tauri::command]
+pub fn hide_settings(app: AppHandle) {
+    window::hide_settings(&app);
+}
+
+/// The Settings page's first frame after being shown, for the open-time log.
+#[tauri::command]
+pub fn settings_painted() {
+    window::settings_painted();
 }
 
 #[tauri::command]
@@ -698,6 +945,53 @@ pub async fn ai_detect_local() -> Vec<ai::LocalServer> {
     ai::detect_local().await
 }
 
+// Sign in with ChatGPT
+
+#[tauri::command]
+pub fn chatgpt_account() -> Option<crate::chatgpt::Account> {
+    crate::chatgpt::account()
+}
+
+/// Signs in through the browser, then makes ChatGPT the AI provider.
+#[tauri::command]
+pub async fn chatgpt_sign_in(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<crate::chatgpt::Account, String> {
+    let opener = app.clone();
+    let account = crate::chatgpt::sign_in(|url| {
+        opener
+            .opener()
+            .open_url(url, None::<&str>)
+            .map_err(|err| format!("Couldn't open the browser: {err}"))
+    })
+    .await?;
+    // Without the plan, ChatGPT can't answer, so the AI stays as it was.
+    if !account.plan {
+        return Ok(account);
+    }
+    let snapshot = state.update(|persisted| {
+        let mut settings = persisted.ai.clone();
+        if settings.provider != ai::CHATGPT {
+            settings.provider = ai::CHATGPT.into();
+            settings.model = String::new();
+        }
+        persisted.set_ai(settings)
+    })?;
+    publish(&app, snapshot)?;
+    Ok(account)
+}
+
+#[tauri::command]
+pub fn chatgpt_cancel_sign_in() {
+    crate::chatgpt::cancel_sign_in();
+}
+
+#[tauri::command]
+pub async fn chatgpt_sign_out() -> Result<(), String> {
+    crate::chatgpt::sign_out().await
+}
+
 /// The link a search would open, for the action panel's Copy link.
 #[tauri::command]
 pub fn resolve_url(
@@ -795,8 +1089,11 @@ pub fn clip_request_paste_permission() -> bool {
 }
 
 #[tauri::command]
-pub fn clip_stats() -> std::collections::HashMap<&'static str, usize> {
-    clipboard::stats()
+pub async fn clip_stats() -> std::collections::HashMap<&'static str, usize> {
+    // Off the main thread: it waits on the history, which can be busy loading.
+    tauri::async_runtime::spawn_blocking(clipboard::stats)
+        .await
+        .unwrap_or_default()
 }
 
 #[tauri::command]
@@ -907,8 +1204,8 @@ pub fn save_notes_shortcut(
 
 /// A settings or notes page has drawn and can be shown.
 #[tauri::command]
-pub fn page_ready(app: AppHandle, window: tauri::WebviewWindow) {
-    window::page_ready(&app, window.label());
+pub fn page_ready(app: AppHandle, window: tauri::WebviewWindow, ms: Option<u64>) {
+    window::page_ready(&app, window.label(), ms);
 }
 
 /// Records a finished typing test; true when it is a new personal best for its mode.
@@ -1129,8 +1426,10 @@ pub fn save_theme(
     }
     let snapshot = state.update(|persisted| {
         persisted.theme = theme;
+        persisted.theme_chosen = true;
         Ok(())
     })?;
+    window::apply_theme(&app, &snapshot.theme);
     publish(&app, snapshot)
 }
 
@@ -1243,9 +1542,14 @@ pub fn shell_open_terminal(
     Ok(())
 }
 
+/// Async because finding WSL or Git Bash runs programs on Windows, which would otherwise
+/// hold up the main thread while Settings opens.
 #[tauri::command]
-pub fn shell_info(state: State<'_, AppState>) -> Result<ShellInfo, String> {
-    Ok(shell::info(&state.snapshot()?.shell))
+pub async fn shell_info(state: State<'_, AppState>) -> Result<ShellInfo, String> {
+    let settings = state.snapshot()?.shell;
+    tauri::async_runtime::spawn_blocking(move || shell::info(&settings))
+        .await
+        .map_err(|err| err.to_string())
 }
 
 #[tauri::command]
@@ -1323,10 +1627,29 @@ pub async fn prepare_grid(app: AppHandle) -> Result<(), String> {
     window::prepare_grid(&app)
 }
 
-/// Ctrl+mousedown on the bar: the window follows the mouse until the button comes up.
+/// Ctrl+mousedown on the bar (⌘ on a Mac): the window follows the mouse until the button
+/// comes up. On a Mac the page drives the move and gets [x, y, scale] back.
 #[tauri::command]
-pub fn start_bar_drag(app: AppHandle) -> Result<(), String> {
+pub fn start_bar_drag(app: AppHandle) -> Result<Option<(i32, i32, f64)>, String> {
     window::start_bar_drag(&app)
+}
+
+/// macOS: the bar's new top-left during a ⌘-drag, in physical pixels.
+#[tauri::command]
+pub fn bar_move(app: AppHandle, x: i32, y: i32) {
+    #[cfg(target_os = "macos")]
+    window::free_drag::moving(&app, x, y);
+    #[cfg(not(target_os = "macos"))]
+    let _ = (app, x, y);
+}
+
+/// macOS: the ⌘-drag ended; the bar lands on the guide it was near.
+#[tauri::command]
+pub fn bar_move_end(app: AppHandle) {
+    #[cfg(target_os = "macos")]
+    window::free_drag::end(&app);
+    #[cfg(not(target_os = "macos"))]
+    let _ = app;
 }
 
 /// A web destination's site icon as a `data:` URL, or `None` to keep its letter tile.
@@ -1564,6 +1887,8 @@ pub fn run_binding(app: &AppHandle, target: &str) {
         }
         ("app", id) => launch(app, &app.state::<AppState>(), id).map(|_| ()),
         ("bookmark", url) => open_url(app.clone(), url.to_string()),
+        ("group", id) => crate::launch_groups::launch(app, id),
+        ("setting", id) => open_setting_page(app, id).map(|_| ()),
         ("dest", id) => {
             window::show_bar(app);
             app.emit_to(

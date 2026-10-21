@@ -59,6 +59,21 @@ pub fn focus(handle: i64) -> bool {
     platform::focus(handle)
 }
 
+/// Brings a process's first window to the front (Windows; elsewhere apps are activated).
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn focus_process(pid: u32) -> bool {
+    platform::of_process(pid)
+        .first()
+        .is_some_and(|handle| platform::focus(*handle))
+}
+
+/// Asks each of a process's windows to close, as its close button would.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn close_process_windows(pid: u32) -> bool {
+    let handles = platform::of_process(pid);
+    !handles.is_empty() && handles.into_iter().all(platform::close)
+}
+
 /// Asks a window to close, as its own close button would; the app may still ask to save.
 pub fn close(handle: i64) -> bool {
     platform::close(handle)
@@ -437,6 +452,34 @@ mod platform {
         }
     }
 
+    /// The shown windows a process owns.
+    pub fn of_process(pid: u32) -> Vec<i64> {
+        struct Search {
+            pid: u32,
+            found: Vec<i64>,
+        }
+        unsafe extern "system" fn visit(hwnd: HWND, data: LPARAM) -> BOOL {
+            let search = unsafe { &mut *(data.0 as *mut Search) };
+            let mut owner = 0;
+            unsafe { GetWindowThreadProcessId(hwnd, Some(&mut owner)) };
+            if owner == search.pid
+                && unsafe { IsWindowVisible(hwnd) }.as_bool()
+                && unsafe { GetWindowTextLengthW(hwnd) } > 0
+            {
+                search.found.push(hwnd.0 as i64);
+            }
+            true.into()
+        }
+        let mut search = Search {
+            pid,
+            found: Vec::new(),
+        };
+        unsafe {
+            let _ = EnumWindows(Some(visit), LPARAM(&mut search as *mut Search as isize));
+        }
+        search.found
+    }
+
     pub fn known_folder(guid: &str) -> Option<String> {
         let id = GUID::try_from(guid).ok()?;
         unsafe {
@@ -476,6 +519,10 @@ mod platform {
     use super::OpenWindow;
 
     pub fn list() -> Vec<OpenWindow> {
+        Vec::new()
+    }
+
+    pub fn of_process(_pid: u32) -> Vec<i64> {
         Vec::new()
     }
 

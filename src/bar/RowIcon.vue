@@ -2,6 +2,8 @@
   import { computed } from 'vue';
   import { iconFor, siteIconFor, siteIconForUrl } from './appIcons';
   import { GLYPHS } from './glyphs';
+  // The app's own icon, for rows that open its Settings window.
+  import zephyrIcon from '../../src-tauri/icons/64x64.png';
 
   const props = withDefaults(defineProps<{ icon?: string; label: string; size?: 20 | 16 }>(), {
     icon: '',
@@ -20,6 +22,7 @@
   // An installed app's own icon; the monogram stands in until it loads or if it has none.
   // A web destination's site icon (Google's G) takes over from its letter tile once fetched.
   const image = computed(() => {
+    if (props.icon === 'zephyr') return zephyrIcon;
     if (props.icon.startsWith('app:')) return iconFor(props.icon.slice(4), props.size);
     if (props.icon.startsWith('site:')) return siteIconForUrl(props.icon.slice(5));
     if (props.icon.startsWith('dest:') && props.icon !== 'dest:ai') {

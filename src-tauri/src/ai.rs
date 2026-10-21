@@ -20,6 +20,8 @@ pub enum Api {
     #[default]
     Openai,
     Anthropic,
+    /// OpenAI's Responses API, which Sign in with ChatGPT uses.
+    Responses,
 }
 
 /// Which provider answers, and with which model. An empty model means the provider's default,
@@ -106,6 +108,9 @@ pub const PRESETS: &[Preset] = &[
     },
 ];
 
+/// Sign in with ChatGPT: answers on the user's own ChatGPT plan, no key (see `chatgpt`).
+pub const CHATGPT: &str = "chatgpt";
+
 pub fn preset(id: &str) -> Option<&'static Preset> {
     PRESETS.iter().find(|preset| preset.id == id)
 }
@@ -116,7 +121,7 @@ impl AiSettings {
         self.model = self.model.trim().to_string();
         self.base_url = self.base_url.trim().trim_end_matches('/').to_string();
         match self.provider.as_str() {
-            "auto" => {}
+            "auto" | CHATGPT => {}
             "custom" => {
                 if !(self.base_url.starts_with("http://") || self.base_url.starts_with("https://"))
                 {
@@ -184,8 +189,8 @@ fn with_auth(
             .header("x-api-key", key)
             .header("anthropic-version", "2023-06-01"),
         (Api::Anthropic, None) => request.header("anthropic-version", "2023-06-01"),
-        (Api::Openai, Some(key)) => request.bearer_auth(key),
-        (Api::Openai, None) => request,
+        (Api::Openai | Api::Responses, Some(key)) => request.bearer_auth(key),
+        (Api::Openai | Api::Responses, None) => request,
     }
 }
 
@@ -244,6 +249,13 @@ pub async fn detect_local() -> Vec<LocalServer> {
 
 pub async fn models_for(settings: &AiSettings) -> Result<Vec<String>, String> {
     let settings = settings.clone().normalized()?;
+    if settings.provider == CHATGPT {
+        return Ok(crate::chatgpt::models()
+            .await?
+            .into_iter()
+            .map(|(slug, _)| slug)
+            .collect());
+    }
     let (api, base_url, key) = match settings.provider.as_str() {
         "auto" => {
             return Ok(detect_local()
@@ -271,6 +283,26 @@ pub async fn models_for(settings: &AiSettings) -> Result<Vec<String>, String> {
 async fn resolve(settings: &AiSettings) -> Result<Resolved, String> {
     let settings = settings.clone().normalized()?;
     match settings.provider.as_str() {
+        CHATGPT => {
+            let key = crate::chatgpt::access_token().await?;
+            let model = if settings.model.is_empty() {
+                crate::chatgpt::models()
+                    .await?
+                    .into_iter()
+                    .next()
+                    .map(|(slug, _)| slug)
+                    .ok_or("Your ChatGPT plan offers no models to Zephyr")?
+            } else {
+                settings.model
+            };
+            Ok(Resolved {
+                api: Api::Responses,
+                base_url: crate::chatgpt::RESOURCE.to_string(),
+                model,
+                key: Some(key),
+                provider_name: "ChatGPT".into(),
+            })
+        }
         "auto" => {
             let Some(server) = detect_local().await.into_iter().next() else {
                 return Err("No AI is set up. Start Ollama or LM Studio, or add an API key in Settings > AI.".into());
@@ -412,7 +444,14 @@ pub async fn ask(
     if !response.status().is_success() {
         let status = response.status();
         let body = read_json(response).await.unwrap_or(Value::Null);
-        let detail = error_message(&body).unwrap_or_else(|| format!("HTTP {status}"));
+        // Plan admission can answer {"detail": "…"} before a response starts.
+        let detail = error_message(&body)
+            .or_else(|| body["detail"].as_str().map(str::to_string))
+            .unwrap_or_else(|| format!("HTTP {status}"));
+        if resolved.api == Api::Responses {
+            let code = body["error"]["code"].as_str().unwrap_or_default();
+            return fail(crate::chatgpt::explain(code, &format!("ChatGPT: {detail}")));
+        }
         return fail(format!("{}: {detail}", resolved.provider_name));
     }
 
@@ -443,6 +482,11 @@ pub async fn ask(
             }
         }
     }
+    // A Responses stream is only finished at response.completed; ending sooner means it
+    // was cut off.
+    if resolved.api == Api::Responses {
+        return fail("The answer was interrupted. Try again.".into());
+    }
     if current() {
         emit(AiEvent::Done);
     }
@@ -468,6 +512,21 @@ fn build_request(
     let mut with_system = vec![json!({"role": "system", "content": SYSTEM_PROMPT})];
     with_system.extend(messages.iter().cloned());
     let request = match resolved.api {
+        // ChatGPT plan use: never stored on OpenAI's side, always streamed, and no custom
+        // sampling settings.
+        Api::Responses => client
+            .post(format!("{}/responses", resolved.base_url))
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(
+                json!({
+                    "model": resolved.model,
+                    "instructions": SYSTEM_PROMPT,
+                    "input": messages,
+                    "store": false,
+                    "stream": true,
+                })
+                .to_string(),
+            ),
         Api::Openai => client
             .post(format!("{}/chat/completions", resolved.base_url))
             .header(reqwest::header::CONTENT_TYPE, "application/json")
@@ -531,10 +590,14 @@ fn parse_line(api: Api, line: &str) -> Option<Piece> {
         return Some(Piece::Done);
     }
     let value: Value = serde_json::from_str(data).ok()?;
+    if api == Api::Responses {
+        return parse_responses(&value);
+    }
     if let Some(message) = error_message(&value) {
         return Some(Piece::Error(message));
     }
     match api {
+        Api::Responses => None,
         Api::Openai => {
             let text = value["choices"][0]["delta"]["content"].as_str()?;
             (!text.is_empty()).then(|| Piece::Text(text.to_string()))
@@ -549,6 +612,28 @@ fn parse_line(api: Api, line: &str) -> Option<Piece> {
             "message_stop" => Some(Piece::Done),
             _ => None,
         },
+    }
+}
+
+/// One Responses API stream event. Only `response.completed` counts as a finished answer.
+fn parse_responses(value: &Value) -> Option<Piece> {
+    let failure = |error: &Value| {
+        let code = error["code"].as_str().unwrap_or_default();
+        let message = error["message"].as_str().unwrap_or("The answer failed");
+        Piece::Error(crate::chatgpt::explain(code, message))
+    };
+    match value["type"].as_str()? {
+        "response.output_text.delta" => {
+            let text = value["delta"].as_str()?;
+            (!text.is_empty()).then(|| Piece::Text(text.to_string()))
+        }
+        "response.completed" => Some(Piece::Done),
+        "response.failed" => Some(failure(&value["response"]["error"])),
+        "response.incomplete" => Some(Piece::Error(
+            "ChatGPT stopped before finishing the answer.".into(),
+        )),
+        "error" => Some(failure(value.get("error").unwrap_or(value))),
+        _ => None,
     }
 }
 
@@ -604,6 +689,28 @@ mod tests {
             parse_line(Api::Anthropic, refusal),
             Some(Piece::Error(_))
         ));
+    }
+
+    #[test]
+    fn reads_responses_stream_events() {
+        let delta = r#"data: {"type":"response.output_text.delta","delta":"Hel"}"#;
+        assert_eq!(
+            parse_line(Api::Responses, delta),
+            Some(Piece::Text("Hel".into()))
+        );
+        assert_eq!(
+            parse_line(Api::Responses, r#"data: {"type":"response.completed"}"#),
+            Some(Piece::Done)
+        );
+        let limit = r#"data: {"type":"response.failed","response":{"error":{"code":"subscription_sharing_usage_limit_exceeded","message":"x"}}}"#;
+        assert!(matches!(
+            parse_line(Api::Responses, limit),
+            Some(Piece::Error(message)) if message.contains("limit")
+        ));
+        assert_eq!(
+            parse_line(Api::Responses, r#"data: {"type":"response.created"}"#),
+            None
+        );
     }
 
     #[test]

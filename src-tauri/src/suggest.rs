@@ -45,6 +45,10 @@ pub struct Suggestion {
     /// The window a `window` row switches to.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub window: Option<i64>,
+    /// For a browser: what its private window is called (Incognito, InPrivate); Shift+Enter
+    /// opens one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub private_window: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -212,7 +216,47 @@ pub async fn gather(
     if offer_apps && crate::ip::is_query(&parsed.query) {
         return ip_answers(&parsed.query, armed_id, destinations, include_remote).await;
     }
-    let preferred = offer_apps
+    // A bare "settings": the system's settings app, the app's own Settings, then the usual pages.
+    if offer_apps && settings::is_bare(&parsed.query) {
+        let mut items: Vec<Suggestion> = catalog
+            .system_settings_app()
+            .map(app_item)
+            .into_iter()
+            .collect();
+        items.extend(
+            catalog
+                .settings
+                .iter()
+                .find(|setting| setting.id == "zephyr.settings")
+                .map(setting_item),
+        );
+        items.extend(
+            settings::favorites(catalog.settings, catalog.setting_opens, now, 4)
+                .into_iter()
+                .map(setting_item),
+        );
+        return SuggestResponse {
+            mode: "search".into(),
+            preselect: (!items.is_empty()).then_some(0),
+            items,
+            notice: None,
+            target: destination::enabled(destinations, armed_id).map(|found| found.id.clone()),
+            text: parsed.query.clone(),
+            search_with: searchable(destinations),
+        };
+    }
+    // "wifi settings", "settings dark": the pages lead and Enter opens the best; the web
+    // row stays right under them. An app named exactly this text still wins.
+    let intent: Vec<Suggestion> = if offer_apps {
+        catalog
+            .setting_intent(&parsed.query)
+            .into_iter()
+            .map(match_item)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let preferred = (offer_apps && intent.is_empty())
         .then(|| catalog.preferred(&parsed.query))
         .flatten();
     let other_apps: Vec<Suggestion> = if offer_apps {
@@ -250,6 +294,14 @@ pub async fn gather(
         Vec::new()
     };
 
+    // A page named exactly ("bluetooth", "dark mode") sits right under the web row; the web
+    // search keeps Enter.
+    let exact_pane: Option<Suggestion> =
+        (offer_apps && intent.is_empty() && preferred.is_none() && exact_bookmark.is_none())
+            .then(|| settings::exact(catalog.settings, &parsed.query, catalog.setting_opens, now))
+            .flatten()
+            .map(match_item);
+
     // Files and settings never take Enter unscoped: at most two rows between them, below
     // everything else local. Files only come from ones opened before, so this never waits on
     // the index.
@@ -267,6 +319,11 @@ pub async fn gather(
             settings::incidental(catalog.settings, &parsed.query, 2)
                 .into_iter()
                 .filter(|setting| !shown_app(setting.title))
+                .filter(|setting| {
+                    let id = Some(setting.id.to_string());
+                    !intent.iter().any(|row| row.setting_id == id)
+                        && exact_pane.as_ref().is_none_or(|row| row.setting_id != id)
+                })
                 .take(2 - rows.len())
                 .map(setting_item),
         );
@@ -277,11 +334,16 @@ pub async fn gather(
 
     // A calculation or time question answers in the top row, unless an app already claims
     // Enter for this text.
-    let answer = (offer_apps && preferred.is_none() && exact_bookmark.is_none())
-        .then(|| answer::inline(&parsed.query, chrono::Utc::now()))
-        .flatten();
+    let answer =
+        (offer_apps && preferred.is_none() && exact_bookmark.is_none() && intent.is_empty())
+            .then(|| answer::inline(&parsed.query, chrono::Utc::now()))
+            .flatten();
 
-    let mut items = Vec::new();
+    let has_intent = !intent.is_empty();
+    let mut items = intent;
+    if let Some(pane) = exact_pane {
+        items.push(pane);
+    }
     if let Some(app) = preferred {
         items.push(app_item(app));
     }
@@ -343,7 +405,10 @@ pub async fn gather(
         mode: "search".into(),
         items,
         notice: None,
-        preselect: (preferred.is_some() || answer.is_some() || exact_bookmark.is_some())
+        preselect: (preferred.is_some()
+            || answer.is_some()
+            || exact_bookmark.is_some()
+            || has_intent)
             .then_some(0),
         target,
         text: parsed.query.clone(),
@@ -360,29 +425,39 @@ async fn ip_answers(
     destinations: &[Destination],
     include_remote: bool,
 ) -> SuggestResponse {
-    let row = |value: String, detail: String| Suggestion {
+    // A globe for the public address; the local ones show their link (Wi-Fi, Ethernet).
+    let row = |value: String, detail: String, icon: &str| Suggestion {
         label: value.clone(),
         query: value,
         kind: "answer".into(),
         hint: "Copy".into(),
         section: "answer".into(),
         subtitle: detail,
-        icon: "glyph:network".into(),
+        icon: icon.into(),
         ..Default::default()
     };
     let local = crate::ip::local();
     let mut items: Vec<Suggestion> = Vec::new();
     let mut rest = local.into_iter();
     if let Some(primary) = rest.next() {
-        items.push(row(primary.value, format!("Local IP · {}", primary.detail)));
+        let icon = primary.link.glyph();
+        items.push(row(
+            primary.value,
+            format!("Local IP · {}", primary.detail),
+            icon,
+        ));
     }
     if include_remote && let Some(public) = crate::ip::public().await {
         items.push(row(
             public,
             "Public IP, as the internet sees this computer".into(),
+            "glyph:globe",
         ));
     }
-    items.extend(rest.map(|address| row(address.value, address.detail)));
+    items.extend(rest.map(|address| {
+        let icon = address.link.glyph();
+        row(address.value, address.detail, icon)
+    }));
     SuggestResponse {
         mode: "search".into(),
         preselect: (!items.is_empty()).then_some(0),
@@ -452,17 +527,26 @@ fn notes_response(query: &str) -> SuggestResponse {
 }
 
 fn app_item(app: &App) -> Suggestion {
+    let private_window = crate::apps::private_mode(&app.name).map(|mode| mode.name.to_string());
+    let shift = if cfg!(target_os = "macos") {
+        "⇧"
+    } else {
+        "Shift+"
+    };
     Suggestion {
         label: app.name.clone(),
         kind: "app".into(),
         hint: if app.id.starts_with(crate::steam::ID_PREFIX) {
             "Game".into()
+        } else if let Some(private) = &private_window {
+            format!("App · {shift}↵ {private}")
         } else {
             "App".into()
         },
         section: "apps".into(),
         icon: format!("app:{}", app.id),
         app_id: Some(app.id.clone()),
+        private_window,
         ..Default::default()
     }
 }
@@ -474,13 +558,22 @@ fn setting_item(setting: &Setting) -> Suggestion {
         hint: setting.hint().into(),
         section: "settings".into(),
         icon: if matches!(setting.target, Target::Zephyr(_)) {
-            "glyph:sliders"
+            "zephyr"
         } else {
             "glyph:gear"
         }
         .into(),
         setting_id: Some(setting.id.to_string()),
         ..Default::default()
+    }
+}
+
+/// A page found by a keyword shows that keyword dimmed beside its title ("Appearance
+/// dark mode").
+fn match_item(found: settings::Match<'_>) -> Suggestion {
+    Suggestion {
+        subtitle: found.keyword.unwrap_or_default().to_string(),
+        ..setting_item(found.setting)
     }
 }
 
@@ -867,6 +960,7 @@ mod tests {
             launches: &[],
             file_opens,
             overrides: &[],
+            setting_opens: &[],
             now: 0,
         };
         tauri::async_runtime::block_on(gather(
@@ -895,6 +989,7 @@ mod tests {
             launches: &[],
             file_opens: &[],
             overrides: &[],
+            setting_opens: &[],
             now: 1_000_000,
         };
         tauri::async_runtime::block_on(gather(
@@ -939,6 +1034,7 @@ mod tests {
             launches,
             file_opens: &[],
             overrides: &[],
+            setting_opens: &[],
             now: 100,
         };
         let labels = |response: SuggestResponse| -> Vec<String> {
@@ -989,6 +1085,7 @@ mod tests {
             launches,
             file_opens: &[],
             overrides: &[],
+            setting_opens: &[],
             now: 100,
         };
         let labels = |response: SuggestResponse| {
@@ -1126,8 +1223,10 @@ mod tests {
             .iter()
             .map(|item| item.kind.as_str())
             .collect();
-        assert_eq!(kinds, ["file", "setting"]);
-        assert_eq!(response.items[0].path.as_deref(), file.to_str());
+        // The page named exactly sits first (right under the web row), then the file.
+        assert_eq!(kinds, ["setting", "file", "setting"]);
+        assert_eq!(response.items[0].setting_id.as_deref(), Some("win.display"));
+        assert_eq!(response.items[1].path.as_deref(), file.to_str());
 
         let scoped = local_with("!f", &[], &opens);
         assert_eq!(scoped.preselect, None);

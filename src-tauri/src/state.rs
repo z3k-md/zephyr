@@ -33,6 +33,8 @@ pub struct Persisted {
     pub file_excludes: Vec<String>,
     /// Files opened from the bar, keyed by full path, for ranking and the empty `!f` list.
     pub file_opens: Vec<LaunchEntry>,
+    /// Settings pages opened from the bar, by setting id, for ranking.
+    pub setting_opens: Vec<LaunchEntry>,
     /// The provider and model behind the Ask AI destination; keys are in the keychain.
     pub ai: AiSettings,
     /// Clipboard history: on or off, its shortcut, retention and ignored apps.
@@ -67,6 +69,15 @@ pub struct Persisted {
     /// The color palette every window uses; one of [`THEMES`].
     #[serde(default = "default_theme")]
     pub theme: String,
+    /// Whether the theme was picked in Settings, rather than left at a default; an old
+    /// default moves to a new one, a pick never does.
+    pub theme_chosen: bool,
+    /// Whether first-run setup was finished or skipped. Files from before setup existed
+    /// read as done, so upgrading never shows it.
+    #[serde(default = "yes")]
+    pub onboarding_done: bool,
+    /// Dev builds: show setup on every launch, for testing it.
+    pub onboarding_every_launch: bool,
     /// A shutdown, restart, sleep, lock or sign-out set for later from the bar.
     pub power: Option<crate::power::Schedule>,
     /// Browser profiles whose bookmarks stay out of the bar, by source id (`chrome/Default`).
@@ -86,19 +97,48 @@ pub struct Persisted {
     /// app reads them, so they wait until file search is first used rather than prompting
     /// at launch.
     pub protected_folders: bool,
+    /// Whether the bar's footer shows CPU, memory, disk and network.
+    #[serde(default = "yes")]
+    pub show_stats: bool,
+    /// The one AI the bar offers (a destination id); empty means the first AI listed.
+    pub ai_choice: String,
     /// Hotkeys and aliases the user gave commands, apps, destinations and bookmarks.
     pub bindings: Vec<Binding>,
+    /// Apps (and links and folders) opened together: "Coding", "Gaming".
+    pub launch_groups: Vec<LaunchGroup>,
 }
 
 /// The palettes Settings > Appearance offers; the first is the default.
-pub const THEMES: &[&str] = &["violet", "graphite", "ocean", "forest", "ember"];
+pub const THEMES: &[&str] = &["sidebar", "violet", "graphite", "ocean", "forest", "ember"];
 
 fn default_theme() -> String {
     THEMES[0].into()
 }
 
+/// A named set of things opened in one go from the bar or a hotkey.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct LaunchGroup {
+    pub id: String,
+    pub name: String,
+    /// A glyph name for its row; empty uses the first app's icon.
+    pub icon: String,
+    pub items: Vec<GroupItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct GroupItem {
+    /// `app`, `url` or `folder`.
+    pub kind: String,
+    /// An app id, a URL, or a folder path.
+    pub value: String,
+    /// What the row and Settings call it.
+    pub label: String,
+}
+
 /// A hotkey and/or an alias for one thing the bar can do. `target` names it: `view:ai`,
-/// `scope:files`, `app:<id>`, `dest:<id>` or `bookmark:<url>`.
+/// `scope:files`, `app:<id>`, `dest:<id>`, `bookmark:<url>`, `group:<id>` or `setting:<id>`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Binding {
@@ -190,6 +230,7 @@ impl Persisted {
             file_roots: None,
             file_excludes: Vec::new(),
             file_opens: Vec::new(),
+            setting_opens: Vec::new(),
             ai: AiSettings::default(),
             clipboard: ClipboardSettings::default(),
             notes_shortcut: default_notes_shortcut(),
@@ -203,6 +244,9 @@ impl Persisted {
             shell: crate::shell::ShellSettings::default(),
             bar_position: None,
             theme: default_theme(),
+            theme_chosen: false,
+            onboarding_done: false,
+            onboarding_every_launch: false,
             power: None,
             bookmarks_disabled: Vec::new(),
             show_now_playing: true,
@@ -210,7 +254,10 @@ impl Persisted {
             note_windows: Vec::new(),
             bug_capture: true,
             protected_folders: false,
+            show_stats: true,
+            ai_choice: String::new(),
             bindings: Vec::new(),
+            launch_groups: Vec::new(),
         }
     }
 
@@ -336,6 +383,10 @@ impl Persisted {
             .transpose()?;
         self.file_excludes = files::normalize_folders(&excludes)?;
         Ok(())
+    }
+
+    pub fn record_setting_open(&mut self, setting_id: &str, now: i64) {
+        apps::record_launch(&mut self.setting_opens, setting_id, now);
     }
 
     pub fn record_app_override(&mut self, query: &str) {
@@ -581,6 +632,10 @@ impl Persisted {
         match serde_json::from_slice::<Self>(&bytes) {
             Ok(mut state) => {
                 state.merge_builtins();
+                // Violet was the default before Sidebar; anyone who never picked moves over.
+                if !state.theme_chosen && state.theme == "violet" {
+                    state.theme = default_theme();
+                }
                 if state.migrate()
                     && let Err(err) = state.save(path)
                 {

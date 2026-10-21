@@ -83,6 +83,12 @@ export interface Snapshot {
   bookmarksDisabled: string[];
   /** Whether the bar's footer shows the song or video playing. */
   showNowPlaying: boolean;
+  showStats: boolean;
+  /** The one AI the bar offers (a destination id); empty for the first AI listed. */
+  aiChoice: string;
+  onboardingDone: boolean;
+  onboardingEveryLaunch: boolean;
+  launchGroups: LaunchGroup[];
   bugCapture: boolean;
   protectedFolders: boolean;
   /** Whether installed Steam games are listed with the apps. */
@@ -290,7 +296,6 @@ export interface Suggestion {
     | 'view'
     | 'query'
     | 'searchWith'
-    | 'more'
     | 'power'
     | 'bookmark'
     | 'powerPending'
@@ -306,6 +311,10 @@ export interface Suggestion {
   subtitle?: string;
   /** app:<id>, dest:<id> or glyph:<name>. */
   icon?: string;
+  /** A browser's private window (Incognito, InPrivate); Shift+Enter opens one. */
+  privateWindow?: string;
+  /** Small icons for what a row holds (a launch group's apps). */
+  icons?: string[];
   /** Keycaps shown instead of the hint. */
   keys?: string[];
   /** For power rows: what Enter runs. */
@@ -455,3 +464,86 @@ export type FilePreview =
   | { kind: 'image'; url: string; size: number; modified: number }
   | { kind: 'text'; text: string; truncated: boolean; size: number; modified: number }
   | { kind: 'info'; size: number; modified: number; folder: boolean };
+
+/** Live system stats for the bar's footer. */
+export interface SystemStats {
+  cpu: number;
+  memoryUsed: number;
+  memoryTotal: number;
+  diskFree: number;
+  diskTotal: number;
+  netDown: number;
+  netUp: number;
+  /** Dev builds: the app's own use, webview helpers included. */
+  app?: { cpu: number; memory: number; processes: number };
+}
+
+/** One app, or one program, in System Resources: every process it's made of, summed. */
+export interface ResourceRow {
+  /** Stable across ticks, so the selection follows the app, not its position. */
+  key: string;
+  name: string;
+  /** A lone command-line program: what it runs and where ("bun dev · ~/code/zephyr"). */
+  subtitle: string;
+  icon: string;
+  pids: number[];
+  /** Percent of one core (macOS) or of the machine (Windows); null when it can't be read. */
+  cpu: number | null;
+  memory: number | null;
+  /** Bytes read and written per second. */
+  disk: number | null;
+  user: string;
+  path: string;
+  command: string;
+  /** The system needs it, so it can't be force quit. */
+  protected: boolean;
+  /** Finder, the Dock, Explorer: relaunched rather than quit. */
+  relaunch: boolean;
+  /** Its use can't be read without administrator rights. */
+  locked: boolean;
+}
+
+export interface ResourcePoint {
+  cpu: number;
+  /** Share of memory in use, 0 to 1. */
+  memory: number;
+  down: number;
+  up: number;
+}
+
+export interface ResourceSnapshot {
+  totals: SystemStats;
+  cores: number;
+  /** The last minute, a point a second, oldest first. */
+  history: ResourcePoint[];
+  rows: ResourceRow[];
+  processes: number;
+  /** Seconds since the computer started. */
+  uptime: number;
+  tickMs: number;
+}
+
+export type ResourceSort = 'cpu' | 'memory' | 'disk' | 'name';
+
+/** The ChatGPT account Ask AI uses, when signed in with ChatGPT. */
+export interface ChatgptAccount {
+  email: string;
+  name: string;
+  /** False when sign-in worked but sharing the plan wasn't allowed. */
+  plan: boolean;
+}
+
+/** Things opened together from one row or hotkey ("Coding", "Gaming"). */
+export interface LaunchGroup {
+  id: string;
+  name: string;
+  /** A glyph name; empty uses the first app's icon. */
+  icon: string;
+  items: GroupItem[];
+}
+
+export interface GroupItem {
+  kind: 'app' | 'url' | 'folder';
+  value: string;
+  label: string;
+}

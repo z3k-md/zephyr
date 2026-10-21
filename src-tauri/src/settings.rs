@@ -1,4 +1,4 @@
-use crate::apps::{self, Strength};
+use crate::apps::{self, LaunchEntry, Strength};
 
 /// Bang words that scope the bar to settings instead of naming a destination.
 pub const SCOPE_TRIGGERS: &[&str] = &["set", "settings"];
@@ -33,7 +33,7 @@ pub enum Target {
 impl Setting {
     pub fn hint(&self) -> &'static str {
         match self.target {
-            Target::Zephyr(_) => "Zephyr settings",
+            Target::Zephyr(_) => "Zephyr",
             Target::System(_) | Target::Command(..) => "Control Panel",
             Target::Uri(_) => "System settings",
         }
@@ -52,7 +52,56 @@ pub fn catalog() -> &'static [Setting] {
         } else {
             &[]
         };
-        ZEPHYR.iter().chain(system).copied().collect()
+        ZEPHYR
+            .iter()
+            .filter(|setting| cfg!(target_os = "macos") || setting.id != "zephyr.permissions")
+            .chain(system.iter().filter(|setting| installed(setting)))
+            .copied()
+            .collect()
+    })
+}
+
+/// macOS: whether this Mac has the pane (an older or newer macOS can lack one, like Screen
+/// Saver or Passwords). Privacy anchors aren't extensions and always open.
+fn installed(setting: &Setting) -> bool {
+    if !cfg!(target_os = "macos") {
+        return true;
+    }
+    let Target::Uri(uri) = setting.target else {
+        return true;
+    };
+    let Some(id) = uri.strip_prefix("x-apple.systempreferences:") else {
+        return true;
+    };
+    if id.contains('?') {
+        return true;
+    }
+    let panes = mac_panes();
+    // No list at all (the folder moved) means keep everything rather than hide it all.
+    panes.is_empty() || panes.iter().any(|pane| pane == id)
+}
+
+/// The bundle ids of the System Settings panes installed on this Mac.
+fn mac_panes() -> &'static [String] {
+    use std::sync::OnceLock;
+    static PANES: OnceLock<Vec<String>> = OnceLock::new();
+    PANES.get_or_init(|| {
+        let Ok(entries) = std::fs::read_dir("/System/Library/ExtensionKit/Extensions") else {
+            return Vec::new();
+        };
+        entries
+            .flatten()
+            .filter_map(|entry| {
+                let plist = entry.path().join("Contents/Info.plist");
+                let output = std::process::Command::new("plutil")
+                    .args(["-extract", "CFBundleIdentifier", "raw", "-o", "-"])
+                    .arg(&plist)
+                    .output()
+                    .ok()?;
+                let id = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                (output.status.success() && !id.is_empty()).then_some(id)
+            })
+            .collect()
     })
 }
 
@@ -60,16 +109,241 @@ pub fn find(id: &str) -> Option<&'static Setting> {
     catalog().iter().find(|setting| setting.id == id)
 }
 
-/// How well `query` names this setting. The title wins ties with a keyword of the same strength.
-fn strength(setting: &Setting, query: &str) -> Option<(Strength, bool)> {
-    let title = apps::strength(setting.title, query).map(|found| (found, true));
-    let keyword = setting
-        .keywords
+/// Words that say the text is about settings ("wifi settings", "settings dark").
+const SETTINGS_WORDS: &[&str] = &[
+    "settings",
+    "setting",
+    "preferences",
+    "preference",
+    "prefs",
+    "pref",
+];
+
+/// Lowercase, with spelling variants folded so they match: "Wi-Fi" and "wi fi" are "wifi",
+/// "&" is "and", and plurals lose their "s" ("displays" is "display").
+pub fn normalize(text: &str) -> String {
+    let lower = text
+        .to_lowercase()
+        .replace("wi-fi", "wifi")
+        .replace("wi fi", "wifi")
+        .replace('&', " and ");
+    lower
+        .split_whitespace()
+        .map(|word| {
+            let keep = word.len() <= 3
+                || !word.ends_with('s')
+                || ["ss", "us", "is", "os"]
+                    .iter()
+                    .any(|end| word.ends_with(end));
+            if keep { word } else { &word[..word.len() - 1] }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn is_settings_word(word: &str) -> bool {
+    SETTINGS_WORDS.contains(&word)
+}
+
+/// The text is only a settings word ("settings", "prefs").
+pub fn is_bare(query: &str) -> bool {
+    let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+    words.len() == 1 && is_settings_word(&words[0])
+}
+
+/// The text minus one settings word at its start or end ("wifi settings" is "wifi"), when
+/// what's left is long enough to mean something.
+fn strip_settings_word(query: &str) -> Option<String> {
+    let words: Vec<&str> = query.split_whitespace().collect();
+    if words.len() < 2 {
+        return None;
+    }
+    let lower = |word: &str| word.to_lowercase();
+    let rest = if is_settings_word(&lower(words[words.len() - 1])) {
+        &words[..words.len() - 1]
+    } else if is_settings_word(&lower(words[0])) {
+        &words[1..]
+    } else {
+        return None;
+    };
+    let rest = rest.join(" ");
+    (rest.chars().count() >= 2).then_some(rest)
+}
+
+/// The words a setting answers to: its own keywords, plus the cross-platform concepts it is
+/// this platform's page for ("night shift" finds Night Light on Windows).
+fn words(setting: &Setting) -> impl Iterator<Item = &'static str> + '_ {
+    let concepts = CONCEPTS
         .iter()
-        .filter_map(|keyword| apps::strength(keyword, query))
-        .max()
-        .map(|found| (found, false));
-    title.max(keyword)
+        .filter(move |concept| concept.windows == setting.id || concept.macos == setting.id)
+        .flat_map(|concept| concept.words.iter().copied());
+    setting.keywords.iter().copied().chain(concepts)
+}
+
+/// How well `query` names this setting, and the keyword it matched when that wasn't the
+/// title. The title wins ties with a keyword of the same strength.
+fn matched(setting: &Setting, query: &str) -> Option<(Strength, Option<&'static str>)> {
+    let query = normalize(query);
+    let title = apps::strength(&normalize(setting.title), &query).map(|found| (found, None));
+    let keyword = words(setting)
+        .filter_map(|word| apps::strength(&normalize(word), &query).map(|found| (found, word)))
+        .max_by_key(|(found, _)| *found)
+        .map(|(found, word)| (found, Some(word)));
+    match (title, keyword) {
+        (Some(title), Some(keyword)) if keyword.0 > title.0 => Some(keyword),
+        (Some(title), _) => Some(title),
+        (None, keyword) => keyword,
+    }
+}
+
+fn strength(setting: &Setting, query: &str) -> Option<(Strength, bool)> {
+    matched(setting, query).map(|(found, keyword)| (found, keyword.is_none()))
+}
+
+/// A setting with the keyword that found it, shown dimmed beside the title.
+#[derive(Debug, Clone, Copy)]
+pub struct Match<'a> {
+    pub setting: &'a Setting,
+    pub keyword: Option<&'static str>,
+}
+
+fn is_zephyr(setting: &Setting) -> bool {
+    matches!(setting.target, Target::Zephyr(_))
+}
+
+/// What ranks a match: naming a whole word of the page ("ai" in "Zephyr AI", not the start
+/// of "Airplane"), then match strength, then title over keyword.
+type Score = (bool, Strength, bool);
+
+/// Whether `query` is one or more whole words of `text`.
+fn whole_words(text: &str, query: &str) -> bool {
+    let text = format!(" {} ", normalize(text));
+    text.contains(&format!(" {} ", normalize(query)))
+}
+
+fn score(setting: &Setting, query: &str, found: Strength, keyword: Option<&str>) -> Score {
+    let whole = whole_words(keyword.unwrap_or(setting.title), query);
+    (whole, found, keyword.is_none())
+}
+
+/// Ranks matches: score, then the OS's page before the app's own (unless the text says
+/// "zephyr"), then the most opened, then catalog order.
+fn rank<'a>(
+    mut found: Vec<(usize, Match<'a>, Score)>,
+    query: &str,
+    opens: &[LaunchEntry],
+    now: i64,
+) -> Vec<Match<'a>> {
+    let zephyr_first = query.to_lowercase().contains("zephyr");
+    let uses = |item: &Match| apps::frecency(opens, item.setting.id, now);
+    found.sort_by(|left, right| {
+        right
+            .2
+            .cmp(&left.2)
+            .then_with(|| {
+                let later = |item: &Match| is_zephyr(item.setting) != zephyr_first;
+                later(&left.1).cmp(&later(&right.1))
+            })
+            .then_with(|| uses(&right.1).total_cmp(&uses(&left.1)))
+            .then(left.0.cmp(&right.0))
+    });
+    found.into_iter().map(|(_, item, _)| item).collect()
+}
+
+/// "wifi settings", "settings dark", "display prefs": a settings word at either end, and
+/// the rest naming a page by its title or a keyword (word prefix or better). Up to `limit`
+/// pages, best first; empty when the text isn't asking for settings.
+pub fn intent<'a>(
+    settings: &'a [Setting],
+    query: &str,
+    opens: &[LaunchEntry],
+    now: i64,
+    limit: usize,
+) -> Vec<Match<'a>> {
+    let Some(rest) = strip_settings_word(query) else {
+        return Vec::new();
+    };
+    // A page whose own title has the settings word ("Zephyr Settings") matches whole.
+    let whole = normalize(query);
+    if let Some(setting) = settings
+        .iter()
+        .find(|setting| normalize(setting.title) == whole)
+    {
+        return vec![Match {
+            setting,
+            keyword: None,
+        }];
+    }
+    let found = settings
+        .iter()
+        .enumerate()
+        .filter_map(|(order, setting)| {
+            let (found, keyword) = matched(setting, &rest)?;
+            (found >= Strength::WordPrefix).then_some((
+                order,
+                Match { setting, keyword },
+                score(setting, &rest, found, keyword),
+            ))
+        })
+        .collect();
+    let mut ranked = rank(found, query, opens, now);
+    ranked.truncate(limit);
+    ranked
+}
+
+/// A page named exactly, with no settings word ("bluetooth", "dark mode"): shown under the
+/// web row, never taking Enter.
+pub fn exact<'a>(
+    settings: &'a [Setting],
+    query: &str,
+    opens: &[LaunchEntry],
+    now: i64,
+) -> Option<Match<'a>> {
+    let found = settings
+        .iter()
+        .enumerate()
+        .filter_map(|(order, setting)| {
+            let (found, keyword) = matched(setting, query)?;
+            (found == Strength::Exact).then_some((
+                order,
+                Match { setting, keyword },
+                score(setting, query, found, keyword),
+            ))
+        })
+        .collect();
+    rank(found, query, opens, now).into_iter().next()
+}
+
+/// The pages for a bare "settings": the most opened, then Wi-Fi, Bluetooth, Displays and
+/// Sound. The app's own pages aren't in this list; they have their own row.
+pub fn favorites<'a>(
+    settings: &'a [Setting],
+    opens: &[LaunchEntry],
+    now: i64,
+    limit: usize,
+) -> Vec<&'a Setting> {
+    let mut opened: Vec<(&Setting, f64)> = settings
+        .iter()
+        .filter(|setting| !is_zephyr(setting))
+        .map(|setting| (setting, apps::frecency(opens, setting.id, now)))
+        .filter(|(_, score)| *score > 0.0)
+        .collect();
+    opened.sort_by(|left, right| right.1.total_cmp(&left.1));
+    let mut chosen: Vec<&Setting> = opened.into_iter().map(|(setting, _)| setting).collect();
+    let defaults: &[&str] = if cfg!(windows) {
+        &["win.wifi", "win.bluetooth", "win.display", "win.sound"]
+    } else {
+        &["mac.wifi", "mac.bluetooth", "mac.displays", "mac.sound"]
+    };
+    for id in defaults {
+        if let Some(setting) = settings.iter().find(|setting| setting.id == *id)
+            && !chosen.iter().any(|picked| picked.id == setting.id)
+        {
+            chosen.push(setting);
+        }
+    }
+    chosen.truncate(limit);
+    chosen
 }
 
 /// Settings matching `query`, best first; equal matches keep catalog order, which is curated by
@@ -195,6 +469,9 @@ const fn system(
     }
 }
 
+/// The app's own settings: one page per section of its Settings window (kept in step with
+/// SECTIONS in SettingsView.vue by a test), plus rows for single controls, which open the
+/// section and flash the control ("general:summon").
 const ZEPHYR: &[Setting] = &[
     zephyr(
         "zephyr.settings",
@@ -203,44 +480,34 @@ const ZEPHYR: &[Setting] = &[
         &["preferences", "options"],
     ),
     zephyr(
-        "zephyr.shortcut",
-        "Zephyr Summon Shortcut",
+        "zephyr.general",
+        "Zephyr General",
         "general",
-        &["hotkey", "keyboard shortcut", "zephyr shortcut"],
+        &["return to mode", "keep search text"],
     ),
     zephyr(
-        "zephyr.startup",
-        "Launch Zephyr at Startup",
-        "general",
-        &["autostart", "login", "zephyr startup"],
+        "zephyr.appearance",
+        "Zephyr Appearance",
+        "appearance",
+        &["theme", "color", "tint"],
     ),
     zephyr(
-        "zephyr.default",
-        "Zephyr Default Destination",
-        "general",
-        &["default search engine", "default destination"],
-    ),
-    zephyr(
-        "zephyr.updates",
-        "Check for Zephyr Updates",
-        "general",
-        &["update zephyr", "zephyr version"],
-    ),
-    zephyr(
-        "zephyr.destinations",
-        "Zephyr Destinations",
-        "destinations",
+        "zephyr.ai",
+        "Zephyr AI",
+        "ai",
         &[
-            "add destination",
-            "search engines",
-            "bangs",
-            "triggers",
-            "edit destination",
+            "ai provider",
+            "ollama",
+            "lm studio",
+            "anthropic",
+            "openai",
+            "chatgpt",
+            "model",
         ],
     ),
     zephyr(
         "zephyr.claude",
-        "Zephyr Claude Projects",
+        "Zephyr Claude",
         "claude",
         &["claude code", "claude projects", "background agent"],
     ),
@@ -251,40 +518,66 @@ const ZEPHYR: &[Setting] = &[
         &["terminal", "bash", "powershell", "command", "wsl"],
     ),
     zephyr(
+        "zephyr.sync",
+        "Zephyr Sync",
+        "sync",
+        &["sign in", "devices", "recovery key"],
+    ),
+    zephyr(
+        "zephyr.clipboard",
+        "Zephyr Clipboard",
+        "clipboard",
+        &[
+            "clipboard history",
+            "paste history",
+            "copied",
+            "ignored apps",
+        ],
+    ),
+    zephyr(
         "zephyr.notes",
         "Zephyr Notes",
         "notes",
         &["notes shortcut", "quick notes", "notes folder"],
     ),
     zephyr(
-        "zephyr.clipboard",
-        "Zephyr Clipboard History",
-        "clipboard",
-        &["clipboard", "paste history", "copied", "ignored apps"],
-    ),
-    zephyr(
-        "zephyr.ai",
-        "Zephyr AI",
-        "ai",
+        "zephyr.destinations",
+        "Zephyr Destinations",
+        "destinations",
         &[
-            "ai provider",
-            "api key",
-            "ollama",
-            "lm studio",
-            "anthropic",
-            "openai",
-            "model",
+            "add destination",
+            "search engines",
+            "triggers",
+            "edit destination",
         ],
     ),
     zephyr(
-        "zephyr.history",
-        "Zephyr Search History",
-        "history",
-        &["clear history", "recent searches"],
+        "zephyr.bookmarks",
+        "Zephyr Bookmarks",
+        "bookmarks",
+        &["browser bookmarks", "bookmark sources"],
+    ),
+    zephyr(
+        "zephyr.nowplaying",
+        "Zephyr Now Playing",
+        "nowplaying",
+        &["music", "media controls"],
+    ),
+    zephyr(
+        "zephyr.shortcuts",
+        "Zephyr Shortcuts",
+        "shortcuts",
+        &["aliases", "hotkeys", "keyboard shortcuts"],
+    ),
+    zephyr(
+        "zephyr.launchgroups",
+        "Zephyr Launch Groups",
+        "launchgroups",
+        &["launch group", "open several apps"],
     ),
     zephyr(
         "zephyr.files",
-        "Zephyr File Search",
+        "Zephyr Files",
         "files",
         &[
             "file search folders",
@@ -293,6 +586,101 @@ const ZEPHYR: &[Setting] = &[
             "file index",
         ],
     ),
+    zephyr(
+        "zephyr.history",
+        "Zephyr History",
+        "history",
+        &["clear history", "recent searches"],
+    ),
+    zephyr(
+        "zephyr.permissions",
+        "Zephyr Permissions",
+        "permissions",
+        &["accessibility", "automation", "allow"],
+    ),
+    zephyr(
+        "zephyr.shortcut",
+        "Zephyr Summon Shortcut",
+        "general:summon",
+        &["hotkey", "zephyr shortcut"],
+    ),
+    zephyr(
+        "zephyr.startup",
+        "Launch Zephyr at Startup",
+        "general:startup",
+        &["autostart", "login", "zephyr startup"],
+    ),
+    zephyr(
+        "zephyr.default",
+        "Zephyr Default Destination",
+        "general:default",
+        &["default search engine", "default destination"],
+    ),
+    zephyr(
+        "zephyr.updates",
+        "Check for Zephyr Updates",
+        "general:updates",
+        &["update zephyr", "zephyr version"],
+    ),
+    zephyr("zephyr.aikey", "Zephyr AI Key", "ai:key", &["api key"]),
+];
+
+/// One idea, two platforms: the words people use for it and the page that has it on each.
+struct Concept {
+    words: &'static [&'static str],
+    windows: &'static str,
+    macos: &'static str,
+}
+
+const fn concept(
+    words: &'static [&'static str],
+    windows: &'static str,
+    macos: &'static str,
+) -> Concept {
+    Concept {
+        words,
+        windows,
+        macos,
+    }
+}
+
+/// Shared vocabulary, so "night shift" finds Night Light on Windows and "startup apps"
+/// finds Login Items on a Mac. Words only one platform uses stay on that page.
+#[rustfmt::skip]
+const CONCEPTS: &[Concept] = &[
+    concept(&["wifi", "wireless"], "win.wifi", "mac.wifi"),
+    concept(&["bluetooth", "pair", "headphones", "airpods"], "win.bluetooth", "mac.bluetooth"),
+    concept(&["display", "screen", "monitor", "resolution", "brightness"], "win.display", "mac.displays"),
+    concept(&["sound", "audio", "volume", "speakers"], "win.sound", "mac.sound"),
+    concept(&["dark mode", "light mode", "accent color"], "win.colors", "mac.appearance"),
+    concept(&["wallpaper", "background", "desktop picture"], "win.background", "mac.wallpaper"),
+    concept(&["night light", "night shift", "blue light"], "win.nightlight", "mac.displays"),
+    concept(&["trackpad", "touchpad", "gestures"], "win.touchpad", "mac.trackpad"),
+    concept(&["do not disturb", "focus"], "win.focus", "mac.focus"),
+    concept(&["startup apps", "login items", "launch at login"], "win.startupapps", "mac.loginitems"),
+    concept(&["default browser"], "win.defaultapps", "mac.dock"),
+    concept(&["camera", "webcam"], "win.camera", "mac.privacy.camera"),
+    concept(&["microphone", "mic"], "win.microphone", "mac.privacy.microphone"),
+    concept(&["location"], "win.location", "mac.privacy.location"),
+    concept(&["battery", "power", "energy saver", "low power"], "win.battery", "mac.battery"),
+    concept(&["storage", "disk space", "free up space"], "win.storage", "mac.storage"),
+    concept(&["update", "software update"], "win.update", "mac.update"),
+    concept(&["printer", "scanner"], "win.printers", "mac.printers"),
+    concept(&["mouse", "pointer speed"], "win.mouse", "mac.mouse"),
+    concept(&["keyboard", "typing"], "win.typing", "mac.keyboard"),
+    concept(&["date", "time", "time zone", "clock"], "win.datetime", "mac.datetime"),
+    concept(&["language", "region"], "win.language", "mac.language"),
+    concept(&["users", "user accounts", "add user"], "win.users", "mac.users"),
+    concept(&["vpn"], "win.vpn", "mac.vpn"),
+    concept(&["hotspot", "tethering", "internet sharing"], "win.hotspot", "mac.sharing"),
+    concept(&["notifications", "alerts"], "win.notifications", "mac.notifications"),
+    concept(&["privacy", "security", "permissions"], "win.privacy", "mac.privacy"),
+    concept(&["network", "internet", "ip address"], "win.network", "mac.network"),
+    concept(&["about", "system info", "specs"], "win.about", "mac.about"),
+    concept(&["accessibility", "text size"], "win.textsize", "mac.accessibility"),
+    concept(&["lock screen"], "win.lockscreen", "mac.lockscreen"),
+    concept(&["backup"], "win.backup", "mac.timemachine"),
+    concept(&["sleep", "screen timeout"], "win.power", "mac.lockscreen"),
 ];
 
 #[rustfmt::skip]
@@ -458,20 +846,19 @@ mod tests {
             assert!(!setting.title.is_empty());
         }
         for setting in ZEPHYR {
-            assert!(matches!(
-                setting.target,
-                Target::Zephyr(
-                    "general"
-                        | "ai"
-                        | "claude"
-                        | "clipboard"
-                        | "shell"
-                        | "notes"
-                        | "destinations"
-                        | "files"
-                        | "history"
-                )
-            ));
+            assert!(matches!(setting.target, Target::Zephyr(_)));
+        }
+        for concept in CONCEPTS {
+            assert!(
+                WINDOWS.iter().any(|s| s.id == concept.windows),
+                "{}",
+                concept.windows
+            );
+            assert!(
+                MACOS.iter().any(|s| s.id == concept.macos),
+                "{}",
+                concept.macos
+            );
         }
         for setting in WINDOWS {
             if let Target::Uri(uri) = setting.target {
@@ -535,5 +922,127 @@ mod tests {
         assert!(is_scope("set"));
         assert!(is_scope("settings"));
         assert!(!is_scope("s"));
+    }
+
+    fn intent_titles(settings: &[Setting], query: &str) -> Vec<&'static str> {
+        intent(settings, query, &[], 0, 3)
+            .into_iter()
+            .map(|found| found.setting.title)
+            .collect()
+    }
+
+    fn all(system: &[Setting]) -> Vec<Setting> {
+        ZEPHYR.iter().chain(system).copied().collect()
+    }
+
+    #[test]
+    fn spelling_variants_and_plurals_fold() {
+        assert_eq!(normalize("Wi-Fi"), "wifi");
+        assert_eq!(normalize("wi fi settings"), "wifi setting");
+        assert_eq!(normalize("Printers & Scanners"), "printer and scanner");
+        assert_eq!(normalize("Displays"), "display");
+        assert_eq!(normalize("access"), "access");
+    }
+
+    #[test]
+    fn a_settings_word_at_either_end_finds_the_page() {
+        for system in [WINDOWS, MACOS] {
+            let catalog = all(system);
+            let wifi = intent_titles(&catalog, "wifi settings");
+            assert_eq!(wifi.first(), Some(&"Wi-Fi"), "{wifi:?}");
+            assert_eq!(
+                intent_titles(&catalog, "settings wifi").first(),
+                Some(&"Wi-Fi")
+            );
+            assert!(intent_titles(&catalog, "display prefs")[0].starts_with("Display"));
+            let dark = intent_titles(&catalog, "settings dark");
+            assert!(["Colors", "Appearance"].contains(&dark[0]), "{dark:?}");
+            assert_eq!(intent_titles(&catalog, "ai settings")[0], "Zephyr AI");
+            assert!(intent_titles(&catalog, "iphone wifi settings not working").is_empty());
+            assert!(intent_titles(&catalog, "wifi").is_empty());
+        }
+    }
+
+    #[test]
+    fn the_os_page_comes_before_zephyrs_unless_the_text_says_zephyr() {
+        let catalog = all(MACOS);
+        assert_eq!(
+            intent_titles(&catalog, "appearance settings")[..2],
+            ["Appearance", "Zephyr Appearance"]
+        );
+        assert_eq!(
+            intent_titles(&catalog, "zephyr appearance settings")[0],
+            "Zephyr Appearance"
+        );
+        assert_eq!(
+            intent_titles(&catalog, "zephyr settings"),
+            ["Zephyr Settings"]
+        );
+    }
+
+    #[test]
+    fn an_exact_page_name_without_a_settings_word_is_found_exactly() {
+        let mac = all(MACOS);
+        assert_eq!(
+            exact(&mac, "bluetooth", &[], 0).unwrap().setting.title,
+            "Bluetooth"
+        );
+        let dark = exact(&mac, "dark mode", &[], 0).unwrap();
+        assert_eq!(
+            (dark.setting.title, dark.keyword),
+            ("Appearance", Some("dark mode"))
+        );
+        let windows = all(WINDOWS);
+        assert_eq!(
+            exact(&windows, "power options", &[], 0)
+                .unwrap()
+                .setting
+                .title,
+            "Power Options"
+        );
+        assert!(exact(&windows, "blue", &[], 0).is_none());
+    }
+
+    #[test]
+    fn a_bare_settings_word_lists_the_usual_pages() {
+        assert!(is_bare("Settings"));
+        assert!(is_bare("prefs"));
+        assert!(!is_bare("wifi settings"));
+        let mac = all(MACOS);
+        let titles: Vec<_> = favorites(&mac, &[], 0, 4).iter().map(|s| s.title).collect();
+        assert_eq!(titles, ["Wi-Fi", "Bluetooth", "Displays", "Sound"]);
+        let opened = [LaunchEntry {
+            app_id: "mac.keyboard".into(),
+            uses: 3,
+            last_used: 0,
+        }];
+        assert_eq!(favorites(&mac, &opened, 0, 4)[0].title, "Keyboard");
+    }
+
+    #[test]
+    fn zephyr_rows_cover_every_settings_section() {
+        // SECTIONS in the Settings window is the source of truth.
+        let view = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../src/settings/SettingsView.vue"
+        ))
+        .unwrap();
+        let start = view.find("const SECTIONS = [").unwrap();
+        let block = &view[start..start + view[start..].find("];").unwrap()];
+        for line in block.lines() {
+            let Some(id) = line
+                .split("id: '")
+                .nth(1)
+                .and_then(|rest| rest.split('\'').next())
+            else {
+                continue;
+            };
+            assert!(
+                ZEPHYR.iter().any(
+                    |setting| matches!(setting.target, Target::Zephyr(section) if section == id)
+                ),
+                "no Zephyr row opens the {id} section"
+            );
+        }
     }
 }

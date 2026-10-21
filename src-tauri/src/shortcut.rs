@@ -181,6 +181,8 @@ mod tests {
         assert!(canonical_shortcut("alt+space").is_ok());
         assert!(canonical_shortcut("command+space").is_ok());
         assert!(canonical_shortcut("ctrl+alt+k").is_ok());
+        // The Settings recorder writes ⌘ as "super".
+        assert!(canonical_shortcut("super+shift+v").is_ok());
         assert!(canonical_shortcut("not a shortcut").is_err());
     }
 }

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+  import { vFit } from '../fit';
   import { computed, nextTick, onMounted, ref, watch } from 'vue';
   import {
     errorMessage,
@@ -247,8 +248,10 @@
     void action.run();
   }
 
+  // Only the commands that fit are shown (v-fit); arrows stay among them.
+  const shown = ref(Infinity);
   function move(delta: number) {
-    const count = recent.value.length;
+    const count = Math.min(recent.value.length, shown.value);
     if (!count) return;
     if (selected.value < 0) selected.value = delta > 0 ? 0 : count - 1;
     else {
@@ -372,7 +375,13 @@
         <p class="shell-status">{{ status }}</p>
       </section>
 
-      <ul v-if="recent.length" class="results" role="listbox" aria-label="Recent commands">
+      <ul
+        v-if="recent.length"
+        v-fit="(count: number) => (shown = count)"
+        class="results"
+        role="listbox"
+        aria-label="Recent commands"
+      >
         <li
           v-for="(command, index) in recent"
           :key="command"

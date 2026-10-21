@@ -203,6 +203,25 @@ pub fn decide(
         };
     }
 
+    // A bare "settings" opens the system's settings app (the app's own Settings when there's none).
+    if settings::is_bare(&parsed.query) {
+        return match catalog.system_settings_app() {
+            Some(app) => Decision::Launch {
+                app_id: app.id.clone(),
+            },
+            None => Decision::OpenSetting {
+                setting_id: "zephyr.settings".into(),
+            },
+        };
+    }
+
+    // "wifi settings": the page, unless an app has exactly this name.
+    if let Some(found) = catalog.setting_intent(&parsed.query).first() {
+        return Decision::OpenSetting {
+            setting_id: found.setting.id.to_string(),
+        };
+    }
+
     if let Some(app) = catalog.preferred(&parsed.query) {
         return Decision::Launch {
             app_id: app.id.clone(),
@@ -369,6 +388,7 @@ mod tests {
             launches: &[],
             file_opens: &[],
             overrides,
+            setting_opens: &[],
             now: 0,
         }
     }
@@ -453,6 +473,85 @@ mod tests {
                 installed(&apps, &OVERRIDES)
             ))
             .contains("google.com")
+        );
+    }
+
+    #[test]
+    fn a_settings_word_opens_the_page_unless_sent_to_the_web_before() {
+        let decide_with = |text: &str, apps: &[App], overrides: &[String]| {
+            decide(
+                text,
+                "google",
+                "google",
+                true,
+                &builtins(),
+                installed(apps, overrides),
+            )
+        };
+        let page = Decision::OpenSetting {
+            setting_id: "win.display".into(),
+        };
+        assert_eq!(decide_with("display settings", &[], &[]), page);
+        assert_eq!(decide_with("settings display", &[], &[]), page);
+        assert_eq!(decide_with("displays prefs", &[], &[]), page);
+        // Picking the web row once keeps this text on the web.
+        let sent = ["display settings".to_string()];
+        assert!(open(&decide_with("display settings", &[], &sent)).contains("google.com"));
+        assert!(
+            open(&decide_with(
+                "iphone display settings not working",
+                &[],
+                &[]
+            ))
+            .contains("google.com")
+        );
+        // An exact page name without a settings word still searches.
+        assert!(open(&decide_with("display", &[], &[])).contains("google.com"));
+        // An app named exactly the text wins.
+        let named = [App {
+            id: "ds".into(),
+            name: "Display Settings".into(),
+        }];
+        assert_eq!(
+            decide_with("display settings", &named, &[]),
+            Decision::Launch {
+                app_id: "ds".into()
+            }
+        );
+    }
+
+    #[test]
+    fn a_bare_settings_word_opens_the_system_settings_app() {
+        let system = [App {
+            id: "system-settings".into(),
+            name: if cfg!(windows) {
+                "Settings"
+            } else {
+                "System Settings"
+            }
+            .into(),
+        }];
+        let decide_with = |apps: &[App]| {
+            decide(
+                "settings",
+                "google",
+                "google",
+                true,
+                &builtins(),
+                installed(apps, &[]),
+            )
+        };
+        assert_eq!(
+            decide_with(&system),
+            Decision::Launch {
+                app_id: "system-settings".into()
+            }
+        );
+        assert_eq!(
+            decide_with(&[]),
+            Decision::OpenSetting {
+                setting_id: "zephyr.settings".into()
+            }
         );
     }
 

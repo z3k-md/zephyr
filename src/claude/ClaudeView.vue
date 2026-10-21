@@ -1,4 +1,5 @@
 <script setup lang="ts">
+  import { vFit } from '../fit';
   import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import {
@@ -182,8 +183,10 @@
     void action.run();
   }
 
+  // Only the jobs that fit are shown (v-fit); arrows stay among them.
+  const shown = ref(Infinity);
   function move(delta: number) {
-    const count = jobs.value.length;
+    const count = Math.min(jobs.value.length, shown.value);
     if (!count) return;
     if (selected.value < 0) selected.value = delta > 0 ? 0 : count - 1;
     else {
@@ -331,7 +334,13 @@
       </li>
     </ul>
 
-    <ul v-else-if="jobs.length" class="results claude-jobs" role="listbox" aria-label="Claude jobs">
+    <ul
+      v-else-if="jobs.length"
+      v-fit="(count: number) => (shown = count)"
+      class="results claude-jobs"
+      role="listbox"
+      aria-label="Claude jobs"
+    >
       <li
         v-for="(item, index) in jobs.slice(0, 8)"
         :key="item.id"

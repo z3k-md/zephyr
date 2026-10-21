@@ -1,4 +1,5 @@
 <script setup lang="ts">
+  import { vFit } from '../fit';
   import { computed, nextTick, onMounted, ref, watch } from 'vue';
   import {
     clipClear,
@@ -45,7 +46,6 @@
     if (!item) return;
     void dragOut({ clip: item.id }).catch((error) => (notice.value = errorMessage(error)));
   });
-  const listEl = ref<HTMLElement | null>(null);
   const query = ref(props.initialQuery);
   const filter = ref('all');
   const items = ref<ClipSummary[]>([]);
@@ -141,14 +141,12 @@
     }
   }
 
+  // Only the items that fit are shown (v-fit); arrows stay among them, and typing narrows.
+  const shown = ref(Infinity);
   function move(delta: number) {
-    if (items.value.length === 0) return;
-    selected.value = (selected.value + delta + items.value.length) % items.value.length;
-    void nextTick(() => {
-      listEl.value
-        ?.querySelector(`[data-index="${selected.value}"]`)
-        ?.scrollIntoView({ block: 'nearest' });
-    });
+    const count = Math.min(items.value.length, shown.value);
+    if (count === 0) return;
+    selected.value = (Math.min(selected.value, count - 1) + delta + count) % count;
   }
 
   async function paste(plain: boolean) {
@@ -354,7 +352,12 @@
     </p>
 
     <div v-else class="clip-body">
-      <ul ref="listEl" class="clip-list" role="listbox" aria-label="Clipboard history">
+      <ul
+        v-fit="(count: number) => (shown = count)"
+        class="clip-list"
+        role="listbox"
+        aria-label="Clipboard history"
+      >
         <template v-for="(item, index) in items" :key="item.id">
           <li v-if="index === 0 && item.pinned" class="clip-group">Pinned</li>
           <li

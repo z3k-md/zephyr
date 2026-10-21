@@ -2,10 +2,9 @@
 
 export const isMac = navigator.userAgent.includes('Mac');
 
-export const MOD = isMac ? '⌘' : 'Ctrl';
+const MOD = isMac ? '⌘' : 'Ctrl';
 export const ALT = isMac ? '⌥' : 'Alt';
 export const CTRL = isMac ? '⌃' : 'Ctrl';
-export const ENTER = '↵';
 
 const ORDER = ['⌃', '⌥', '⇧', '⌘'];
 
@@ -51,4 +50,23 @@ export function shortcutKeys(shortcut: string): string[] {
   const rest = keys.filter((key) => !ORDER.includes(key));
   modifiers.sort((a, b) => ORDER.indexOf(a) - ORDER.indexOf(b));
   return [...modifiers, ...rest];
+}
+
+/**
+ * A pressed shortcut as "ctrl+shift+k": at least one modifier and a letter, number, symbol
+ * or space (function keys too when `functionKeys`); null while it's incomplete.
+ */
+export function captureShortcut(event: KeyboardEvent, functionKeys = false): string | null {
+  const parts: string[] = [];
+  if (event.ctrlKey) parts.push('ctrl');
+  if (event.altKey) parts.push('alt');
+  if (event.shiftKey) parts.push('shift');
+  if (event.metaKey) parts.push('super');
+  if (parts.length === 0) return null;
+  if (['Control', 'Alt', 'Shift', 'Meta'].includes(event.key)) return null;
+  if (event.key === ' ' || event.key === 'Spacebar') parts.push('space');
+  else if (functionKeys && /^F\d{1,2}$/.test(event.key)) parts.push(event.key.toLowerCase());
+  else if (event.key.length === 1) parts.push(event.key.toLowerCase());
+  else return null;
+  return parts.join('+');
 }
