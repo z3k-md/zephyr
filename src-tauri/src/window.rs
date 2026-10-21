@@ -555,7 +555,9 @@ pub(crate) fn glass() -> tauri::utils::config::WindowEffectsConfig {
     glass_for(None)
 }
 
-/// The glass for a frameless window with rounded corners (the update card).
+/// The glass for a frameless window with rounded corners (the update card; Windows gives
+/// it Acrylic through `make_bar_glass`).
+#[cfg(target_os = "macos")]
 pub(crate) fn rounded_glass(radius: f64) -> tauri::utils::config::WindowEffectsConfig {
     glass_for(Some(radius))
 }
@@ -819,19 +821,23 @@ pub fn prewarm_settings(app: &AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_secs(2)).await;
-        if app.get_webview_window("settings").is_none()
-            && let Err(err) = build_settings(&app, None)
-        {
-            log::error!("couldn't prepare Settings: {err}");
-            return;
-        }
+        let built = app.get_webview_window("settings").is_some()
+            || match build_settings(&app, None) {
+                Ok(()) => true,
+                Err(err) => {
+                    log::error!("couldn't prepare Settings: {err}");
+                    false
+                }
+            };
         // WebKit doesn't lay out or paint a page that has never been on screen, so the
         // first open still paid for it. Once loaded, it gets one invisible frame on screen.
         #[cfg(target_os = "macos")]
-        {
+        if built {
             tokio::time::sleep(Duration::from_millis(1500)).await;
             paint_offscreen(&app);
         }
+        #[cfg(not(target_os = "macos"))]
+        let _ = built;
     });
 }
 
