@@ -5,6 +5,8 @@ on:
     branches: [develop]
   pull_request:
     branches: [main, develop]
+  # By hand, when GitHub drops a push event and a commit is left unchecked.
+  workflow_dispatch:
 
 # A newer push to the same branch makes the older run moot.
 concurrency:
