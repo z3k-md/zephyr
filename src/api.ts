@@ -192,11 +192,6 @@ export function showBar(): Promise<void> {
   return invoke('show_bar');
 }
 
-/** Settings painted after being shown; logs the open time. */
-export function settingsPainted(): void {
-  requestAnimationFrame(() => void invoke('settings_painted').catch(() => undefined));
-}
-
 export function hideSettings(): Promise<void> {
   return invoke('hide_settings');
 }
@@ -344,9 +339,7 @@ export function saveNotesShortcut(shortcut: string): Promise<Snapshot> {
 export function pageReady(): void {
   requestAnimationFrame(() =>
     requestAnimationFrame(() => {
-      // How long the page took from the start of its load, for the log.
-      const ms = Math.round(performance.now());
-      void invoke('page_ready', { ms }).catch(() => undefined);
+      void invoke('page_ready').catch(() => undefined);
     })
   );
 }

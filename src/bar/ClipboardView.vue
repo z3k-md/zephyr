@@ -13,6 +13,7 @@
   } from '../api';
   import type { ClipDetail, ClipKind, ClipSummary } from '../types';
   import { dragGesture, dragOut } from './dragOut';
+  import { bytes } from '../format';
 
   const props = defineProps<{ initialQuery: string }>();
   // `picked` means an item was pasted or copied, which ends the clipboard picker.
@@ -311,12 +312,6 @@
     });
   }
 
-  function size(bytes: number): string {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  }
-
   defineExpose({ onKey, refresh });
 </script>
 
@@ -443,7 +438,7 @@
               <dt>Dimensions</dt>
               <dd>{{ detail.image.width }}×{{ detail.image.height }}</dd>
               <dt>Size</dt>
-              <dd>{{ size(detail.image.bytes) }}</dd>
+              <dd>{{ bytes(detail.image.bytes) }}</dd>
             </template>
             <dt>Times copied</dt>
             <dd>{{ detail.copies }}</dd>

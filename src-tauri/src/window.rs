@@ -551,18 +551,13 @@ pub fn open_notes(app: &AppHandle, id: Option<&str>) -> Result<(), String> {
 /// the page adds the purple tint. Until the page paints the window stays hidden.
 pub(crate) const WINDOW_BACKGROUND: tauri::window::Color = tauri::window::Color(0, 0, 0, 0);
 
-/// The theme the windows' glass is made for; Sidebar has its own material.
-static THEME: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
-
 pub(crate) fn glass() -> tauri::utils::config::WindowEffectsConfig {
-    let theme = THEME.lock().map(|theme| theme.clone()).unwrap_or_default();
-    glass_for(&theme, None)
+    glass_for(None)
 }
 
 /// The glass for a frameless window with rounded corners (the update card).
 pub(crate) fn rounded_glass(radius: f64) -> tauri::utils::config::WindowEffectsConfig {
-    let theme = THEME.lock().map(|theme| theme.clone()).unwrap_or_default();
-    glass_for(&theme, Some(radius))
+    glass_for(Some(radius))
 }
 
 /// macOS: Settings and setup open on whichever Space is current (a second desktop, a
@@ -609,54 +604,24 @@ pub fn regular_while_open(app: &AppHandle) {
     let _ = app;
 }
 
-/// The native glass under a window. Sidebar uses macOS's own sidebar material (the System
-/// Settings sidebar) and a graphite-tinted Acrylic on Windows; the other themes share the
-/// HUD blur and tint it in the page.
-fn glass_for(theme: &str, radius: Option<f64>) -> tauri::utils::config::WindowEffectsConfig {
+/// The native glass under a window, the same for every theme: macOS's sidebar material (the
+/// System Settings sidebar) and a graphite-tinted Acrylic on Windows. Themes only tint it in
+/// the page.
+fn glass_for(radius: Option<f64>) -> tauri::utils::config::WindowEffectsConfig {
     use tauri::window::{Effect, EffectState, EffectsBuilder};
-    let sidebar = theme == "sidebar";
     let mut effects = EffectsBuilder::new()
-        .effect(if sidebar {
-            Effect::Sidebar
-        } else {
-            Effect::HudWindow
-        })
+        .effect(Effect::Sidebar)
         .effect(Effect::Acrylic)
-        .state(EffectState::Active);
-    if sidebar {
-        effects = effects.color(tauri::window::Color(43, 43, 48, 150));
-    }
+        .state(EffectState::Active)
+        .color(tauri::window::Color(43, 43, 48, 150));
     if let Some(radius) = radius {
         effects = effects.radius(radius);
     }
     effects.build()
 }
 
-/// Gives every open window the glass for `theme`; windows made later pick it up from
-/// `glass`. The old effect is cleared first, since macOS would otherwise stack the two.
-pub fn apply_theme(app: &AppHandle, theme: &str) {
-    if let Ok(mut current) = THEME.lock() {
-        *current = theme.to_string();
-    }
-    for (label, window) in app.webview_windows() {
-        // The snap grid is a clear, click-through overlay with no glass.
-        if label == "grid" {
-            continue;
-        }
-        // Frameless windows keep their rounded corners: the bar's 16px (tauri.conf.json)
-        // and the update card's 12px.
-        let radius = match label.as_str() {
-            "main" => Some(16.0),
-            "update" => Some(12.0),
-            _ => None,
-        };
-        let _ = window.set_effects(None);
-        let _ = window.set_effects(glass_for(theme, radius));
-    }
-}
-
-/// The bar's effect in tauri.conf.json is macOS's HUD blur, which Windows ignores, leaving
-/// the tint over the bare desktop. Windows gets Acrylic instead, kept dark to match the
+/// The bar's effect in tauri.conf.json is macOS's sidebar material, which Windows ignores,
+/// leaving the tint over the bare desktop. Windows gets Acrylic instead, kept dark to match the
 /// theme, with the system's rounded corners clipping it (Windows rounds at 8px, so the page
 /// matches that radius there).
 #[cfg(windows)]
@@ -703,14 +668,10 @@ pub(crate) fn reveal_soon(app: &AppHandle, window: tauri::WebviewWindow) {
 }
 
 /// Called by a settings or notes page after its first paint.
-pub fn page_ready(app: &AppHandle, label: &str, page_ms: Option<u64>) {
-    if label == "settings" {
-        log::info!("settings page ready in {} ms", page_ms.unwrap_or_default());
-        // Built ahead of time: stays hidden until asked for.
-        if !SETTINGS_WANTED.load(std::sync::atomic::Ordering::SeqCst) {
-            return;
-        }
-        settings_painted();
+pub fn page_ready(app: &AppHandle, label: &str) {
+    // Settings is built ahead of time: it stays hidden until asked for.
+    if label == "settings" && !SETTINGS_WANTED.load(std::sync::atomic::Ordering::SeqCst) {
+        return;
     }
     // The bar shows only when summoned; its page reports in once, for the startup timing.
     if label == "main" {
@@ -729,8 +690,6 @@ pub fn page_ready(app: &AppHandle, label: &str, page_ms: Option<u64>) {
     }
 }
 
-/// When Settings was last asked for, to log how long it took to show.
-static SETTINGS_OPENED: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
 /// Whether the Settings window should appear once its page is ready (false while it's
 /// being built in the background ahead of time).
 static SETTINGS_WANTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -738,9 +697,6 @@ static SETTINGS_WANTED: std::sync::atomic::AtomicBool = std::sync::atomic::Atomi
 /// Opens or focuses the settings window, scrolled to `section` when one is given. The
 /// window is built ahead of time and only ever hidden, so this is just show and focus.
 pub fn open_settings(app: &AppHandle, section: Option<&str>) -> Result<(), String> {
-    if let Ok(mut opened) = SETTINGS_OPENED.lock() {
-        *opened = Some(std::time::Instant::now());
-    }
     SETTINGS_WANTED.store(true, std::sync::atomic::Ordering::SeqCst);
     if let Some(window) = app.get_webview_window("settings") {
         let _ = window.emit("settings-shown", section.unwrap_or_default());
@@ -768,9 +724,6 @@ pub fn show_settings_now(app: &AppHandle) -> bool {
     let Some(window) = app.get_webview_window("settings") else {
         return false;
     };
-    if let Ok(mut opened) = SETTINGS_OPENED.lock() {
-        *opened = Some(std::time::Instant::now());
-    }
     SETTINGS_WANTED.store(true, std::sync::atomic::Ordering::SeqCst);
     let _ = window.unminimize();
     let _ = window.show();
@@ -915,18 +868,6 @@ fn paint_offscreen(app: &AppHandle) {
             ns_window.setAlphaValue(1.0);
         });
     });
-}
-
-/// The Settings page painted after being shown: logs how long from the click.
-pub fn settings_painted() {
-    if let Ok(mut opened) = SETTINGS_OPENED.lock()
-        && let Some(at) = opened.take()
-    {
-        log::info!(
-            "settings painted {:.1} ms after the click",
-            at.elapsed().as_secs_f64() * 1000.0
-        );
-    }
 }
 
 // open_settings can be called from an async command's worker thread; the Win32 foreground

@@ -3,6 +3,7 @@
   import { errorMessage, filePreview } from '../api';
   import type { FilePreview } from '../types';
   import RowIcon from './RowIcon.vue';
+  import { bytes } from '../format';
 
   // The preview beside the results (Shift+Space on a file): a picture, the first lines of a
   // text file, or the file's size, date and folder.
@@ -28,18 +29,6 @@
     { immediate: true }
   );
 
-  function size(bytes: number): string {
-    if (bytes < 1024) return `${bytes} bytes`;
-    const units = ['KB', 'MB', 'GB', 'TB'];
-    let value = bytes / 1024;
-    let unit = 0;
-    while (value >= 1024 && unit < units.length - 1) {
-      value /= 1024;
-      unit += 1;
-    }
-    return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
-  }
-
   function date(seconds: number): string {
     if (!seconds) return '';
     return new Date(seconds * 1000).toLocaleString(undefined, {
@@ -59,7 +48,7 @@
     <header class="file-preview-head">
       <strong>{{ name }}</strong>
       <span v-if="preview && !(preview.kind === 'info' && preview.folder)" class="hint-text">
-        {{ size(preview.size) }}
+        {{ bytes(preview.size) }}
       </span>
     </header>
     <div class="file-preview-body">
@@ -75,7 +64,7 @@
           <dd>{{ preview.folder ? 'Folder' : 'File' }}</dd>
           <template v-if="!preview.folder">
             <dt>Size</dt>
-            <dd>{{ size(preview.size) }}</dd>
+            <dd>{{ bytes(preview.size) }}</dd>
           </template>
           <dt>Modified</dt>
           <dd>{{ date(preview.modified) }}</dd>

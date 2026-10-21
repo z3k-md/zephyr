@@ -167,7 +167,6 @@ pub fn run() {
                 log::error!("tray setup failed: {err}");
             }
 
-            window::apply_theme(app.handle(), &snapshot.theme);
             window::prewarm_settings(app.handle());
             // First run (or every launch in dev, when switched on): setup before first use.
             let show_setup = !snapshot.onboarding_done
@@ -263,7 +262,6 @@ pub fn run() {
             commands::save_show_stats,
             commands::save_ai_choice,
             commands::open_onboarding,
-            commands::settings_painted,
             commands::hide_settings,
             commands::bar_move,
             commands::bar_move_end,

@@ -805,12 +805,6 @@ pub fn hide_settings(app: AppHandle) {
     window::hide_settings(&app);
 }
 
-/// The Settings page's first frame after being shown, for the open-time log.
-#[tauri::command]
-pub fn settings_painted() {
-    window::settings_painted();
-}
-
 #[tauri::command]
 pub async fn check_for_updates(app: AppHandle) -> Result<String, String> {
     updater::check_for_updates(&app).await
@@ -1204,8 +1198,8 @@ pub fn save_notes_shortcut(
 
 /// A settings or notes page has drawn and can be shown.
 #[tauri::command]
-pub fn page_ready(app: AppHandle, window: tauri::WebviewWindow, ms: Option<u64>) {
-    window::page_ready(&app, window.label(), ms);
+pub fn page_ready(app: AppHandle, window: tauri::WebviewWindow) {
+    window::page_ready(&app, window.label());
 }
 
 /// Records a finished typing test; true when it is a new personal best for its mode.
@@ -1429,7 +1423,6 @@ pub fn save_theme(
         persisted.theme_chosen = true;
         Ok(())
     })?;
-    window::apply_theme(&app, &snapshot.theme);
     publish(&app, snapshot)
 }
 

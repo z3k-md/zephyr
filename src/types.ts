@@ -520,7 +520,6 @@ export interface ResourceSnapshot {
   processes: number;
   /** Seconds since the computer started. */
   uptime: number;
-  tickMs: number;
 }
 
 export type ResourceSort = 'cpu' | 'memory' | 'disk' | 'name';

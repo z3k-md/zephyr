@@ -630,10 +630,7 @@
           ↵ switch · {{ mod }}⌫ quit · {{ alt }}{{ mod }}⌫ force · Tab sort · {{ mod }}K actions
         </template>
       </span>
-      <span
-        v-if="data"
-        :title="`${data.processes} processes · read in ${data.tickMs.toFixed(1)} ms`"
-      >
+      <span v-if="data" :title="`${data.processes} processes`">
         {{ data.totals.diskTotal ? `${bytes(data.totals.diskFree)} free · ` : '' }}up
         {{ uptime(data.uptime) }}
       </span>

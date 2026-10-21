@@ -34,9 +34,9 @@
 /* Settings > Appearance palettes. Each swaps the glass tint, the selection fill and the
    accent; text, borders and fills stay neutral so every palette reads the same way. The
    default (violet) is the :root block above. */
-/* Sidebar: the System Settings sidebar. The window's native sidebar material does the work,
-   so the tint is light and neutral; the selection is a solid accent pill with white text,
-   following the system accent color where the webview knows it. */
+/* Sidebar: the System Settings sidebar. Every theme sits on the same native sidebar material;
+   this one lets it show through, with a light neutral tint, and selects with a solid accent
+   pill and white text, following the system accent color where the webview knows it. */
 :root[data-theme='sidebar'] {
   --glass: linear-gradient(180deg, rgba(44, 44, 48, 0.32) 0%, rgba(34, 34, 38, 0.42) 100%);
   --glass-strong: linear-gradient(180deg, rgba(42, 42, 46, 0.55) 0%, rgba(32, 32, 36, 0.62) 100%);
@@ -2137,7 +2137,7 @@ textarea.query {
 }
 
 /* First-run setup: a step train on top, one step in the middle, and a footer that is
-   always on screen. The window is fixed and nothing in it scrolls. */
+   always on screen. The window is fixed; only the middle scrolls (without a bar). */
 .settings.onboarding {
   display: flex;
   flex-direction: column;
@@ -2241,7 +2241,13 @@ textarea.query {
 .onboarding-body {
   flex: 1 1 auto;
   min-height: 0;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.onboarding-body::-webkit-scrollbar {
+  display: none;
 }
 
 .onboarding-step {

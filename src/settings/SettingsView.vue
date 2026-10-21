@@ -29,7 +29,6 @@
     saveShowStats,
     saveAiChoice,
     openOnboarding,
-    settingsPainted,
     hideSettings,
     saveOnboardingEveryLaunch,
     chatgptAccount,
@@ -219,7 +218,7 @@
     );
     // The window is built ahead of time and only hidden on close, so opening it is just
     // showing it: jump to the asked-for section (the bar's !set names one; by URL when it
-    // creates this window), report the paint, then catch up on data.
+    // creates this window), then catch up on data.
     unlistens.push(
       await listen<string>('settings-shown', (event) => {
         if (event.payload) void revealSection(event.payload);
@@ -227,7 +226,6 @@
           search.value = '';
           paneEl.value?.scrollTo({ top: 0 });
         }
-        settingsPainted();
         window.setTimeout(() => {
           void refresh();
           void loadChatgpt();

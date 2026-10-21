@@ -66,8 +66,6 @@ pub struct Snapshot {
     pub processes: usize,
     /// Seconds since the computer started.
     pub uptime: u64,
-    /// How long this tick took, for tuning.
-    pub tick_ms: f64,
 }
 
 struct Table {
@@ -232,7 +230,6 @@ fn home_short(path: &str) -> String {
 
 /// The current tick: totals, the minute of history, and up to `limit` rows.
 pub fn snapshot(sort: &str, filter: &str, limit: usize) -> Snapshot {
-    let started = Instant::now();
     let totals = stats::totals();
     let mut guard = TABLE
         .lock()
@@ -292,7 +289,6 @@ pub fn snapshot(sort: &str, filter: &str, limit: usize) -> Snapshot {
         rows,
         processes,
         uptime: System::uptime(),
-        tick_ms: started.elapsed().as_secs_f64() * 1000.0,
     }
 }
 

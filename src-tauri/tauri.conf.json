@@ -32,7 +32,7 @@
         "center": false,
         "windowEffects": {
           "effects": [
-            "hudWindow"
+            "sidebar"
           ],
           "state": "active",
           "radius": 16
