@@ -98,7 +98,12 @@ const links = [];
 for (const asset of assets) {
   const installer = installerFor(asset.name, version);
   const label = installer?.label ?? updaterLabel(asset.name);
-  if (installer) links.push({ ...installer, url: asset.browser_download_url });
+  // Built from the tag: a draft's browser_download_url names an "untagged-…" path that 404s
+  // once the release is published.
+  const url = `https://github.com/${GITHUB_REPOSITORY}/releases/download/${encodeURIComponent(
+    release.tag_name
+  )}/${encodeURIComponent(asset.name)}`;
+  if (installer) links.push({ ...installer, url });
   if (!label || asset.label === label) continue;
   console.log(`${asset.name} -> ${label}`);
   if (!DRY_RUN) {
