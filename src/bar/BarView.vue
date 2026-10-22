@@ -608,8 +608,6 @@
   );
 
   onMounted(async () => {
-    // Only logs the startup timing; the bar still shows when it's summoned.
-    pageReady();
     try {
       snapshot.value = await getSnapshot();
       armedId.value = snapshot.value.defaultDestinationId;
@@ -748,8 +746,17 @@
       observer.observe(root.value);
       syncHeight();
     }
+    // One sample now, so the footer is already there the first time the bar opens instead of
+    // popping in a second later.
+    if (snapshot.value?.showStats !== false) {
+      void systemStats()
+        .then((next) => (stats.value ??= next))
+        .catch(() => undefined);
+    }
     await focusInput();
     scheduleSuggest();
+    // Drawn with its content, the bar goes back off screen until it's summoned (window.rs).
+    pageReady();
   });
 
   onUnmounted(() => {

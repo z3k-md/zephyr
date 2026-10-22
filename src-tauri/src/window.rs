@@ -429,7 +429,8 @@ pub fn show_bar(app: &AppHandle) {
         return;
     };
 
-    let was_visible = window.is_visible().unwrap_or(false);
+    // Still being drawn off screen at startup counts as hidden.
+    let was_visible = !unseen::finish(app, &window) && window.is_visible().unwrap_or(false);
     let generation = SHOW_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     SUPPRESS_BLUR.store(true, Ordering::SeqCst);
 
@@ -477,8 +478,7 @@ pub fn show_bar(app: &AppHandle) {
 pub fn toggle_bar(app: &AppHandle) {
     let open = app
         .get_webview_window("main")
-        .and_then(|window| window.is_visible().ok())
-        .unwrap_or(false);
+        .is_some_and(|window| !unseen::drawing(&window) && window.is_visible().unwrap_or(false));
     if open {
         dismiss_bar(app);
     } else {
@@ -650,12 +650,13 @@ pub fn make_bar_glass(window: &tauri::WebviewWindow) -> Result<(), String> {
 }
 
 /// Shows a window built hidden once its page says it has drawn, or after a moment if it
-/// never does.
+/// never does. Meanwhile it draws unseen, so it never appears blank.
 pub(crate) fn reveal_soon(app: &AppHandle, window: tauri::WebviewWindow) {
+    unseen::draw(app, &window);
     let app = app.clone();
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(1500));
-        if !window.is_visible().unwrap_or(true) {
+        if unseen::finish(&app, &window) || !window.is_visible().unwrap_or(true) {
             log::info!(
                 "{} never reported in; shown by the 1.5 s fallback",
                 window.label()
@@ -675,13 +676,24 @@ pub fn page_ready(app: &AppHandle, label: &str) {
     if label == "settings" && !SETTINGS_WANTED.load(std::sync::atomic::Ordering::SeqCst) {
         return;
     }
-    // The bar shows only when summoned; its page reports in once, for the startup timing.
+    // The bar shows only when summoned; its page reports in once, drawn, and goes back off
+    // screen until then.
     if label == "main" {
         crate::startup::mark("bar page loaded");
+        if let Some(window) = app.get_webview_window(label)
+            && unseen::drawing(&window)
+        {
+            // A moment longer, for the first results to draw too.
+            let app = app.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(300));
+                unseen::put_away(&app, &window);
+            });
+        }
         return;
     }
     if let Some(window) = app.get_webview_window(label)
-        && !window.is_visible().unwrap_or(true)
+        && (unseen::finish(app, &window) || !window.is_visible().unwrap_or(true))
     {
         let _ = window.show();
         regular_while_open(app);
@@ -1267,4 +1279,116 @@ mod tests {
             (-2560, 0)
         );
     }
+}
+
+/// macOS: WebKit neither paints a page nor runs its animation frames while the window has
+/// never been on screen, so a window built hidden showed up blank and then flickered as it
+/// drew, and its page couldn't report that it had drawn. Until it has, the window sits on
+/// screen fully transparent, behind everything, letting clicks through.
+mod unseen {
+    use std::collections::HashSet;
+    use std::sync::Mutex;
+
+    use tauri::AppHandle;
+
+    static DRAWING: Mutex<Option<HashSet<String>>> = Mutex::new(None);
+
+    pub fn drawing(window: &tauri::WebviewWindow) -> bool {
+        DRAWING
+            .lock()
+            .is_ok_and(|set| set.as_ref().is_some_and(|set| set.contains(window.label())))
+    }
+
+    /// Puts `window` on screen, unseen, so its page draws.
+    pub fn draw(app: &AppHandle, window: &tauri::WebviewWindow) {
+        if !cfg!(target_os = "macos") {
+            return;
+        }
+        if let Ok(mut set) = DRAWING.lock() {
+            set.get_or_insert_with(HashSet::new)
+                .insert(window.label().to_string());
+        }
+        set_unseen(app, window, true);
+    }
+
+    /// Makes the window seeable again (still where it is); true if it was being drawn unseen.
+    pub fn finish(app: &AppHandle, window: &tauri::WebviewWindow) -> bool {
+        let was = stop(window);
+        if was {
+            set_unseen(app, window, false);
+        }
+        was
+    }
+
+    /// Takes a window drawn unseen back off screen, then makes it seeable for next time; true
+    /// if it was being drawn unseen.
+    pub fn put_away(app: &AppHandle, window: &tauri::WebviewWindow) -> bool {
+        let was = stop(window);
+        #[cfg(target_os = "macos")]
+        if was {
+            use objc2_app_kit::NSWindow;
+            let Ok(pointer) = window.ns_window() else {
+                return was;
+            };
+            let pointer = pointer as usize;
+            let _ = app.run_on_main_thread(move || {
+                // SAFETY: the window's live NSWindow, used on the main thread. Off screen
+                // first, so it never shows for a frame on the way.
+                let ns_window = unsafe { &*(pointer as *const NSWindow) };
+                ns_window.orderOut(None);
+                ns_window.setAlphaValue(1.0);
+                ns_window.setIgnoresMouseEvents(false);
+            });
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = app;
+        was
+    }
+
+    fn stop(window: &tauri::WebviewWindow) -> bool {
+        DRAWING
+            .lock()
+            .is_ok_and(|mut set| set.as_mut().is_some_and(|set| set.remove(window.label())))
+    }
+
+    fn set_unseen(app: &AppHandle, window: &tauri::WebviewWindow, unseen: bool) {
+        #[cfg(target_os = "macos")]
+        {
+            use objc2_app_kit::NSWindow;
+            let Ok(pointer) = window.ns_window() else {
+                return;
+            };
+            let pointer = pointer as usize;
+            let _ = app.run_on_main_thread(move || {
+                // SAFETY: the window's live NSWindow, used on the main thread.
+                let ns_window = unsafe { &*(pointer as *const NSWindow) };
+                ns_window.setIgnoresMouseEvents(unseen);
+                ns_window.setAlphaValue(if unseen { 0.0 } else { 1.0 });
+                if unseen {
+                    ns_window.orderBack(None);
+                }
+            });
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = (app, window, unseen);
+    }
+}
+
+/// macOS: draws the bar off screen once at startup, so the first summon shows a page that has
+/// already painted. Its page reporting in puts it away again; if it never does, a fallback does.
+pub fn draw_bar_unseen(app: &AppHandle) {
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    unseen::draw(app, &window);
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(5));
+        if unseen::put_away(&app, &window) {
+            log::info!("the bar never reported in; put away by the 5 s fallback");
+        }
+    });
 }

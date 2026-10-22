@@ -211,6 +211,7 @@ pub fn run() {
                     _ => {}
                 });
                 let _ = main_window.hide();
+                window::draw_bar_unseen(app.handle());
             }
 
             note_windows::restore(app.handle());
