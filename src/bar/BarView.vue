@@ -657,6 +657,12 @@
       })
     );
     unlistens.push(
+      // Startup's unseen draw, again once the apps are found, so the first summon has them.
+      await listen('bar-redraw', () => {
+        if (!query.value) scheduleSuggest();
+      })
+    );
+    unlistens.push(
       await listen('bar-hidden', () => {
         hiddenAt = Date.now();
         stopStats();

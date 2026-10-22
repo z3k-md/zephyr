@@ -304,6 +304,11 @@ impl AppIndex {
             .and_then(|apps| apps.iter().find(|app| app.id == id).cloned())
     }
 
+    /// Whether a scan has finished since startup.
+    pub fn scanned(&self) -> bool {
+        self.scanned_at.lock().is_ok_and(|at| at.is_some())
+    }
+
     /// Scans again at the next chance, as after Steam games are turned on or off.
     pub fn rescan(index: &'static AppIndex) {
         if let Ok(mut at) = index.scanned_at.lock() {

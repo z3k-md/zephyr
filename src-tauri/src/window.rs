@@ -683,9 +683,16 @@ pub fn page_ready(app: &AppHandle, label: &str) {
         if let Some(window) = app.get_webview_window(label)
             && unseen::drawing(&window)
         {
-            // A moment longer, for the first results to draw too.
+            // Its first list can predate the app scan, so once that's done it draws the list
+            // again, and gets a moment longer for that to paint.
             let app = app.clone();
             std::thread::spawn(move || {
+                let started = std::time::Instant::now();
+                while !crate::apps::index().scanned() && started.elapsed() < Duration::from_secs(3)
+                {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                let _ = app.emit_to("main", "bar-redraw", ());
                 std::thread::sleep(Duration::from_millis(300));
                 unseen::put_away(&app, &window);
             });
@@ -1285,6 +1292,10 @@ mod tests {
 /// never been on screen, so a window built hidden showed up blank and then flickered as it
 /// drew, and its page couldn't report that it had drawn. Until it has, the window sits on
 /// screen fully transparent, behind everything, letting clicks through.
+///
+/// Windows: a WebView2 window's first show put up a stale frame and faded in from it, so
+/// there the window is shown cloaked (DWM composes it but never puts it on screen) and
+/// without focus until its page has drawn.
 mod unseen {
     use std::collections::HashSet;
     use std::sync::Mutex;
@@ -1301,7 +1312,7 @@ mod unseen {
 
     /// Puts `window` on screen, unseen, so its page draws.
     pub fn draw(app: &AppHandle, window: &tauri::WebviewWindow) {
-        if !cfg!(target_os = "macos") {
+        if !cfg!(any(target_os = "macos", windows)) {
             return;
         }
         if let Ok(mut set) = DRAWING.lock() {
@@ -1340,7 +1351,24 @@ mod unseen {
                 ns_window.setIgnoresMouseEvents(false);
             });
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(windows)]
+        if was {
+            use windows::Win32::UI::WindowsAndMessaging::{SW_HIDE, ShowWindow};
+            let Ok(hwnd) = window.hwnd() else {
+                return was;
+            };
+            let hwnd = hwnd.0 as isize;
+            let _ = app.run_on_main_thread(move || {
+                let hwnd = windows::Win32::Foundation::HWND(hwnd as *mut _);
+                // SAFETY: the window's live handle, on the thread that owns it. Hidden
+                // first, so it never shows for a frame on the way.
+                unsafe {
+                    let _ = ShowWindow(hwnd, SW_HIDE);
+                }
+                cloak(hwnd, false);
+            });
+        }
+        #[cfg(not(any(target_os = "macos", windows)))]
         let _ = app;
         was
     }
@@ -1369,15 +1397,50 @@ mod unseen {
                 }
             });
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(windows)]
+        {
+            use windows::Win32::UI::WindowsAndMessaging::{SW_SHOWNOACTIVATE, ShowWindow};
+            let Ok(hwnd) = window.hwnd() else {
+                return;
+            };
+            let hwnd = hwnd.0 as isize;
+            let _ = app.run_on_main_thread(move || {
+                let hwnd = windows::Win32::Foundation::HWND(hwnd as *mut _);
+                cloak(hwnd, unseen);
+                if unseen {
+                    // Shown behind Tauri's back, so it still counts the window hidden and its
+                    // own show later goes through. SAFETY: live handle, owning thread.
+                    unsafe {
+                        let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+                    }
+                }
+            });
+        }
+        #[cfg(not(any(target_os = "macos", windows)))]
         let _ = (app, window, unseen);
+    }
+
+    #[cfg(windows)]
+    fn cloak(hwnd: windows::Win32::Foundation::HWND, on: bool) {
+        use windows::Win32::Graphics::Dwm::{DWMWA_CLOAK, DwmSetWindowAttribute};
+        use windows::core::BOOL;
+        let value = BOOL::from(on);
+        // SAFETY: a live window handle and a BOOL-sized attribute.
+        unsafe {
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_CLOAK,
+                &value as *const _ as *const _,
+                std::mem::size_of::<BOOL>() as u32,
+            );
+        }
     }
 }
 
-/// macOS: draws the bar off screen once at startup, so the first summon shows a page that has
-/// already painted. Its page reporting in puts it away again; if it never does, a fallback does.
+/// Draws the bar unseen once at startup, so the first summon shows a page that has already
+/// painted. Its page reporting in puts it away again; if it never does, a fallback does.
 pub fn draw_bar_unseen(app: &AppHandle) {
-    if !cfg!(target_os = "macos") {
+    if !cfg!(any(target_os = "macos", windows)) {
         return;
     }
     let Some(window) = app.get_webview_window("main") else {
