@@ -13,7 +13,7 @@
     resourcesSnapshot,
     resourcesSwitch,
   } from '../api';
-  import type { ResourceRow, ResourceSnapshot, ResourceSort } from '../types';
+  import type { ResourcePoint, ResourceRow, ResourceSnapshot, ResourceSort } from '../types';
 
   // System Resources: the machine's CPU, memory and network over the last minute, and the
   // apps using them, live. Rows are apps (helpers counted in) or command-line programs; Enter
@@ -363,22 +363,32 @@
   }
 
   /** A minute of values as a filled sparkline in a 120×28 box, newest at the right. */
-  function spark(values: number[], max: number): { line: string; area: string } {
+  /**
+   * The last minute as a filled sparkline in a 120×28 box, now at the right edge, placed by
+   * each point's age; a gap of more than a few seconds (the computer asleep) breaks the line.
+   */
+  function spark(points: ResourcePoint[], value: (point: ResourcePoint) => number, max: number) {
     const width = 120;
     const height = 28;
     const top = Math.max(max, 1e-9);
-    const step = width / 59;
-    const offset = 60 - values.length;
-    const points = values.map((value, index) => {
-      const x = (offset + index) * step;
-      const y = height - 1 - Math.min(1, value / top) * (height - 3);
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
-    });
-    if (points.length === 0) return { line: '', area: '' };
-    const first = (offset * step).toFixed(1);
+    const runs: string[][] = [];
+    let previous: number | null = null;
+    for (const point of points) {
+      if (previous === null || previous - point.age > 3) runs.push([]);
+      previous = point.age;
+      const x = width - (Math.min(point.age, 60) / 60) * width;
+      const y = height - 1 - Math.min(1, value(point) / top) * (height - 3);
+      runs[runs.length - 1].push(`${x.toFixed(1)},${y.toFixed(1)}`);
+    }
     return {
-      line: `M${points.join(' L')}`,
-      area: `M${first},${height} L${points.join(' L')} L${width},${height} Z`,
+      line: runs.map((run) => `M${run.join(' L')}`).join(' '),
+      area: runs
+        .map((run) => {
+          const first = run[0].split(',')[0];
+          const last = run[run.length - 1].split(',')[0];
+          return `M${first},${height} L${run.join(' L')} L${last},${height} Z`;
+        })
+        .join(' '),
     };
   }
 
@@ -386,26 +396,20 @@
     const snapshot = data.value;
     if (!snapshot) return null;
     const history = snapshot.history;
-    const traffic = history.map((point) => point.down + point.up);
+    const traffic = (point: ResourcePoint) => point.down + point.up;
     const totals = snapshot.totals;
     return {
       cpu: {
         value: percent(totals.cpu),
-        spark: spark(
-          history.map((p) => p.cpu),
-          100
-        ),
+        spark: spark(history, (p) => p.cpu, 100),
       },
       memory: {
         value: `${bytes(totals.memoryUsed)} of ${bytes(totals.memoryTotal, 0)}`,
-        spark: spark(
-          history.map((p) => p.memory),
-          1
-        ),
+        spark: spark(history, (p) => p.memory, 1),
       },
       network: {
         value: `↓ ${bytes(totals.netDown)}/s · ↑ ${bytes(totals.netUp)}/s`,
-        spark: spark(traffic, Math.max(...traffic, 64 * 1024)),
+        spark: spark(history, traffic, Math.max(...history.map(traffic), 64 * 1024)),
       },
     };
   });

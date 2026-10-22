@@ -136,6 +136,8 @@ pub fn run() {
                     log::error!("{err}");
                 }
             });
+            // The minute of totals System Resources graphs is always being kept.
+            stats::start();
             // The settings catalog reads every System Settings pane's plist on macOS (most of a
             // second); built now, the first search doesn't wait on it.
             std::thread::spawn(|| {

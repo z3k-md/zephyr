@@ -1,10 +1,11 @@
-//! Live system stats for the bar's footer: CPU, memory, free space on the system disk and
-//! network throughput. Sampled only when the bar asks (about once a second while it is
-//! showing), so nothing runs in the background.
+//! Live system stats for the bar's footer and System Resources: CPU, memory, free space on
+//! the system disk and network throughput. A background thread reads them once a second
+//! (about a millisecond each: totals only, never the process list), so Resources always
+//! opens with the last minute.
 
 use std::path::Path;
 use std::sync::Mutex;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use sysinfo::{Disks, Networks, System};
@@ -41,14 +42,18 @@ struct Sampler {
     disks: Disks,
     networks: Networks,
     last: Instant,
-    /// The last minute of totals, one a sample, so System Resources opens with history.
-    history: std::collections::VecDeque<Point>,
+    /// The latest reading, which the footer and Resources show.
+    latest: Option<Stats>,
+    /// The last minute of totals, with when each was read.
+    history: std::collections::VecDeque<(Instant, Point)>,
 }
 
 /// One sample of the totals, for the sparklines.
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Point {
+    /// Seconds ago, so a gap (the computer asleep) shows as one.
+    pub age: f32,
     pub cpu: f32,
     /// Memory in use, 0–1.
     pub memory: f32,
@@ -56,19 +61,39 @@ pub struct Point {
     pub up: u64,
 }
 
-const HISTORY: usize = 60;
+/// How far back the sparklines go, and how often the thread reads.
+const WINDOW: Duration = Duration::from_secs(60);
+const EVERY: Duration = Duration::from_secs(1);
 
 /// The last minute of totals, oldest first.
 pub fn history() -> Vec<Point> {
-    SAMPLER
-        .lock()
-        .ok()
-        .and_then(|guard| {
-            guard
-                .as_ref()
-                .map(|sampler| sampler.history.iter().copied().collect())
+    let Ok(guard) = SAMPLER.lock() else {
+        return Vec::new();
+    };
+    let Some(sampler) = guard.as_ref() else {
+        return Vec::new();
+    };
+    sampler
+        .history
+        .iter()
+        .map(|(at, point)| Point {
+            age: at.elapsed().as_secs_f32(),
+            ..*point
         })
-        .unwrap_or_default()
+        .filter(|point| point.age <= WINDOW.as_secs_f32())
+        .collect()
+}
+
+/// Starts the background reading, once a second for the life of the app.
+pub fn start() {
+    std::thread::spawn(|| {
+        loop {
+            if let Ok(mut guard) = SAMPLER.lock() {
+                record(guard.get_or_insert_with(Sampler::new));
+            }
+            std::thread::sleep(EVERY);
+        }
+    });
 }
 
 /// Logical cores, for CPU percentages.
@@ -87,23 +112,32 @@ fn system_mount() -> std::path::PathBuf {
     "/".into()
 }
 
-/// One sample. CPU usage and network rates compare against the previous call, so the very
-/// first sample reads them as zero.
+/// The latest reading, with the dev build's own use read now.
 pub fn sample() -> Stats {
-    sample_with(cfg!(debug_assertions))
+    let mut stats = totals();
+    if cfg!(debug_assertions)
+        && let Ok(mut guard) = SAMPLER.lock()
+        && let Some(sampler) = guard.as_mut()
+    {
+        stats.app = Some(app_usage(&mut sampler.system));
+    }
+    stats
 }
 
-/// The same, without the dev build's own use, which walks every process (System Resources
-/// walks them itself).
+/// The latest reading, without the dev build's own use, which walks every process.
 pub fn totals() -> Stats {
-    sample_with(false)
-}
-
-fn sample_with(own_use: bool) -> Stats {
     let Ok(mut guard) = SAMPLER.lock() else {
         return empty();
     };
-    let sampler = guard.get_or_insert_with(|| {
+    let sampler = guard.get_or_insert_with(Sampler::new);
+    match &sampler.latest {
+        Some(stats) => stats.clone(),
+        None => record(sampler),
+    }
+}
+
+impl Sampler {
+    fn new() -> Self {
         let mut system = System::new();
         system.refresh_cpu_usage();
         Sampler {
@@ -111,9 +145,15 @@ fn sample_with(own_use: bool) -> Stats {
             disks: Disks::new_with_refreshed_list(),
             networks: Networks::new_with_refreshed_list(),
             last: Instant::now(),
-            history: std::collections::VecDeque::with_capacity(HISTORY),
+            latest: None,
+            history: std::collections::VecDeque::new(),
         }
-    });
+    }
+}
+
+/// Reads the totals and adds them to the history. CPU usage and network rates compare
+/// against the previous reading, so the very first reads them as zero.
+fn record(sampler: &mut Sampler) -> Stats {
     sampler.system.refresh_cpu_usage();
     sampler.system.refresh_memory();
     sampler.networks.refresh(true);
@@ -148,21 +188,30 @@ fn sample_with(own_use: bool) -> Stats {
         disk_total,
         net_down: (down as f64 / elapsed) as u64,
         net_up: (up as f64 / elapsed) as u64,
-        app: own_use.then(|| app_usage(&mut sampler.system)),
+        app: None,
     };
-    if sampler.history.len() == HISTORY {
+    while sampler
+        .history
+        .front()
+        .is_some_and(|(at, _)| at.elapsed() > WINDOW)
+    {
         sampler.history.pop_front();
     }
-    sampler.history.push_back(Point {
-        cpu: stats.cpu,
-        memory: if stats.memory_total > 0 {
-            stats.memory_used as f32 / stats.memory_total as f32
-        } else {
-            0.0
+    sampler.history.push_back((
+        Instant::now(),
+        Point {
+            age: 0.0,
+            cpu: stats.cpu,
+            memory: if stats.memory_total > 0 {
+                stats.memory_used as f32 / stats.memory_total as f32
+            } else {
+                0.0
+            },
+            down: stats.net_down,
+            up: stats.net_up,
         },
-        down: stats.net_down,
-        up: stats.net_up,
-    });
+    ));
+    sampler.latest = Some(stats.clone());
     stats
 }
 

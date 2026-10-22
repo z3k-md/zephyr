@@ -506,6 +506,8 @@ export interface ResourceRow {
 }
 
 export interface ResourcePoint {
+  /** Seconds ago. */
+  age: number;
   cpu: number;
   /** Share of memory in use, 0 to 1. */
   memory: number;
