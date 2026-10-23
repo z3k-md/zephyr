@@ -10,6 +10,7 @@
     shellStop,
   } from '../api';
   import type { ShellSettings } from '../types';
+  import { MOD_KEY as mod } from '../keys';
 
   const props = defineProps<{ initialQuery: string; settings: ShellSettings | null }>();
   const emit = defineEmits<{ exit: [] }>();
@@ -32,9 +33,6 @@
 
   /** Output kept per run; older text is dropped from the top. */
   const OUTPUT_LIMIT = 200_000;
-
-  const isMac = navigator.userAgent.includes('Mac');
-  const mod = isMac ? '⌘' : 'Ctrl+';
 
   const inputEl = ref<HTMLInputElement | null>(null);
   const outputEl = ref<HTMLElement | null>(null);

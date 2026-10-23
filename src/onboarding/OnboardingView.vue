@@ -6,7 +6,6 @@
     chatgptSignIn,
     errorMessage,
     finishOnboarding,
-    formatShortcut,
     getSnapshot,
     openSettings,
     pageReady,
@@ -18,7 +17,7 @@
   import { GLYPHS } from '../bar/glyphs';
   import { THEMES } from '../themes';
   import InstantStartup from '../settings/InstantStartup.vue';
-  import { captureShortcut } from '../keys';
+  import { captureShortcut, formatShortcut, isMac, isModifierKey, SHORTCUT_HELP } from '../keys';
   import { isSnapshot, type ChatgptAccount, type Snapshot } from '../types';
 
   // First-run setup: five quick choices, each already set to a good default, so any step
@@ -42,7 +41,6 @@
   const signingIn = ref(false);
   /** Esc once asks; Esc again (or the button) skips. */
   const confirmSkip = ref(false);
-  const isMac = navigator.userAgent.includes('Mac');
   const nextButton = ref<HTMLButtonElement | null>(null);
   let unlisten: UnlistenFn | null = null;
 
@@ -120,10 +118,10 @@
       listening.value = false;
       return;
     }
-    if (['Control', 'Alt', 'Shift', 'Meta'].includes(event.key)) return;
+    if (isModifierKey(event)) return;
     const shortcut = captureShortcut(event);
     if (!shortcut) {
-      error.value = 'Use at least one modifier and a letter, number, or space.';
+      error.value = SHORTCUT_HELP;
       return;
     }
     listening.value = false;

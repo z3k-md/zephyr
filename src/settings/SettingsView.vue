@@ -51,7 +51,6 @@
     exportDestinations,
     fileIndexStatus,
     importDestinations,
-    formatShortcut,
     getSnapshot,
     moveDestination,
     rebuildFileIndex,
@@ -66,10 +65,10 @@
   import LaunchGroupsSection from './LaunchGroupsSection.vue';
   import { askAiName, chosenAi, isAiLike } from '../aiChoice';
   import { THEMES } from '../themes';
-  import { captureShortcut } from '../keys';
+  import { captureShortcut, formatShortcut, isMac, isModifierKey, SHORTCUT_HELP } from '../keys';
   import ShortcutsSection from './ShortcutsSection.vue';
   import InstantStartup from './InstantStartup.vue';
-  import SelectMenu from './SelectMenu.vue';
+  import SelectMenu from '../components/SelectMenu.vue';
   import { GLYPHS } from '../bar/glyphs';
   import {
     isSnapshot,
@@ -111,14 +110,27 @@
     suggestPath: '',
   });
 
-  const added = ref({
-    name: '',
-    triggersText: '',
-    urlTemplate: 'https://example.com/search?q={query}',
-    suggest: 'none' as SuggestKind,
-    suggestUrl: '',
-    suggestPath: '',
-  });
+  /** The empty "Add a destination" form. */
+  function blankDestination() {
+    return {
+      name: '',
+      triggersText: '',
+      urlTemplate: 'https://example.com/search?q={query}',
+      suggest: 'none' as SuggestKind,
+      suggestUrl: '',
+      suggestPath: '',
+    };
+  }
+  const added = ref(blankDestination());
+
+  const SUGGESTERS: { id: SuggestKind; label: string }[] = [
+    { id: 'none', label: 'None' },
+    { id: 'google', label: 'Google' },
+    { id: 'youtube', label: 'YouTube' },
+    { id: 'wikipedia', label: 'Wikipedia' },
+    { id: 'pubmed', label: 'PubMed' },
+    { id: 'custom', label: 'Custom…' },
+  ];
 
   const importText = ref('');
   const importOpen = ref(false);
@@ -214,7 +226,14 @@
     void loadBookmarkSources();
     unlistens.push(
       await listen<unknown>('state-changed', (event) => {
-        if (isSnapshot(event.payload)) snapshot.value = event.payload;
+        if (!isSnapshot(event.payload)) return;
+        const before = snapshot.value?.ai;
+        snapshot.value = event.payload;
+        // AI settings changed elsewhere (a ChatGPT sign-in during setup): the form follows,
+        // so its next save doesn't put the old provider back.
+        if (JSON.stringify(before) !== JSON.stringify(event.payload.ai)) {
+          aiDraft.value = { ...event.payload.ai };
+        }
       })
     );
     // The window is built ahead of time and only hidden on close, so opening it is just
@@ -264,9 +283,7 @@
     { id: 'launchgroups', label: 'Launch groups', icon: 'grid' },
     { id: 'files', label: 'Files', icon: 'folder' },
     { id: 'history', label: 'History', icon: 'clock' },
-    ...(navigator.userAgent.includes('Mac')
-      ? [{ id: 'permissions', label: 'Permissions', icon: 'shield' }]
-      : []),
+    ...(isMac ? [{ id: 'permissions', label: 'Permissions', icon: 'shield' }] : []),
   ];
   const active = ref('general');
   const search = ref('');
@@ -391,49 +408,37 @@
     formError.value = null;
   }
 
-  async function toggleSteamGames() {
-    if (!snapshot.value) return;
+  /** Saves a change while the controls wait; true once the new state is in. */
+  async function save(request: Promise<Snapshot>): Promise<boolean> {
     busy.value = true;
     try {
-      apply(await saveSteamGames(!snapshot.value.steamGames));
+      apply(await request);
+      return true;
     } catch (error) {
       formError.value = errorMessage(error);
+      return false;
     } finally {
       busy.value = false;
     }
+  }
+
+  async function toggleSteamGames() {
+    if (snapshot.value) await save(saveSteamGames(!snapshot.value.steamGames));
   }
 
   async function toggleStartup() {
-    if (!snapshot.value) return;
-    busy.value = true;
-    try {
-      apply(
-        await saveSettings(
-          snapshot.value.summonShortcut,
-          !snapshot.value.launchAtStartup,
-          snapshot.value.defaultDestinationId
-        )
-      );
-    } catch (error) {
-      formError.value = errorMessage(error);
-    } finally {
-      busy.value = false;
-    }
+    const current = snapshot.value;
+    if (!current) return;
+    await save(
+      saveSettings(current.summonShortcut, !current.launchAtStartup, current.defaultDestinationId)
+    );
   }
 
   async function changeDefault(event: Event) {
-    if (!snapshot.value) return;
+    const current = snapshot.value;
+    if (!current) return;
     const value = (event.target as HTMLSelectElement).value;
-    busy.value = true;
-    try {
-      apply(
-        await saveSettings(snapshot.value.summonShortcut, snapshot.value.launchAtStartup, value)
-      );
-    } catch (error) {
-      formError.value = errorMessage(error);
-    } finally {
-      busy.value = false;
-    }
+    await save(saveSettings(current.summonShortcut, current.launchAtStartup, value));
   }
 
   // Esc closes Settings, unless something open took it first: a dropdown, a shortcut
@@ -456,6 +461,13 @@
       searchEl.value?.select();
       return;
     }
+    // A combo starts with its modifiers; recording waits for the key that completes it.
+    const recording = notesListening.value || clipListening.value || listening.value;
+    if (recording && isModifierKey(event)) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
     if (notesListening.value && !event.isComposing) {
       event.preventDefault();
       event.stopPropagation();
@@ -463,7 +475,7 @@
       if (event.key === 'Escape') return;
       const shortcut = event.key === 'Backspace' ? '' : captureShortcut(event);
       if (shortcut === null) {
-        formError.value = 'Use at least one modifier and a letter, number, or space.';
+        formError.value = SHORTCUT_HELP;
         return;
       }
       void saveNotesKey(shortcut);
@@ -476,7 +488,7 @@
       if (event.key === 'Escape') return;
       const shortcut = captureShortcut(event);
       if (!shortcut) {
-        formError.value = 'Use at least one modifier and a letter, number, or space.';
+        formError.value = SHORTCUT_HELP;
         return;
       }
       void saveClip({ shortcut });
@@ -491,7 +503,7 @@
     }
     const shortcut = captureShortcut(event);
     if (!shortcut) {
-      formError.value = 'Use at least one modifier and a letter, number, or space.';
+      formError.value = SHORTCUT_HELP;
       return;
     }
     listening.value = false;
@@ -499,22 +511,12 @@
   }
 
   async function commitShortcut(shortcut: string) {
-    if (!snapshot.value) return;
-    busy.value = true;
-    try {
-      apply(
-        await saveSettings(
-          shortcut,
-          snapshot.value.launchAtStartup,
-          snapshot.value.defaultDestinationId
-        )
-      );
-      status.value = `Summon shortcut is ${formatShortcut(shortcut)}.`;
-    } catch (error) {
-      formError.value = errorMessage(error);
-    } finally {
-      busy.value = false;
-    }
+    const current = snapshot.value;
+    if (!current) return;
+    const saved = await save(
+      saveSettings(shortcut, current.launchAtStartup, current.defaultDestinationId)
+    );
+    if (saved) status.value = `Summon shortcut is ${formatShortcut(shortcut)}.`;
   }
 
   function startEdit(destination: Destination) {
@@ -531,91 +533,50 @@
   }
 
   async function saveDraft(destination: Destination) {
-    busy.value = true;
-    try {
-      apply(
-        await saveDestination({
-          ...destination,
-          name: draft.value.name,
-          triggers: splitTriggers(draft.value.triggersText),
-          urlTemplate: draft.value.urlTemplate,
-          suggest: draft.value.suggest,
-          suggestUrl: draft.value.suggestUrl,
-          suggestPath: draft.value.suggestPath,
-        })
-      );
-      editingId.value = null;
-    } catch (error) {
-      formError.value = errorMessage(error);
-    } finally {
-      busy.value = false;
-    }
+    const saved = await save(
+      saveDestination({
+        ...destination,
+        name: draft.value.name,
+        triggers: splitTriggers(draft.value.triggersText),
+        urlTemplate: draft.value.urlTemplate,
+        suggest: draft.value.suggest,
+        suggestUrl: draft.value.suggestUrl,
+        suggestPath: draft.value.suggestPath,
+      })
+    );
+    if (saved) editingId.value = null;
   }
 
   async function patch(destination: Destination, partial: Partial<Destination>) {
-    busy.value = true;
-    try {
-      apply(await saveDestination({ ...destination, ...partial }));
-    } catch (error) {
-      formError.value = errorMessage(error);
-    } finally {
-      busy.value = false;
-    }
+    await save(saveDestination({ ...destination, ...partial }));
   }
 
   async function move(id: string, delta: number) {
-    busy.value = true;
-    try {
-      apply(await moveDestination(id, delta));
-    } catch (error) {
-      formError.value = errorMessage(error);
-    } finally {
-      busy.value = false;
-    }
+    await save(moveDestination(id, delta));
   }
 
   async function remove(id: string) {
-    busy.value = true;
-    try {
-      apply(await removeDestination(id));
-    } catch (error) {
-      formError.value = errorMessage(error);
-    } finally {
-      busy.value = false;
-    }
+    await save(removeDestination(id));
   }
 
   async function addDestination() {
-    busy.value = true;
-    try {
-      apply(
-        await saveDestination({
-          id: `custom-${crypto.randomUUID()}`,
-          name: added.value.name,
-          triggers: splitTriggers(added.value.triggersText),
-          urlTemplate: added.value.urlTemplate,
-          suggest: added.value.suggest,
-          suggestUrl: added.value.suggestUrl,
-          suggestPath: added.value.suggestPath,
-          pinned: true,
-          builtin: false,
-          disabled: false,
-        })
-      );
-      added.value = {
-        name: '',
-        triggersText: '',
-        urlTemplate: 'https://example.com/search?q={query}',
-        suggest: 'none',
-        suggestUrl: '',
-        suggestPath: '',
-      };
-      status.value = 'Destination added.';
-    } catch (error) {
-      formError.value = errorMessage(error);
-    } finally {
-      busy.value = false;
-    }
+    const saved = await save(
+      saveDestination({
+        id: `custom-${crypto.randomUUID()}`,
+        name: added.value.name,
+        triggers: splitTriggers(added.value.triggersText),
+        urlTemplate: added.value.urlTemplate,
+        suggest: added.value.suggest,
+        suggestUrl: added.value.suggestUrl,
+        suggestPath: added.value.suggestPath,
+        pinned: true,
+        builtin: false,
+        disabled: false,
+      })
+    );
+    if (!saved) return;
+    added.value = blankDestination();
+    status.value = 'Destination added.';
   }
 
   async function copyDestinations() {
@@ -628,19 +589,12 @@
   }
 
   async function runImport() {
-    busy.value = true;
-    try {
-      const before = snapshot.value?.destinations.length ?? 0;
-      apply(await importDestinations(importText.value));
-      const added = (snapshot.value?.destinations.length ?? 0) - before;
-      status.value = added > 0 ? `Imported. ${added} new destinations.` : 'Imported.';
-      importText.value = '';
-      importOpen.value = false;
-    } catch (error) {
-      formError.value = errorMessage(error);
-    } finally {
-      busy.value = false;
-    }
+    const before = snapshot.value?.destinations.length ?? 0;
+    if (!(await save(importDestinations(importText.value)))) return;
+    const added = (snapshot.value?.destinations.length ?? 0) - before;
+    status.value = added > 0 ? `Imported. ${added} new destinations.` : 'Imported.';
+    importText.value = '';
+    importOpen.value = false;
   }
 
   function splitTriggers(value: string): string[] {
@@ -651,15 +605,7 @@
   }
 
   async function wipeHistory() {
-    busy.value = true;
-    try {
-      apply(await clearHistory());
-      status.value = 'History cleared.';
-    } catch (error) {
-      formError.value = errorMessage(error);
-    } finally {
-      busy.value = false;
-    }
+    if (await save(clearHistory())) status.value = 'History cleared.';
   }
 
   async function updates() {
@@ -696,18 +642,10 @@
   }
 
   async function saveFolders(roots: string[] | null, excludes: string[]) {
-    busy.value = true;
-    try {
-      apply(await saveFileFolders(roots, excludes));
-      // The new walk starts on a worker thread; give it a moment to report.
-      window.setTimeout(() => void pollFileStatus(), 300);
-      return true;
-    } catch (error) {
-      formError.value = errorMessage(error);
-      return false;
-    } finally {
-      busy.value = false;
-    }
+    const saved = await save(saveFileFolders(roots, excludes));
+    // The new walk starts on a worker thread; give it a moment to report.
+    if (saved) window.setTimeout(() => void pollFileStatus(), 300);
+    return saved;
   }
 
   async function addRoot() {
@@ -755,7 +693,6 @@
     window.setTimeout(() => void pollFileStatus(), 300);
   }
 
-  const isMacOs = navigator.userAgent.includes('Mac');
   const RESUME = [
     { seconds: 0, label: 'Nothing: start empty' },
     { seconds: 30, label: '30 seconds' },
@@ -770,21 +707,15 @@
     routeCmd?: string;
     routeAlt?: string;
   }) {
-    if (!snapshot.value) return;
-    busy.value = true;
-    try {
-      apply(
-        await saveOpenBehavior(
-          partial.returnToMode ?? snapshot.value.returnToMode,
-          partial.routeCmd ?? snapshot.value.routeCmd,
-          partial.routeAlt ?? snapshot.value.routeAlt
-        )
-      );
-    } catch (error) {
-      formError.value = errorMessage(error);
-    } finally {
-      busy.value = false;
-    }
+    const current = snapshot.value;
+    if (!current) return;
+    await save(
+      saveOpenBehavior(
+        partial.returnToMode ?? current.returnToMode,
+        partial.routeCmd ?? current.routeCmd,
+        partial.routeAlt ?? current.routeAlt
+      )
+    );
   }
 
   const routeTargets = computed(() => {
@@ -826,14 +757,7 @@
   }
 
   async function chooseTheme(id: string) {
-    busy.value = true;
-    try {
-      apply(await saveTheme(id));
-    } catch (error) {
-      formError.value = errorMessage(error);
-    } finally {
-      busy.value = false;
-    }
+    await save(saveTheme(id));
   }
 
   // The one AI the bar offers: the built-in one (named after its model) or a web AI.
@@ -845,14 +769,7 @@
   const aiChosenId = computed(() => chosenAi(snapshot.value)?.id ?? '');
 
   async function changeAiChoice(event: Event) {
-    busy.value = true;
-    try {
-      apply(await saveAiChoice((event.target as HTMLSelectElement).value));
-    } catch (error) {
-      formError.value = errorMessage(error);
-    } finally {
-      busy.value = false;
-    }
+    await save(saveAiChoice((event.target as HTMLSelectElement).value));
   }
 
   async function toggleOnboardingEveryLaunch() {
@@ -865,27 +782,11 @@
   }
 
   async function toggleStats() {
-    if (!snapshot.value) return;
-    busy.value = true;
-    try {
-      apply(await saveShowStats(!snapshot.value.showStats));
-    } catch (error) {
-      formError.value = errorMessage(error);
-    } finally {
-      busy.value = false;
-    }
+    if (snapshot.value) await save(saveShowStats(!snapshot.value.showStats));
   }
 
   async function toggleBugCapture() {
-    if (!snapshot.value) return;
-    busy.value = true;
-    try {
-      apply(await saveBugCapture(!snapshot.value.bugCapture));
-    } catch (error) {
-      formError.value = errorMessage(error);
-    } finally {
-      busy.value = false;
-    }
+    if (snapshot.value) await save(saveBugCapture(!snapshot.value.bugCapture));
   }
 
   async function showCaptures() {
@@ -897,26 +798,11 @@
   }
 
   async function toggleNowPlaying() {
-    if (!snapshot.value) return;
-    busy.value = true;
-    try {
-      apply(await saveShowNowPlaying(!snapshot.value.showNowPlaying));
-    } catch (error) {
-      formError.value = errorMessage(error);
-    } finally {
-      busy.value = false;
-    }
+    if (snapshot.value) await save(saveShowNowPlaying(!snapshot.value.showNowPlaying));
   }
 
   async function changeResume(event: Event) {
-    busy.value = true;
-    try {
-      apply(await saveResumeSeconds(Number((event.target as HTMLSelectElement).value)));
-    } catch (error) {
-      formError.value = errorMessage(error);
-    } finally {
-      busy.value = false;
-    }
+    await save(saveResumeSeconds(Number((event.target as HTMLSelectElement).value)));
   }
 
   const shell = ref<ShellInfo | null>(null);
@@ -960,14 +846,7 @@
   }
 
   async function forgetCommands() {
-    busy.value = true;
-    try {
-      apply(await clearShellHistory());
-    } catch (error) {
-      formError.value = errorMessage(error);
-    } finally {
-      busy.value = false;
-    }
+    await save(clearShellHistory());
   }
 
   async function loadCli() {
@@ -978,17 +857,8 @@
     }
   }
 
-  async function saveClaude(next: ClaudeSettings) {
-    busy.value = true;
-    try {
-      apply(await saveClaudeSettings(next));
-      return true;
-    } catch (error) {
-      formError.value = errorMessage(error);
-      return false;
-    } finally {
-      busy.value = false;
-    }
+  function saveClaude(next: ClaudeSettings) {
+    return save(saveClaudeSettings(next));
   }
 
   async function addProject() {
@@ -1049,15 +919,18 @@
     void saveClaude({ ...snapshot.value.claude, ...partial });
   }
 
-  async function saveNotesKey(shortcut: string) {
-    busy.value = true;
-    try {
-      apply(await saveNotesShortcut(shortcut));
-    } catch (error) {
-      formError.value = errorMessage(error);
-    } finally {
-      busy.value = false;
+  /** A minutes field: an empty or out-of-range entry goes back to the saved value. */
+  function saveMinutes(key: 'timeoutMinutes' | 'approvalMinutes', event: Event) {
+    const input = event.target as HTMLInputElement;
+    if (input.value === '' || !input.validity.valid) {
+      input.value = String(snapshot.value?.claude[key] ?? '');
+      return;
     }
+    saveClaudeLimits({ [key]: Math.round(input.valueAsNumber) });
+  }
+
+  async function saveNotesKey(shortcut: string) {
+    await save(saveNotesShortcut(shortcut));
   }
 
   async function loadClip() {
@@ -1071,14 +944,8 @@
 
   async function saveClip(partial: Partial<ClipboardSettings>) {
     if (!snapshot.value) return;
-    busy.value = true;
-    try {
-      apply(await saveClipboardSettings({ ...snapshot.value.clipboard, ...partial }));
+    if (await save(saveClipboardSettings({ ...snapshot.value.clipboard, ...partial }))) {
       void loadClip();
-    } catch (error) {
-      formError.value = errorMessage(error);
-    } finally {
-      busy.value = false;
     }
   }
 
@@ -1114,7 +981,7 @@
   // On a Mac this is the Permissions page's Allow: it clears a stale grant and opens the
   // Accessibility list; the page then shows it turning on.
   async function allowPasting() {
-    if (!navigator.userAgent.includes('Mac')) {
+    if (!isMac) {
       clipPasteAllowed.value = await clipRequestPastePermission();
       return;
     }
@@ -1147,16 +1014,9 @@
   }
 
   async function saveAi() {
-    busy.value = true;
-    try {
-      apply(await saveAiSettings(aiDraft.value));
-      aiDraft.value = { ...(snapshot.value?.ai ?? aiDraft.value) };
-      aiMessage.value = 'Saved.';
-    } catch (error) {
-      formError.value = errorMessage(error);
-    } finally {
-      busy.value = false;
-    }
+    if (!(await save(saveAiSettings(aiDraft.value)))) return;
+    aiDraft.value = { ...(snapshot.value?.ai ?? aiDraft.value) };
+    aiMessage.value = 'Saved.';
   }
 
   async function loadChatgpt() {
@@ -1233,8 +1093,12 @@
 
   async function loadModels() {
     aiMessage.value = 'Loading models…';
+    const provider = aiDraft.value.provider;
     try {
-      aiModelList.value = await aiModels(aiDraft.value);
+      const models = await aiModels(aiDraft.value);
+      // The provider changed while these loaded: they're the old one's.
+      if (aiDraft.value.provider !== provider) return;
+      aiModelList.value = models;
       aiMessage.value = aiModelList.value.length
         ? `${aiModelList.value.length} models. Pick one in the model box.`
         : 'No models found.';
@@ -1312,7 +1176,13 @@
         <h2>General</h2>
         <div class="field" data-focus="summon">
           <span>Summon shortcut</span>
-          <button type="button" class="recorder" :class="{ listening }" @click="listening = true">
+          <button
+            type="button"
+            class="recorder"
+            :class="{ listening }"
+            @click="listening = true"
+            @blur="listening = false"
+          >
             {{ listening ? 'Press a shortcut' : formatShortcut(snapshot.summonShortcut) }}
           </button>
         </div>
@@ -1363,7 +1233,7 @@
           </select>
         </label>
         <label class="field">
-          <span>{{ isMacOs ? '⌘↵' : 'Ctrl+Enter' }} sends what you typed to</span>
+          <span>{{ isMac ? '⌘↵' : 'Ctrl+Enter' }} sends what you typed to</span>
           <select
             :value="snapshot.routeCmd"
             :disabled="busy"
@@ -1376,7 +1246,7 @@
           </select>
         </label>
         <label class="field">
-          <span>{{ isMacOs ? '⌥↵' : 'Alt+Enter' }} sends what you typed to</span>
+          <span>{{ isMac ? '⌥↵' : 'Alt+Enter' }} sends what you typed to</span>
           <select
             :value="snapshot.routeAlt"
             :disabled="busy"
@@ -1431,7 +1301,7 @@
             :disabled="busy"
             @change="toggleBugCapture"
           />
-          {{ isMacOs ? '⌃⌥R' : 'Ctrl+Alt+R' }} records the bar, {{ isMacOs ? '⌃⌥S' : 'Ctrl+Alt+S' }}
+          {{ isMac ? '⌃⌥R' : 'Ctrl+Alt+R' }} records the bar, {{ isMac ? '⌃⌥S' : 'Ctrl+Alt+S' }}
           takes a snapshot
         </label>
         <div class="field inline">
@@ -1525,8 +1395,8 @@
           </select>
         </label>
         <p class="hint-text">
-          Search with, Tab and {{ isMacOs ? '⌘↵' : 'Ctrl+Enter' }} use this one; other AIs stay in
-          {{ isMacOs ? '⌘K' : 'Ctrl+K' }}. Zephyr's own uses the provider and model below.
+          Search with, Tab and {{ isMac ? '⌘↵' : 'Ctrl+Enter' }} use this one; other AIs stay in
+          {{ isMac ? '⌘K' : 'Ctrl+K' }}. Zephyr's own uses the provider and model below.
         </p>
         <label class="field">
           <span>Provider</span>
@@ -1658,6 +1528,7 @@
             class="recorder"
             :class="{ listening: clipListening }"
             @click="clipListening = true"
+            @blur="clipListening = false"
           >
             {{
               clipListening
@@ -1733,6 +1604,7 @@
             class="recorder"
             :class="{ listening: notesListening }"
             @click="notesListening = true"
+            @blur="notesListening = false"
           >
             {{
               notesListening
@@ -1902,11 +1774,7 @@
             type="number"
             min="1"
             max="600"
-            @change="
-              saveClaudeLimits({
-                timeoutMinutes: Number(($event.target as HTMLInputElement).value),
-              })
-            "
+            @change="saveMinutes('timeoutMinutes', $event)"
           />
         </label>
         <label class="field">
@@ -1916,11 +1784,7 @@
             type="number"
             min="1"
             max="120"
-            @change="
-              saveClaudeLimits({
-                approvalMinutes: Number(($event.target as HTMLInputElement).value),
-              })
-            "
+            @change="saveMinutes('approvalMinutes', $event)"
           />
         </label>
         <label class="check">
@@ -2057,12 +1921,9 @@
             <label v-if="destination.kind !== 'ai'" class="field">
               <span>Suggestions</span>
               <select v-model="draft.suggest">
-                <option value="none">None</option>
-                <option value="google">Google</option>
-                <option value="youtube">YouTube</option>
-                <option value="wikipedia">Wikipedia</option>
-                <option value="pubmed">PubMed</option>
-                <option value="custom">Custom…</option>
+                <option v-for="item in SUGGESTERS" :key="item.id" :value="item.id">
+                  {{ item.label }}
+                </option>
               </select>
             </label>
             <template v-if="draft.suggest === 'custom'">
@@ -2110,12 +1971,9 @@
           <label class="field">
             <span>Suggestions</span>
             <select v-model="added.suggest">
-              <option value="none">None</option>
-              <option value="google">Google</option>
-              <option value="youtube">YouTube</option>
-              <option value="wikipedia">Wikipedia</option>
-              <option value="pubmed">PubMed</option>
-              <option value="custom">Custom…</option>
+              <option v-for="item in SUGGESTERS" :key="item.id" :value="item.id">
+                {{ item.label }}
+              </option>
             </select>
           </label>
           <template v-if="added.suggest === 'custom'">

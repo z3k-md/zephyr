@@ -1,11 +1,10 @@
 <script setup lang="ts">
   import type { SyncPending } from '../types';
+  import { PLATFORM_NAMES } from '../format';
+  import { MOD_KEY as mod } from '../keys';
 
   defineProps<{ device: SyncPending }>();
   defineEmits<{ answer: ['allow' | 'deny'] }>();
-
-  const mod = navigator.userAgent.includes('Mac') ? '⌘' : 'Ctrl+';
-  const PLATFORMS: Record<string, string> = { macos: 'Mac', windows: 'Windows', linux: 'Linux' };
 </script>
 
 <template>
@@ -14,7 +13,7 @@
       <span class="approval-badge">⇄</span>
       <span class="approval-summary">
         Allow <strong>{{ device.name }}</strong> ({{
-          PLATFORMS[device.platform] ?? device.platform
+          PLATFORM_NAMES[device.platform] ?? device.platform
         }}) to sync?
       </span>
     </header>

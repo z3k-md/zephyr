@@ -193,20 +193,16 @@ pub struct TypingBest {
 }
 
 #[cfg(target_os = "macos")]
-pub fn default_notes_shortcut() -> String {
+fn default_notes_shortcut() -> String {
     "command+option+n".into()
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn default_notes_shortcut() -> String {
+fn default_notes_shortcut() -> String {
     "ctrl+alt+n".into()
 }
 
 const SCHEMA_VERSION: u32 = 2;
-
-fn schema_version() -> u32 {
-    SCHEMA_VERSION
-}
 
 /// Files written before `version` existed should still migrate.
 fn missing_schema_version() -> u32 {
@@ -222,7 +218,7 @@ impl Default for Persisted {
 impl Persisted {
     pub fn fresh() -> Self {
         Self {
-            version: schema_version(),
+            version: SCHEMA_VERSION,
             summon_shortcut: DEFAULT_SHORTCUT.to_string(),
             launch_at_startup: false,
             instant_startup: false,
@@ -283,8 +279,29 @@ impl Persisted {
 
     pub fn set_clipboard(&mut self, settings: ClipboardSettings) -> Result<(), String> {
         let settings = settings.normalized()?;
-        if !settings.shortcut.is_empty() && settings.shortcut == self.summon_shortcut {
+        // Compared as keys, not text, so "Alt+Shift+V" and "shift+alt+v" still clash.
+        let shortcut = settings.shortcut.as_str();
+        let clashes = |other: &str| !shortcut.is_empty() && crate::shortcut::same(other, shortcut);
+        if clashes(&self.summon_shortcut) {
             return Err("Clipboard history needs a different shortcut from the bar".into());
+        }
+        // The rest only clash while history's shortcut is registered, which is when it's on.
+        if settings.enabled {
+            if clashes(&self.notes_shortcut) {
+                return Err("That shortcut already opens notes".into());
+            }
+            if self.bug_capture
+                && (clashes(crate::capture::SHORTCUT) || clashes(crate::capture::SNAPSHOT_SHORTCUT))
+            {
+                return Err("That shortcut already takes a bug capture".into());
+            }
+            if let Some(binding) = self
+                .bindings
+                .iter()
+                .find(|binding| clashes(&binding.hotkey))
+            {
+                return Err(format!("That shortcut already runs {}", binding.label));
+            }
         }
         self.clipboard = settings;
         Ok(())
@@ -487,7 +504,7 @@ impl Persisted {
                     ..existing
                 },
                 None => Destination {
-                    id: format!("custom-import-{}-{index}", now_millis()),
+                    id: format!("custom-import-{}-{index}", crate::util::now_ms()),
                     name: item.name,
                     triggers: item.triggers,
                     url_template: item.url_template,
@@ -622,15 +639,26 @@ impl Persisted {
         let data = serde_json::to_vec_pretty(self).map_err(|err| err.to_string())?;
         let tmp = path.with_extension("json.tmp");
         fs::write(&tmp, &data).map_err(|err| err.to_string())?;
-        if fs::rename(&tmp, path).is_err() {
-            let _ = fs::remove_file(path);
-            fs::rename(&tmp, path).map_err(|err| err.to_string())?;
+        // Rename replaces the old file, on Windows too. It can fail for a moment while
+        // something (an antivirus scan, a backup) has the file open, so it gets a few tries.
+        // Never delete the old file first: if the rename then failed, no settings file is left.
+        let mut attempt = 0;
+        loop {
+            match fs::rename(&tmp, path) {
+                Ok(()) => return Ok(()),
+                Err(_) if attempt < 3 => {
+                    attempt += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                Err(err) => return Err(err.to_string()),
+            }
         }
-        Ok(())
     }
 
     pub fn load(path: &Path) -> Self {
-        let Ok(bytes) = fs::read(path) else {
+        // A save interrupted between writing and renaming leaves only the new copy behind.
+        let Ok(bytes) = fs::read(path).or_else(|_| fs::read(path.with_extension("json.tmp")))
+        else {
             return Self::fresh();
         };
         match serde_json::from_slice::<Self>(&bytes) {
@@ -682,13 +710,6 @@ fn no_suggestions() -> destination::SuggestKind {
     destination::SuggestKind::None
 }
 
-fn now_millis() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis())
-        .unwrap_or(0)
-}
-
 fn normalize_triggers(triggers: &[String]) -> Result<Vec<String>, String> {
     let mut normalized = Vec::new();
     for trigger in triggers {
@@ -730,8 +751,8 @@ fn normalize_triggers(triggers: &[String]) -> Result<Vec<String>, String> {
 }
 
 pub struct AppState {
-    pub inner: Mutex<Persisted>,
-    pub path: PathBuf,
+    inner: Mutex<Persisted>,
+    path: PathBuf,
 }
 
 impl AppState {

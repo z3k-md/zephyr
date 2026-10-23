@@ -287,6 +287,8 @@ pub struct AppIndex {
     apps: RwLock<Vec<App>>,
     scanned_at: Mutex<Option<Instant>>,
     scanning: AtomicBool,
+    /// Set once any scan ends, even a failed one, so startup can stop waiting.
+    finished: AtomicBool,
 }
 
 impl AppIndex {
@@ -306,7 +308,7 @@ impl AppIndex {
 
     /// Whether a scan has finished since startup.
     pub fn scanned(&self) -> bool {
-        self.scanned_at.lock().is_ok_and(|at| at.is_some())
+        self.finished.load(Ordering::SeqCst)
     }
 
     /// Scans again at the next chance, as after Steam games are turned on or off.
@@ -330,7 +332,12 @@ impl AppIndex {
         }
         std::thread::spawn(move || {
             let started = Instant::now();
-            let mut found = discover();
+            // A failed scan keeps the last list and stays stale, so the next summon retries.
+            let Some(mut found) = discover() else {
+                index.finished.store(true, Ordering::SeqCst);
+                index.scanning.store(false, Ordering::SeqCst);
+                return;
+            };
             // Steam's own shortcuts are links (steam://), which the scan drops; games come
             // from Steam's library files instead.
             for game in crate::steam::games() {
@@ -349,6 +356,7 @@ impl AppIndex {
             if let Ok(mut at) = index.scanned_at.lock() {
                 *at = Some(Instant::now());
             }
+            index.finished.store(true, Ordering::SeqCst);
             index.scanning.store(false, Ordering::SeqCst);
         });
     }
@@ -404,42 +412,38 @@ fn parse_start_apps(json: &str) -> Vec<App> {
         .collect()
 }
 
+/// The installed apps, or None when the scan itself failed.
 #[cfg(windows)]
-pub fn discover() -> Vec<App> {
-    use std::os::windows::process::CommandExt;
-    use std::process::Command;
-
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+pub fn discover() -> Option<Vec<App>> {
     // Get-StartApps lists Win32 shortcuts and packaged apps under one AppUserModelID scheme.
-    let output = Command::new("powershell.exe")
+    let output = crate::util::hidden_command("powershell.exe")
         .args([
             "-NoProfile",
             "-NonInteractive",
             "-Command",
             "[Console]::OutputEncoding = [Text.Encoding]::UTF8; Get-StartApps | Select-Object Name, AppID | ConvertTo-Json -Compress",
         ])
-        .creation_flags(CREATE_NO_WINDOW)
         .output();
     match output {
-        Ok(output) if output.status.success() => {
-            dedupe(parse_start_apps(&String::from_utf8_lossy(&output.stdout)))
-        }
+        Ok(output) if output.status.success() => Some(dedupe(parse_start_apps(
+            &String::from_utf8_lossy(&output.stdout),
+        ))),
         Ok(output) => {
             log::error!(
                 "Get-StartApps failed: {}",
                 String::from_utf8_lossy(&output.stderr).trim()
             );
-            Vec::new()
+            None
         }
         Err(err) => {
             log::error!("couldn't run PowerShell to list apps: {err}");
-            Vec::new()
+            None
         }
     }
 }
 
 #[cfg(target_os = "macos")]
-pub fn discover() -> Vec<App> {
+pub fn discover() -> Option<Vec<App>> {
     let mut roots = vec![
         std::path::PathBuf::from("/Applications"),
         std::path::PathBuf::from("/System/Applications"),
@@ -455,12 +459,12 @@ pub fn discover() -> Vec<App> {
             name: "Finder".into(),
         });
     }
-    dedupe(apps)
+    Some(dedupe(apps))
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-pub fn discover() -> Vec<App> {
-    Vec::new()
+pub fn discover() -> Option<Vec<App>> {
+    Some(Vec::new())
 }
 
 /// Collects `.app` bundles under `roots` without descending into the bundles themselves.
@@ -610,13 +614,10 @@ fn launch_private_native(app: &App, mode: PrivateMode) -> Result<(), String> {
 
 #[cfg(windows)]
 fn launch_private_native(_app: &App, mode: PrivateMode) -> Result<(), String> {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let exe = mode.windows_exe.ok_or("it isn't registered with Windows")?;
     // `start` finds the browser through App Paths, where installers register it.
-    std::process::Command::new("cmd")
+    crate::util::hidden_command("cmd")
         .args(["/C", "start", "", exe, mode.flag])
-        .creation_flags(CREATE_NO_WINDOW)
         .spawn()
         .map(|_| ())
         .map_err(|err| err.to_string())

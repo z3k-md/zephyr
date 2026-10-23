@@ -30,7 +30,18 @@ fn moves() -> &'static Mutex<HashMap<String, u64>> {
     MOVES.get_or_init(Default::default)
 }
 
-pub fn label_for(id: &str) -> String {
+/// Per label, bumped each time a window opens there, so a late close fallback for one
+/// window never closes the same note reopened since.
+fn opens() -> &'static Mutex<HashMap<String, u64>> {
+    static OPENS: OnceLock<Mutex<HashMap<String, u64>>> = OnceLock::new();
+    OPENS.get_or_init(Default::default)
+}
+
+fn current_open(label: &str) -> Option<u64> {
+    opens().lock().ok()?.get(label).copied()
+}
+
+fn label_for(id: &str) -> String {
     let safe: String = id
         .chars()
         .map(|c| {
@@ -44,7 +55,7 @@ pub fn label_for(id: &str) -> String {
     format!("{LABEL_PREFIX}{safe}")
 }
 
-pub fn is_note_window(label: &str) -> bool {
+fn is_note_window(label: &str) -> bool {
     label.starts_with(LABEL_PREFIX)
 }
 
@@ -61,8 +72,9 @@ fn open_windows(app: &AppHandle) -> Vec<tauri::WebviewWindow> {
         .collect()
 }
 
-/// The notes shortcut, `!note` and the bar's Notes row: brings the open notes forward, or
-/// opens the newest note (a new one when there are none) when none is open.
+/// Opens `id` in its own window. Without one (the notes shortcut, `!note`, the bar's Notes
+/// row) it brings the open notes forward, or opens the newest note (a new one when there are
+/// none) when none is open.
 pub fn show(app: &AppHandle, id: Option<&str>) -> Result<(), String> {
     if let Some(id) = id {
         return open(app, id, true);
@@ -139,7 +151,12 @@ pub fn open(app: &AppHandle, id: &str, focus: bool) -> Result<(), String> {
     if !focus && let Ok(mut quiet) = quiet().lock() {
         quiet.insert(label.clone());
     }
-    watch(app, &window, id);
+    let generation = opens().lock().map_or(0, |mut opens| {
+        let entry = opens.entry(label.clone()).or_insert(0);
+        *entry += 1;
+        *entry
+    });
+    watch(app, &window, id, generation);
     remember(app, &window, id);
     crate::window::reveal_soon(app, window);
     Ok(())
@@ -158,6 +175,14 @@ pub fn restore(app: &AppHandle) {
     }
 }
 
+/// Keeps a note's window open past the close button's fallback, when its page couldn't save
+/// and closing would lose the edits.
+pub fn keep_open(label: &str) {
+    if let Ok(mut opens) = opens().lock() {
+        *opens.entry(label.to_string()).or_insert(0) += 1;
+    }
+}
+
 /// Closes a note's window for good, once its page has saved; the note itself stays.
 pub fn close(app: &AppHandle, window: &tauri::WebviewWindow) {
     if let Some(id) = id_of(app, window.label()) {
@@ -168,7 +193,7 @@ pub fn close(app: &AppHandle, window: &tauri::WebviewWindow) {
 
 /// The close button asks the page to save first; it closes the window when done, and a
 /// page that never answers is closed anyway.
-fn watch(app: &AppHandle, window: &tauri::WebviewWindow, id: &str) {
+fn watch(app: &AppHandle, window: &tauri::WebviewWindow, id: &str, generation: u64) {
     let app = app.clone();
     let watched = window.clone();
     let id = id.to_string();
@@ -180,7 +205,10 @@ fn watch(app: &AppHandle, window: &tauri::WebviewWindow, id: &str) {
             let window = watched.clone();
             std::thread::spawn(move || {
                 std::thread::sleep(Duration::from_millis(1500));
-                if app.get_webview_window(window.label()).is_some() {
+                // Only this window: the same note may have been reopened since.
+                if current_open(window.label()) == Some(generation)
+                    && app.get_webview_window(window.label()).is_some()
+                {
                     close(&app, &window);
                 }
             });

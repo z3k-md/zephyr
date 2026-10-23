@@ -1,7 +1,7 @@
 //! End-to-end encrypted sync of notes and clipboard history through the user's Supabase
 //! project. The server only ever holds ciphertext.
 //!
-//! Step 1 is accounts and keys: email-code sign-in, a key pair per device, the account key
+//! Step 1 is accounts and keys: Google sign-in, a key pair per device, the account key
 //! (AK) sealed to each approved device, a recovery key, and approving new devices from an
 //! existing one. Record sync builds on this.
 
@@ -183,16 +183,7 @@ const CALLBACK_PORTS: [u16; 5] = [47195, 47196, 47197, 47198, 47199];
 /// Signs in with Google in the browser. A one-off listener on 127.0.0.1 catches the
 /// redirect, and the code is exchanged with a PKCE verifier only this process knows.
 pub async fn google_sign_in(open: impl FnOnce(&str) -> Result<(), String>) -> Result<(), String> {
-    let server = CALLBACK_PORTS
-        .iter()
-        .find_map(|port| tiny_http::Server::http(("127.0.0.1", *port)).ok())
-        .ok_or("Couldn't open a local port for sign-in")?;
-    let port = server
-        .server_addr()
-        .to_ip()
-        .map(|addr| addr.port())
-        .ok_or("Couldn't open a local port for sign-in")?;
-    let redirect = format!("http://127.0.0.1:{port}/auth/callback");
+    let (server, redirect) = crate::loopback::listen(&CALLBACK_PORTS)?;
 
     let verifier = data_encoding::BASE64URL_NOPAD.encode(&keys::random32()?);
     let challenge =
@@ -221,53 +212,20 @@ pub async fn google_sign_in(open: impl FnOnce(&str) -> Result<(), String>) -> Re
 
 /// Waits up to five minutes for the browser to come back with `?code=`.
 fn wait_for_code(server: &tiny_http::Server) -> Result<String, String> {
-    let deadline = Instant::now() + Duration::from_secs(300);
-    loop {
-        if lock()
-            .map(|session| session.phase != Phase::Browser)
-            .unwrap_or(true)
-        {
-            return Err("Sign-in was cancelled".into());
-        }
-        let left = deadline.saturating_duration_since(Instant::now());
-        if left.is_zero() {
-            return Err("Sign-in timed out. Try again.".into());
-        }
-        let Ok(Some(request)) = server.recv_timeout(left.min(Duration::from_secs(1))) else {
-            continue;
-        };
-        if !request.url().starts_with("/auth/callback") {
-            let _ = request.respond(tiny_http::Response::empty(404));
-            continue;
-        }
-        let url = url::Url::parse(&format!("http://127.0.0.1{}", request.url())).ok();
-        let param = |name: &str| {
-            url.as_ref().and_then(|url| {
-                url.query_pairs()
-                    .find(|(key, _)| key == name)
-                    .map(|(_, value)| value.into_owned())
-            })
-        };
-        let result = match (param("code"), param("error_description").or(param("error"))) {
+    crate::loopback::wait(
+        server,
+        || {
+            lock()
+                .map(|session| session.phase != Phase::Browser)
+                .unwrap_or(true)
+        },
+        "Signed in to Zephyr. You can close this tab.",
+        |param| match (param("code"), param("error_description").or(param("error"))) {
             (Some(code), _) => Ok(code),
             (None, Some(error)) => Err(format!("Google sign-in failed: {error}")),
             (None, None) => Err("The browser came back without a sign-in code".into()),
-        };
-        let page = if result.is_ok() {
-            "Signed in to Zephyr. You can close this tab."
-        } else {
-            "Zephyr couldn't finish signing in. Go back to Zephyr and try again."
-        };
-        let header = tiny_http::Header::from_bytes("Content-Type", "text/html; charset=utf-8")
-            .expect("static header");
-        let html = format!(
-            "<!doctype html><meta charset=utf-8><title>Zephyr</title><body style=\"font:16px \
-             -apple-system,system-ui;background:#16131f;color:#ececee;display:grid;\
-             place-items:center;height:100vh;margin:0\"><p>{page}</p>"
-        );
-        let _ = request.respond(tiny_http::Response::from_string(html).with_header(header));
-        return result;
-    }
+        },
+    )
 }
 
 fn platform() -> &'static str {

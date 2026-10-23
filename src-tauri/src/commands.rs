@@ -1,7 +1,7 @@
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 
 use tauri::ipc::Channel;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_opener::OpenerExt;
 
@@ -17,18 +17,26 @@ use crate::shell::{self, ShellEvent, ShellInfo};
 use crate::shortcut;
 use crate::state::{AppState, Persisted};
 use crate::suggest::{self, SuggestResponse};
+use crate::util::now_secs;
 use crate::{updater, window};
-
-fn now_secs() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs() as i64)
-        .unwrap_or(0)
-}
 
 fn publish(app: &AppHandle, snapshot: Persisted) -> Result<Persisted, String> {
     let _ = app.emit("state-changed", &snapshot);
     Ok(snapshot)
+}
+
+/// Saves a note of something that already happened (a launch, an open, a search). A failed
+/// write is only logged: what the user asked for has been done.
+fn record(app: &AppHandle, state: &AppState, what: &str, change: impl FnOnce(&mut Persisted)) {
+    match state.update(|persisted| {
+        change(persisted);
+        Ok(())
+    }) {
+        Ok(recorded) => {
+            let _ = publish(app, recorded);
+        }
+        Err(err) => log::error!("couldn't record {what}: {err}"),
+    }
 }
 
 #[tauri::command]
@@ -110,7 +118,6 @@ pub fn launch_app(
 /// Opens an app for a launch group: the same as Enter on its row, but the bar is already
 /// gone and a launch group reports failures itself.
 pub fn launch_quietly(app: &AppHandle, app_id: &str) -> Result<(), String> {
-    use tauri::Manager;
     launch(app, &app.state::<AppState>(), app_id).map(|_| ())
 }
 
@@ -159,15 +166,9 @@ fn start_private(
 }
 
 fn remember_launch(app: &AppHandle, state: &AppState, app_id: &str) {
-    match state.update(|persisted| {
-        persisted.record_launch(app_id, now_secs());
-        Ok(())
-    }) {
-        Ok(recorded) => {
-            let _ = publish(app, recorded);
-        }
-        Err(err) => log::error!("couldn't record the launch: {err}"),
-    }
+    record(app, state, "the launch", |persisted| {
+        persisted.record_launch(app_id, now_secs())
+    });
 }
 
 /// Switches to an open window (a "Windows" row, or one picked from an app's actions).
@@ -203,7 +204,8 @@ pub fn app_quit(app_id: String) -> Result<(), String> {
     Ok(())
 }
 
-// Async for the same reason as open_settings: opening an app setting may build the settings webview.
+// Async: opening an app setting may build the settings webview, which deadlocks a sync
+// command on Windows (see open_settings).
 #[tauri::command]
 pub async fn open_setting(app: AppHandle, setting_id: String) -> Result<DispatchOutcome, String> {
     open_setting_page(&app, &setting_id)
@@ -222,17 +224,9 @@ fn open_setting_page(app: &AppHandle, setting_id: &str) -> Result<DispatchOutcom
         .map_err(|err| format!("Couldn't open {}: {err}", setting.title))?,
     }
     window::hide_bar(app);
-    use tauri::Manager;
-    let state = app.state::<AppState>();
-    match state.update(|persisted| {
-        persisted.record_setting_open(setting.id, now_secs());
-        Ok(())
-    }) {
-        Ok(recorded) => {
-            let _ = publish(app, recorded);
-        }
-        Err(err) => log::error!("couldn't record the setting: {err}"),
-    }
+    record(app, &app.state::<AppState>(), "the setting", |persisted| {
+        persisted.record_setting_open(setting.id, now_secs())
+    });
     log::info!("opened setting {}", setting.id);
     Ok(DispatchOutcome::SettingOpened {
         setting_id: setting.id.to_string(),
@@ -274,15 +268,9 @@ fn open_file_path(
     app.opener()
         .open_path(path, None::<&str>)
         .map_err(|err| format!("Couldn't open it: {err}"))?;
-    match state.update(|persisted| {
-        persisted.record_file_open(path, now_secs());
-        Ok(())
-    }) {
-        Ok(recorded) => {
-            let _ = publish(app, recorded);
-        }
-        Err(err) => log::error!("couldn't record the open: {err}"),
-    }
+    record(app, state, "the open", |persisted| {
+        persisted.record_file_open(path, now_secs())
+    });
     window::hide_bar(app);
     Ok(DispatchOutcome::FileOpened {
         path: path.to_string(),
@@ -458,7 +446,6 @@ pub fn finish_onboarding(app: AppHandle, state: State<'_, AppState>) -> Result<P
         persisted.onboarding_done = true;
         Ok(())
     })?;
-    use tauri::Manager;
     if let Some(window) = app.get_webview_window("onboarding") {
         let _ = window.hide();
         window::regular_while_open(&app);
@@ -560,7 +547,7 @@ pub async fn permission_request(
                 Ok(())
             })?;
             files::index().configure(snapshot.file_config(), file_cache_path(&app));
-            let _ = app.emit("state-changed", &snapshot);
+            let _ = publish(&app, snapshot);
             let status = tauri::async_runtime::spawn_blocking(permissions::probe_files)
                 .await
                 .map_err(|err| err.to_string())?;
@@ -577,7 +564,6 @@ pub async fn permission_request(
 }
 
 pub fn file_cache_path(app: &AppHandle) -> Option<std::path::PathBuf> {
-    use tauri::Manager;
     app.path()
         .app_cache_dir()
         .ok()
@@ -632,19 +618,12 @@ pub async fn dispatch(
                     .open_url(&url, None::<&str>)
                     .map_err(|err| format!("Couldn't open it: {err}"))?;
             }
-            // The browser already has the search, so a failed history write is not the user's error.
-            match state.update(|persisted| {
+            record(&app, &state, "history", |persisted| {
                 persisted.record(&query, &destination_id, now_secs());
                 if overrode_app && destination_id != "url" {
                     persisted.record_app_override(&typed);
                 }
-                Ok(())
-            }) {
-                Ok(recorded) => {
-                    let _ = publish(&app, recorded);
-                }
-                Err(err) => log::error!("couldn't record history: {err}"),
-            }
+            });
             window::hide_bar(&app);
             log::info!("opened {destination_id}");
             Ok(DispatchOutcome::Opened { destination_id })
@@ -656,15 +635,9 @@ pub async fn dispatch(
             destination_id,
             query,
         } => {
-            match state.update(|persisted| {
-                persisted.record(&query, &destination_id, now_secs());
-                Ok(())
-            }) {
-                Ok(recorded) => {
-                    let _ = publish(&app, recorded);
-                }
-                Err(err) => log::error!("couldn't record history: {err}"),
-            }
+            record(&app, &state, "history", |persisted| {
+                persisted.record(&query, &destination_id, now_secs())
+            });
             Ok(DispatchOutcome::Ask { query })
         }
         Decision::Arm { destination_id } => Ok(DispatchOutcome::Armed { destination_id }),
@@ -793,11 +766,6 @@ pub fn set_bar_height(app: AppHandle, height: f64, width: Option<f64>) -> Result
 #[tauri::command]
 pub fn hide_bar(app: AppHandle) {
     window::dismiss_bar(&app);
-}
-
-#[tauri::command]
-pub fn show_bar(app: AppHandle) {
-    window::show_bar(&app);
 }
 
 // Sync, so the usual case (Settings already built, just hidden) shows it straight from the
@@ -1122,11 +1090,6 @@ pub fn save_clipboard_settings(
     publish(&app, snapshot)
 }
 
-#[tauri::command]
-pub fn open_clipboard(app: AppHandle) {
-    window::show_clipboard(&app);
-}
-
 // Notes
 
 #[tauri::command]
@@ -1162,7 +1125,7 @@ pub fn reveal_notes(app: AppHandle) -> Result<(), String> {
 }
 
 /// Opens the notes window, on `id` when given, or on a new note holding `body`.
-// Async for the same reason as open_settings: it may build a webview.
+// Async: it may build a webview, which deadlocks a sync command on Windows (see open_settings).
 #[tauri::command]
 pub async fn open_notes(
     app: AppHandle,
@@ -1175,12 +1138,12 @@ pub async fn open_notes(
         (None, None) => None,
     };
     window::hide_bar(&app);
-    window::open_notes(&app, id.as_deref())
+    crate::note_windows::show(&app, id.as_deref())
 }
 
 /// From a note's window: opens `id`, or a new note when none is given, in a window of its
 /// own (or brings its window forward). Returns the note's id.
-// Async for the same reason as open_settings: it may build a webview.
+// Async: it may build a webview, which deadlocks a sync command on Windows (see open_settings).
 #[tauri::command]
 pub async fn open_note_window(app: AppHandle, id: Option<String>) -> Result<String, String> {
     let id = match id {
@@ -1189,6 +1152,12 @@ pub async fn open_note_window(app: AppHandle, id: Option<String>) -> Result<Stri
     };
     crate::note_windows::open(&app, &id, true)?;
     Ok(id)
+}
+
+/// From a note's window whose save failed while closing: it stays open, with the edits.
+#[tauri::command]
+pub fn keep_note_window(window: tauri::WebviewWindow) {
+    crate::note_windows::keep_open(window.label());
 }
 
 /// From a note's window, once it has saved: closes that window. The note stays.
@@ -1855,7 +1824,8 @@ fn pending_binding() -> &'static std::sync::Mutex<Option<PendingBinding>> {
 }
 
 /// From the bar's actions ("Set hotkey…"): opens Settings > Shortcuts on this target.
-// Async for the same reason as open_settings: it may build the settings webview.
+// Async: it may build the settings webview, which deadlocks a sync command on Windows (see
+// open_settings).
 #[tauri::command]
 pub async fn edit_binding(app: AppHandle, target: String, label: String) -> Result<(), String> {
     if let Ok(mut pending) = pending_binding().lock() {
@@ -1876,10 +1846,9 @@ pub fn take_pending_binding() -> Option<PendingBinding> {
 /// Runs what a binding's hotkey points at: a mode or scoped search opens the bar there, an
 /// app or bookmark opens without the bar, and a destination opens the bar armed with it.
 pub fn run_binding(app: &AppHandle, target: &str) {
-    use tauri::Manager;
     let (kind, value) = target.split_once(':').unwrap_or((target, ""));
     let result = match (kind, value) {
-        ("view", "notes") => window::open_notes(app, None),
+        ("view", "notes") => crate::note_windows::show(app, None),
         ("view", "clip") => {
             window::show_clipboard(app);
             Ok(())
@@ -1931,7 +1900,6 @@ pub fn drag_prepare(
     path: Option<String>,
     clip: Option<u64>,
 ) -> Result<DragOut, String> {
-    use tauri::Manager;
     let dir = app
         .path()
         .app_cache_dir()
@@ -2089,7 +2057,12 @@ pub fn quick_look(state: State<'_, AppState>, path: String) -> Result<(), String
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
-            .map(|_| ())
+            .map(|mut child| {
+                // Waited on in the background so the closed preview doesn't linger as a zombie.
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                });
+            })
             .map_err(|err| err.to_string())
     }
     #[cfg(not(target_os = "macos"))]

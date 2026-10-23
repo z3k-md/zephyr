@@ -94,9 +94,11 @@ pub fn register(app: &AppHandle, shortcut: &str, extras: Extras<'_>) -> Result<(
     NOTES_ID.store(0, Ordering::SeqCst);
     CAPTURE_ID.store(0, Ordering::SeqCst);
     SNAPSHOT_ID.store(0, Ordering::SeqCst);
-    shortcuts
+    // A summon key another app holds shouldn't take the other shortcuts down with it:
+    // register the rest, then report it.
+    let summon = shortcuts
         .register(parsed)
-        .map_err(|err| format!("Couldn't register {shortcut}: {err}"))?;
+        .map_err(|err| format!("Couldn't register {shortcut}: {err}"));
     // Bug captures, unless turned off in Settings.
     let (capture, snapshot) = if extras.capture {
         (
@@ -152,7 +154,7 @@ pub fn register(app: &AppHandle, shortcut: &str, extras: Extras<'_>) -> Result<(
     if let Ok(mut failed) = failed().lock() {
         *failed = failures;
     }
-    Ok(())
+    summon
 }
 
 pub fn is_notes(shortcut: &Shortcut) -> bool {

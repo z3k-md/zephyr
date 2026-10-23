@@ -12,13 +12,14 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
 use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::state::AppState;
+use crate::util::{now_secs, write_atomic};
 
 // Settings
 
@@ -224,23 +225,12 @@ fn store() -> &'static Mutex<Store> {
     })
 }
 
-fn now_secs() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs() as i64)
-        .unwrap_or(0)
-}
-
 impl Store {
     fn save(&self) {
-        let path = self.dir.join("jobs.json");
         let result = serde_json::to_vec_pretty(&self.jobs)
             .map_err(|err| err.to_string())
             .and_then(|data| {
-                fs::create_dir_all(&self.dir).map_err(|err| err.to_string())?;
-                let tmp = path.with_extension("json.tmp");
-                fs::write(&tmp, data).map_err(|err| err.to_string())?;
-                fs::rename(&tmp, &path).map_err(|err| err.to_string())
+                write_atomic(&self.dir.join("jobs.json"), &data).map_err(|err| err.to_string())
             });
         if let Err(err) = result {
             log::error!("couldn't save Claude jobs: {err}");
@@ -364,6 +354,9 @@ pub fn cancel(app: &AppHandle, job_id: &str) -> Result<(), String> {
     if let Some(pid) = store.children.get(job_id).copied() {
         store.cancelled.push(job_id.to_string());
         interrupt(pid);
+    } else if store.job_mut(job_id).is_some_and(|job| job.status.active()) {
+        // Still starting, before its process exists: spawn_turn sees this and stops.
+        store.cancelled.push(job_id.to_string());
     } else if let Some(job) = store.job_mut(job_id)
         && job.status == Status::Queued
     {
@@ -384,7 +377,10 @@ pub fn cancel(app: &AppHandle, job_id: &str) -> Result<(), String> {
 
 pub fn remove(app: &AppHandle, job_id: &str) -> Result<(), String> {
     let mut store = store().lock().map_err(|_| "Jobs are unavailable")?;
-    if store.children.contains_key(job_id) {
+    // A job that is still starting has no process yet but will have one in a moment.
+    if store.children.contains_key(job_id)
+        || store.job_mut(job_id).is_some_and(|job| job.status.active())
+    {
         return Err("Cancel the job before removing it".into());
     }
     store.jobs.retain(|job| job.id != job_id);
@@ -405,11 +401,8 @@ fn interrupt(pid: u32) {
 
 #[cfg(windows)]
 fn interrupt(pid: u32) {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    let _ = std::process::Command::new("taskkill")
+    let _ = crate::util::hidden_command("taskkill")
         .args(["/T", "/F", "/PID", &pid.to_string()])
-        .creation_flags(CREATE_NO_WINDOW)
         .status();
 }
 
@@ -535,9 +528,31 @@ fn run_turn(app: &AppHandle, job_id: &str) {
         (Some(binary), Some(project)) => spawn_turn(app, &config, &project, &binary, &job),
     };
     if let Err(message) = outcome {
+        // A cancel that came before the process started still reads as one, and mustn't
+        // linger to cancel the job's next turn.
+        let cancelled = store()
+            .lock()
+            .map(|mut store| {
+                let was = store.cancelled.iter().any(|id| id == job_id);
+                store.cancelled.retain(|id| id != job_id);
+                was
+            })
+            .unwrap_or(false);
+        let message = if cancelled {
+            "Cancelled".to_string()
+        } else {
+            message
+        };
         finish(app, job_id, None, Some(message), String::new(), Vec::new());
     }
     pump(app);
+}
+
+fn cancelled(job_id: &str) -> bool {
+    store()
+        .lock()
+        .map(|store| store.cancelled.iter().any(|id| id == job_id))
+        .unwrap_or(false)
 }
 
 fn spawn_turn(
@@ -563,6 +578,10 @@ fn spawn_turn(
         git(folder, &["rev-parse", "HEAD"]),
         git(folder, &["stash", "create"]),
     );
+    // Cancelled while starting up; run_turn records it.
+    if cancelled(&job.id) {
+        return Err("Cancelled".into());
+    }
 
     let dir = store()
         .lock()
@@ -596,7 +615,7 @@ fn spawn_turn(
         brief.push_str(&project.note);
     }
 
-    let mut command = binary::command(binary);
+    let mut command = crate::util::hidden_command(binary);
     command
         .current_dir(folder)
         .arg("-p")
@@ -636,8 +655,11 @@ fn spawn_turn(
         .spawn()
         .map_err(|err| format!("Couldn't start claude: {err}"))?;
     let started = now_secs();
+    let mut stop = false;
     if let Ok(mut store) = store().lock() {
         store.children.insert(job.id.clone(), child.id());
+        // A cancel between the check above and here found no process to stop.
+        stop = store.cancelled.contains(&job.id);
         if let Some(entry) = store.job_mut(&job.id)
             && let Some(turn) = entry.turns.last_mut()
         {
@@ -649,6 +671,9 @@ fn spawn_turn(
             entry.activity = "Thinking".into();
         }
         store.save();
+    }
+    if stop {
+        interrupt(child.id());
     }
     changed(app);
 
@@ -663,7 +688,12 @@ fn spawn_turn(
                 tail.push_str(&line);
                 tail.push('\n');
                 if tail.len() > 4000 {
-                    tail.drain(..tail.len() - 4000);
+                    // Cut on a character boundary; mid-character would panic.
+                    let mut cut = tail.len() - 4000;
+                    while !tail.is_char_boundary(cut) {
+                        cut += 1;
+                    }
+                    tail.drain(..cut);
                 }
             }
         }
@@ -783,15 +813,11 @@ fn watchdog(app: AppHandle, job_id: String, pid: u32, minutes: u32) {
 }
 
 fn git(folder: &Path, args: &[&str]) -> Option<String> {
-    let mut command = std::process::Command::new("git");
-    // git is a console program; without this each call flashes a window on Windows.
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
-    let output = command.current_dir(folder).args(args).output().ok()?;
+    let output = crate::util::hidden_command("git")
+        .current_dir(folder)
+        .args(args)
+        .output()
+        .ok()?;
     let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
     (output.status.success() && !text.is_empty()).then_some(text)
 }
@@ -1026,13 +1052,10 @@ fn summary_line(result: &str, failure: Option<&str>) -> String {
     line.chars().take(140).collect()
 }
 
+/// Notifies unless Claude notifications are turned off in Settings.
 pub(crate) fn notify(app: &AppHandle, title: &str, body: &str) {
-    if !settings(app).notifications {
-        return;
-    }
-    use tauri_plugin_notification::NotificationExt;
-    if let Err(err) = app.notification().builder().title(title).body(body).show() {
-        log::error!("couldn't show a notification: {err}");
+    if settings(app).notifications {
+        crate::util::notify(app, title, body);
     }
 }
 
@@ -1075,10 +1098,14 @@ fn terminal(folder: &str, binary: &Path, session: &str) -> Result<(), String> {
 
 #[cfg(windows)]
 fn terminal(folder: &str, binary: &Path, session: &str) -> Result<(), String> {
-    std::process::Command::new("cmd")
-        .args(["/C", "start", "", "/D", folder])
-        .arg(binary)
+    // Started directly in its own console: going through `cmd /C start` breaks on & and the
+    // like in the folder, and flashes a cmd window first.
+    use std::os::windows::process::CommandExt;
+    const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+    std::process::Command::new(binary)
+        .current_dir(folder)
         .args(["--resume", session])
+        .creation_flags(CREATE_NEW_CONSOLE)
         .spawn()
         .map(|_| ())
         .map_err(|err| format!("Couldn't open a terminal: {err}"))

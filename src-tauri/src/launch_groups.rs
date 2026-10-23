@@ -87,17 +87,10 @@ pub fn launch(app: &AppHandle, id: &str) -> Result<(), String> {
                 failed.join(", ")
             )
         };
-        notify(&app, &group.name, &body);
+        crate::util::notify(&app, &group.name, &body);
         log::info!("launched group {}: {body}", group.name);
     });
     Ok(())
-}
-
-fn notify(app: &AppHandle, title: &str, body: &str) {
-    use tauri_plugin_notification::NotificationExt;
-    if let Err(err) = app.notification().builder().title(title).body(body).show() {
-        log::error!("couldn't show a notification: {err}");
-    }
 }
 
 #[cfg(test)]

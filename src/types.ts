@@ -83,7 +83,7 @@ export interface Snapshot {
   power: PowerSchedule | null;
   /** Browser profiles whose bookmarks stay out of the bar. */
   bookmarksDisabled: string[];
-  /** Whether the bar's footer shows the song or video playing. */
+  /** Whether the search bar shows the song or video playing. */
   showNowPlaying: boolean;
   showStats: boolean;
   /** The one AI the bar offers (a destination id); empty for the first AI listed. */
@@ -307,11 +307,11 @@ export interface Suggestion {
   settingId?: string;
   path?: string;
   noteId?: string;
-  /** apps, answer, recent, web, files, settings, notes, destinations; jump and searchWith
+  /** The section it's listed under (apps, web, files…); jump, searchWith, power and shell
    *  come from the bar itself. */
   section?: string;
   subtitle?: string;
-  /** app:<id>, dest:<id> or glyph:<name>. */
+  /** app:<id>, dest:<id>, site:<url>, glyph:<name>, or zephyr for the app's own icon. */
   icon?: string;
   /** A browser's private window (Incognito, InPrivate); Shift+Enter opens one. */
   privateWindow?: string;
@@ -450,7 +450,7 @@ export interface WindowRef {
 
 /**
  * A hotkey and/or alias for one thing the bar can do. target: view:ai, scope:files,
- * app:<id>, dest:<id> or bookmark:<url>.
+ * app:<id>, dest:<id>, bookmark:<url>, group:<id> or setting:<id>.
  */
 export interface Binding {
   target: string;

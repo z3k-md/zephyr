@@ -1,5 +1,6 @@
 <script setup lang="ts">
-  import { nextTick, onMounted, onUnmounted, ref } from 'vue';
+  import { nextTick, ref } from 'vue';
+  import { useWindowListener } from '../windowEvents';
 
   // Opens a glass menu in place of the native popup for every <select> inside `root`. The
   // select stays the source of truth: picking sets its value and fires `change`, so v-model
@@ -42,9 +43,14 @@
     const room = window.innerHeight - rect.bottom - 12;
     const height = Math.min(300, options.value.length * 34 + 10);
     const above = room < height && rect.top > room;
+    // At least as wide as .select-menu's min-width; one that would run off the right edge
+    // lines up with the select's right side instead.
+    const width = Math.max(rect.width, 180);
+    const left =
+      rect.left + width > window.innerWidth - 8 ? Math.max(8, rect.right - width) : rect.left;
     style.value = {
-      left: `${rect.left}px`,
-      width: `${rect.width}px`,
+      left: `${left}px`,
+      width: `${width}px`,
       ...(above
         ? { bottom: `${window.innerHeight - rect.top + 4}px` }
         : { top: `${rect.bottom + 4}px` }),
@@ -52,6 +58,10 @@
     };
     open.value = true;
     await nextTick();
+    revealActive();
+  }
+
+  function revealActive() {
     listEl.value
       ?.querySelector<HTMLElement>(`[data-index="${active.value}"]`)
       ?.scrollIntoView({ block: 'nearest' });
@@ -83,11 +93,7 @@
         break;
       }
     }
-    void nextTick(() =>
-      listEl.value
-        ?.querySelector<HTMLElement>(`[data-index="${active.value}"]`)
-        ?.scrollIntoView({ block: 'nearest' })
-    );
+    void nextTick(revealActive);
   }
 
   function onMouseDown(event: MouseEvent) {
@@ -132,7 +138,8 @@
     } else {
       return;
     }
-    event.stopPropagation();
+    // The page's own key handlers on window don't see a key the open menu took.
+    event.stopImmediatePropagation();
   }
 
   function onScroll(event: Event) {
@@ -143,19 +150,13 @@
     close(false);
   }
 
-  onMounted(() => {
-    window.addEventListener('mousedown', onMouseDown, true);
-    window.addEventListener('keydown', onKeyDown, true);
-    window.addEventListener('scroll', onScroll, true);
-    window.addEventListener('blur', onBlur);
-  });
+  useWindowListener('mousedown', onMouseDown, true);
+  useWindowListener('keydown', onKeyDown, true);
+  useWindowListener('scroll', onScroll, true);
+  useWindowListener('blur', onBlur);
 
-  onUnmounted(() => {
-    window.removeEventListener('mousedown', onMouseDown, true);
-    window.removeEventListener('keydown', onKeyDown, true);
-    window.removeEventListener('scroll', onScroll, true);
-    window.removeEventListener('blur', onBlur);
-  });
+  /** For a host that routes keys itself, so it can leave them to the open menu. */
+  defineExpose({ isOpen: () => open.value });
 </script>
 
 <template>

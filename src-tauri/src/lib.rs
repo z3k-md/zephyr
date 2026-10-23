@@ -18,6 +18,7 @@ mod ip;
 mod launch_groups;
 mod logger;
 mod login_task;
+mod loopback;
 mod note_windows;
 mod notes;
 mod nowplaying;
@@ -39,6 +40,7 @@ mod sync;
 mod template;
 mod tray;
 mod updater;
+mod util;
 mod window;
 
 use tauri::{Emitter, Manager, WindowEvent};
@@ -78,7 +80,7 @@ pub fn run() {
                     } else if shortcut::is_notes(pressed) {
                         let app = app.clone();
                         tauri::async_runtime::spawn(async move {
-                            if let Err(err) = window::open_notes(&app, None) {
+                            if let Err(err) = note_windows::show(&app, None) {
                                 log::error!("couldn't open notes: {err}");
                             }
                         });
@@ -137,7 +139,7 @@ pub fn run() {
                 }
             });
             // The minute of totals System Resources graphs is always being kept.
-            stats::start();
+            stats::start(app.handle().clone());
             // The settings catalog reads every System Settings pane's plist on macOS (most of a
             // second); built now, the first search doesn't wait on it.
             std::thread::spawn(|| {
@@ -200,11 +202,13 @@ pub fn run() {
                 main_window.on_window_event(move |event| match event {
                     WindowEvent::CloseRequested { api, .. } => {
                         api.prevent_close();
-                        let _ = watched.hide();
+                        // Alt+F4 hides the bar like Esc does, so stats and the page hear about it.
+                        window::hide_bar(watched.app_handle());
                     }
                     WindowEvent::Focused(false) if !window::suppressing_blur() => {
                         log::debug!("the bar lost focus, hiding it");
                         let _ = watched.hide();
+                        stats::set_bar_visible(false);
                         let _ = watched.emit("bar-hidden", ());
                     }
                     WindowEvent::Moved(position) => {
@@ -246,7 +250,6 @@ pub fn run() {
             commands::clip_request_paste_permission,
             commands::clip_stats,
             commands::save_clipboard_settings,
-            commands::open_clipboard,
             commands::page_ready,
             commands::save_typing_result,
             commands::save_resume_seconds,
@@ -316,6 +319,7 @@ pub fn run() {
             commands::set_active_mode,
             commands::open_note_window,
             commands::close_note_window,
+            commands::keep_note_window,
             commands::save_open_behavior,
             commands::sync_status,
             commands::sync_google_sign_in,
@@ -375,7 +379,6 @@ pub fn run() {
             commands::clear_history,
             commands::set_bar_height,
             commands::hide_bar,
-            commands::show_bar,
             commands::open_settings,
             commands::check_for_updates,
             commands::update_status,

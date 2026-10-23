@@ -2,7 +2,7 @@
 //! cache folder. Each platform supplies `extract`; where there is none yet, rows keep the
 //! generic glyph.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use base64::Engine;
@@ -31,7 +31,7 @@ pub fn app_icon(app_id: &str, size: u32) -> Option<String> {
         None => {
             let png = extract(app_id, size)?;
             if let Some(path) = &cached {
-                let _ = std::fs::write(path, &png);
+                write_atomic(path, &png);
             }
             png
         }
@@ -86,11 +86,23 @@ pub async fn site_icon(url_template: &str) -> Option<String> {
         }
         let url = format!("data:{kind};base64,{}", STANDARD.encode(&bytes));
         if let Some(path) = &cached {
-            let _ = std::fs::write(path, &url);
+            write_atomic(path, url.as_bytes());
         }
         return Some(url);
     }
     None
+}
+
+/// Writes through a temp file, so a crash or a second thread caching the same icon never
+/// leaves half a file that later reads as the icon.
+fn write_atomic(path: &Path, data: &[u8]) {
+    let tmp = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4().simple()));
+    if std::fs::write(&tmp, data)
+        .and_then(|()| std::fs::rename(&tmp, path))
+        .is_err()
+    {
+        let _ = std::fs::remove_file(&tmp);
+    }
 }
 
 fn hex(bytes: &[u8]) -> String {

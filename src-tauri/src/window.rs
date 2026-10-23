@@ -18,6 +18,8 @@ pub fn suppressing_blur() -> bool {
 /// `place_bar`'s.
 static DRAGGING: AtomicBool = AtomicBool::new(false);
 static MOVE_GENERATION: AtomicU64 = AtomicU64::new(0);
+/// Bumped per drag, so a drop settling late doesn't end the next drag.
+static DRAG_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 /// Starts moving the bar. On macOS the page then drives the move (see `free_drag`) and
 /// gets back where the bar is and the screen's scale.
@@ -26,6 +28,7 @@ pub fn start_bar_drag(app: &AppHandle) -> Result<Option<(i32, i32, f64)>, String
         .get_webview_window("main")
         .ok_or("Main window is missing")?;
     DRAGGING.store(true, Ordering::SeqCst);
+    DRAG_GENERATION.fetch_add(1, Ordering::SeqCst);
     // The move loop hands focus around, and the bar hides when it loses focus, so it closed
     // the moment it was dropped. Losing focus doesn't count until the move is over.
     SUPPRESS_BLUR.store(true, Ordering::SeqCst);
@@ -43,6 +46,7 @@ pub fn start_bar_drag(app: &AppHandle) -> Result<Option<(i32, i32, f64)>, String
             force_foreground(&window);
             let _ = window.set_focus();
             settle_after_move();
+            end_bar_drag();
         });
         result.map(|_| None).map_err(|err| err.to_string())
     }
@@ -53,6 +57,7 @@ pub fn start_bar_drag(app: &AppHandle) -> Result<Option<(i32, i32, f64)>, String
         // The page won't report a drop for a drag that never began.
         if started.is_none() {
             settle_after_move();
+            end_bar_drag();
         }
         Ok(started)
     }
@@ -67,7 +72,6 @@ pub fn start_bar_drag(app: &AppHandle) -> Result<Option<(i32, i32, f64)>, String
     }
 }
 
-/// Lets focus loss hide the bar again a moment after a move, once the focus has settled.
 /// A drag out of the bar has started: focus moves to wherever it's dropped, so the bar
 /// mustn't hide on blur until it ends.
 pub fn begin_drag_out() {
@@ -84,6 +88,21 @@ pub fn end_drag_out(app: &AppHandle, dropped: bool) {
     }
 }
 
+/// The drop has landed. Once its last move is saved, later moves are the code's (re-centering
+/// the wider clipboard view), not the user's, so they stop being remembered.
+#[cfg(any(windows, target_os = "macos"))]
+fn end_bar_drag() {
+    let generation = DRAG_GENERATION.load(Ordering::SeqCst);
+    std::thread::spawn(move || {
+        // Longer than `bar_moved`'s wait, so the drop's own position is still saved.
+        std::thread::sleep(Duration::from_millis(500));
+        if DRAG_GENERATION.load(Ordering::SeqCst) == generation {
+            DRAGGING.store(false, Ordering::SeqCst);
+        }
+    });
+}
+
+/// Lets focus loss hide the bar again a moment after a move, once the focus has settled.
 fn settle_after_move() {
     let generation = SHOW_GENERATION.load(Ordering::SeqCst);
     std::thread::spawn(move || {
@@ -390,6 +409,7 @@ pub mod free_drag {
             let _ = bar.set_position(PhysicalPosition::new(x, y));
         }
         super::settle_after_move();
+        super::end_bar_drag();
     }
 }
 
@@ -462,6 +482,7 @@ pub fn show_bar(app: &AppHandle) {
     } else {
         "bar-shown"
     };
+    crate::stats::set_bar_visible(true);
     if let Err(err) = window.emit(event, ()) {
         log::error!("couldn't notify the bar: {err}");
     }
@@ -499,6 +520,7 @@ pub fn show_clipboard(app: &AppHandle) {
 pub fn hide_bar(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.hide();
+        crate::stats::set_bar_visible(false);
         // The bar remembers when it closed so reopening soon can return to the same view.
         let _ = window.emit("bar-hidden", ());
     }
@@ -538,13 +560,6 @@ pub fn set_bar_height(app: &AppHandle, height: f64, width: Option<f64>) -> Resul
         .set_size(PhysicalSize::new(width, height))
         .map_err(|err| err.to_string())?;
     Ok(())
-}
-
-/// Opens or focuses the floating notes window, on note `id` when given.
-/// Opens notes: `id` in its own window, or with none, brings the open notes forward (or the
-/// newest note when none is open). See note_windows.
-pub fn open_notes(app: &AppHandle, id: Option<&str>) -> Result<(), String> {
-    crate::note_windows::show(app, id)
 }
 
 /// Settings and notes are see-through over a blurred, darkened copy of what is behind them;
@@ -652,10 +667,15 @@ pub fn make_bar_glass(window: &tauri::WebviewWindow) -> Result<(), String> {
 /// Shows a window built hidden once its page says it has drawn, or after a moment if it
 /// never does. Meanwhile it draws unseen, so it never appears blank.
 pub(crate) fn reveal_soon(app: &AppHandle, window: tauri::WebviewWindow) {
+    take_reported(window.label());
     unseen::draw(app, &window);
     let app = app.clone();
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(1500));
+        // A page that reported in was already shown; if it's hidden now, the user hid it.
+        if take_reported(window.label()) {
+            return;
+        }
         if unseen::finish(&app, &window) || !window.is_visible().unwrap_or(true) {
             log::info!(
                 "{} never reported in; shown by the 1.5 s fallback",
@@ -664,16 +684,38 @@ pub(crate) fn reveal_soon(app: &AppHandle, window: tauri::WebviewWindow) {
             let _ = window.show();
             regular_while_open(&app);
             if !crate::note_windows::take_quiet(window.label()) {
-                focus_on_main_thread(&app, window);
+                focus_window(&app, window);
             }
         }
     });
 }
 
+/// Windows whose page has reported in since `reveal_soon`, so its fallback leaves them be.
+static REPORTED: std::sync::Mutex<Option<std::collections::HashSet<String>>> =
+    std::sync::Mutex::new(None);
+
+/// Whether `label`'s page reported in, clearing it.
+fn take_reported(label: &str) -> bool {
+    REPORTED
+        .lock()
+        .is_ok_and(|mut set| set.as_mut().is_some_and(|set| set.remove(label)))
+}
+
 /// Called by a settings or notes page after its first paint.
 pub fn page_ready(app: &AppHandle, label: &str) {
+    if label != "main"
+        && let Ok(mut set) = REPORTED.lock()
+    {
+        set.get_or_insert_with(Default::default)
+            .insert(label.to_string());
+    }
     // Settings is built ahead of time: it stays hidden until asked for.
-    if label == "settings" && !SETTINGS_WANTED.load(std::sync::atomic::Ordering::SeqCst) {
+    if label == "settings" && !SETTINGS_WANTED.load(Ordering::SeqCst) {
+        // Hidden before its page was ready: take it back off screen if it was drawing unseen,
+        // since the fallback no longer will.
+        if let Some(window) = app.get_webview_window(label) {
+            unseen::put_away(app, &window);
+        }
         return;
     }
     // The bar shows only when summoned; its page reports in once, drawn, and goes back off
@@ -706,25 +748,25 @@ pub fn page_ready(app: &AppHandle, label: &str) {
         regular_while_open(app);
         // A note reopened at start comes up without taking focus.
         if !crate::note_windows::take_quiet(label) {
-            focus_on_main_thread(app, window);
+            focus_window(app, window);
         }
     }
 }
 
 /// Whether the Settings window should appear once its page is ready (false while it's
 /// being built in the background ahead of time).
-static SETTINGS_WANTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static SETTINGS_WANTED: AtomicBool = AtomicBool::new(false);
 
 /// Opens or focuses the settings window, scrolled to `section` when one is given. The
 /// window is built ahead of time and only ever hidden, so this is just show and focus.
 pub fn open_settings(app: &AppHandle, section: Option<&str>) -> Result<(), String> {
-    SETTINGS_WANTED.store(true, std::sync::atomic::Ordering::SeqCst);
+    SETTINGS_WANTED.store(true, Ordering::SeqCst);
     if let Some(window) = app.get_webview_window("settings") {
         let _ = window.emit("settings-shown", section.unwrap_or_default());
         let _ = window.unminimize();
         let _ = window.show();
         regular_while_open(app);
-        focus_on_main_thread(app, window);
+        focus_window(app, window);
         return Ok(());
     }
     build_settings(app, section)
@@ -732,7 +774,7 @@ pub fn open_settings(app: &AppHandle, section: Option<&str>) -> Result<(), Strin
 
 /// Esc in Settings, or its close button: hides it, ready to show again instantly.
 pub fn hide_settings(app: &AppHandle) {
-    SETTINGS_WANTED.store(false, std::sync::atomic::Ordering::SeqCst);
+    SETTINGS_WANTED.store(false, Ordering::SeqCst);
     if let Some(window) = app.get_webview_window("settings") {
         let _ = window.hide();
     }
@@ -745,7 +787,7 @@ pub fn show_settings_now(app: &AppHandle) -> bool {
     let Some(window) = app.get_webview_window("settings") else {
         return false;
     };
-    SETTINGS_WANTED.store(true, std::sync::atomic::Ordering::SeqCst);
+    SETTINGS_WANTED.store(true, Ordering::SeqCst);
     let _ = window.unminimize();
     let _ = window.show();
     regular_while_open(app);
@@ -784,11 +826,11 @@ fn build_settings(app: &AppHandle, section: Option<&str>) -> Result<(), String> 
         if let tauri::WindowEvent::CloseRequested { api, .. } = event {
             api.prevent_close();
             let _ = hidden.hide();
-            SETTINGS_WANTED.store(false, std::sync::atomic::Ordering::SeqCst);
+            SETTINGS_WANTED.store(false, Ordering::SeqCst);
             regular_while_open(hidden.app_handle());
         }
     });
-    if SETTINGS_WANTED.load(std::sync::atomic::Ordering::SeqCst) {
+    if SETTINGS_WANTED.load(Ordering::SeqCst) {
         reveal_soon(app, window);
     }
     Ok(())
@@ -799,7 +841,7 @@ pub fn open_onboarding(app: &AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("onboarding") {
         let _ = window.show();
         regular_while_open(app);
-        focus_on_main_thread(app, window);
+        focus_window(app, window);
         return Ok(());
     }
     let window = WebviewWindowBuilder::new(
@@ -895,14 +937,10 @@ fn paint_offscreen(app: &AppHandle) {
     });
 }
 
-// open_settings can be called from an async command's worker thread; the Win32 foreground
-// dance attaches the calling thread's input queue, so it has to run on the UI thread.
-/// Brings one of the app's windows to the front and gives it the keyboard.
+/// Brings one of the app's windows to the front and gives it the keyboard. Callers may be on
+/// an async command's worker thread; the Win32 foreground dance attaches the calling thread's
+/// input queue, so it runs on the UI thread.
 pub(crate) fn focus_window(app: &AppHandle, window: tauri::WebviewWindow) {
-    focus_on_main_thread(app, window);
-}
-
-fn focus_on_main_thread(app: &AppHandle, window: tauri::WebviewWindow) {
     let result = app.run_on_main_thread(move || {
         force_foreground(&window);
         let _ = window.set_focus();

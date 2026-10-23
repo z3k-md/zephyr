@@ -1,15 +1,10 @@
 <script setup lang="ts">
   import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-  import {
-    bindingFailures,
-    errorMessage,
-    formatShortcut,
-    saveBinding,
-    takePendingBinding,
-  } from '../api';
+  import { bindingFailures, errorMessage, saveBinding, takePendingBinding } from '../api';
   import { commandTargets } from '../bar/rows';
-  import { captureShortcut } from '../keys';
+  import { captureShortcut, formatShortcut, isModifierKey } from '../keys';
+  import { useWindowListener } from '../windowEvents';
   import type { Binding, Snapshot } from '../types';
 
   // Settings › Shortcuts: a global hotkey and/or a typed alias for any command, app,
@@ -97,7 +92,7 @@
     draft.value = blank(command.target, command.label);
   }
 
-  /** The keys pressed, as a shortcut string, or null until there's a modifier and a key. */
+  /** While a hotkey is being recorded, the next full combo becomes that binding's hotkey. */
   function onKey(event: KeyboardEvent) {
     const target = listening.value;
     if (!target || event.isComposing) return;
@@ -110,7 +105,7 @@
     }
     const hotkey = captureShortcut(event, true);
     if (!hotkey) {
-      if (!['Control', 'Alt', 'Shift', 'Meta'].includes(event.key)) {
+      if (!isModifierKey(event)) {
         error.value = { target, message: 'Use at least one modifier and a letter, number or key.' };
       }
       return;
@@ -119,15 +114,15 @@
     void save(binding, { hotkey });
   }
 
+  useWindowListener('keydown', onKey, true);
+
   onMounted(async () => {
-    window.addEventListener('keydown', onKey, true);
     unlistens.push(await listen('binding-pending', () => void takePending()));
     await takePending();
     await refreshFailures();
   });
 
   onUnmounted(() => {
-    window.removeEventListener('keydown', onKey, true);
     for (const unlisten of unlistens) unlisten();
   });
 </script>

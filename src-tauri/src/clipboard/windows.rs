@@ -224,11 +224,13 @@ fn dib_to_rgba(bytes: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
         _ => return None,
     };
     let colors_used = u32_at(bytes, 32).unwrap_or(0) as usize;
-    pixels_at += colors_used * 4;
+    // A crafted header can make these sizes overflow; such an image is just unreadable.
+    pixels_at = pixels_at.checked_add(colors_used.checked_mul(4)?)?;
 
     let (width, rows) = (width as usize, height.unsigned_abs() as usize);
-    let stride = (width * bits as usize).div_ceil(32) * 4;
-    let pixels = bytes.get(pixels_at..pixels_at + stride * rows)?;
+    let stride = width.checked_mul(bits as usize)?.div_ceil(32) * 4;
+    let end = pixels_at.checked_add(stride.checked_mul(rows)?)?;
+    let pixels = bytes.get(pixels_at..end)?;
     let mut rgba = Vec::with_capacity(width * rows * 4);
     let shift = |mask: u32| mask.trailing_zeros().min(31);
     for row in 0..rows {

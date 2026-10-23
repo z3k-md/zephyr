@@ -64,6 +64,11 @@ fn index() -> &'static Mutex<Index> {
 /// Which profiles to leave out (Settings > Bookmarks), by source id.
 pub fn configure(disabled: &[String]) {
     if let Ok(mut index) = index().lock() {
+        // The files haven't changed, so forget their stamps to make the next refresh rebuild
+        // the list without (or with) these profiles.
+        if index.disabled != disabled {
+            index.stamps.clear();
+        }
         index.disabled = disabled.to_vec();
         index.checked = None;
     }

@@ -53,12 +53,14 @@
   import ResultList from './ResultList.vue';
   import { vFit } from '../fit';
   import { bytes } from '../format';
+  import { isMac } from '../keys';
   import { askAiName, chosenAi, displayName, isOtherAi } from '../aiChoice';
   import NowPlayingStrip from './NowPlayingStrip.vue';
   import { dragOut } from './dragOut';
   import { GLYPHS } from './glyphs';
   import FilePreviewPane from './FilePreviewPane.vue';
   import { useNowPlaying } from './nowPlaying';
+  import { useFooterStats } from './footerStats';
   import { bindingForAlias, bindingTarget, buildRows, groups, rowKey, type RowCtx } from './rows';
   import ClaudeView from '../claude/ClaudeView.vue';
   import ShellView from '../shell/ShellView.vue';
@@ -114,10 +116,9 @@
   const selected = ref(-1);
   const loadError = ref<string | null>(null);
 
-  // Views that take over the bar. Workspaces (Claude, Ask AI, typing, and Notes in its own
-  // window) stick: every open lands back in them until Esc leaves. Esc to the main bar only
-  // parks a workspace; a second Esc there clears it. Clipboard is a picker: it sticks until
-  // something is picked.
+  // Views that take over the bar. Workspaces (Claude, Ask AI, typing and Shell) stick: every
+  // open lands back in them until Esc leaves. Esc to the main bar only parks a workspace; a
+  // second Esc there clears it. Clipboard is a picker: it sticks until something is picked.
   type View = 'root' | 'claude' | 'clip' | 'typing' | 'ai' | 'shell' | 'resources';
   const WORKSPACES = ['claude', 'ai', 'typing', 'shell'];
   const MODE_NAMES: Record<string, string> = {
@@ -216,8 +217,10 @@
 
   function untilText(at: number): string {
     const left = Math.max(0, at - Math.floor(clock.value / 1000));
-    const hours = Math.floor(left / 3600);
-    const minutes = Math.ceil((left % 3600) / 60);
+    // Rounded up to the minute first, so 1h 59m 30s reads "2h", not "1h 60m".
+    const total = Math.ceil(left / 60);
+    const hours = Math.floor(total / 60);
+    const minutes = total % 60;
     const span = hours ? `${hours}h${minutes ? ` ${minutes}m` : ''}` : `${minutes || 1}m`;
     if (left < 3600) return `in ${span}`;
     const time = new Date(at * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
@@ -476,8 +479,6 @@
   watch(selected, (index) => trace('selected', { index, label: items.value[index]?.label }));
   watch(notice, (text) => text && trace('notice', { text }));
 
-  const isMac = navigator.userAgent.includes('Mac');
-
   // Ctrl+K (⌘K on a Mac) lists what else the selected row, or the typed text, can do.
   const rowActions = computed<Action[]>(() => {
     const item = selectedItem.value;
@@ -572,33 +573,16 @@
     ];
   });
 
-  // CPU, memory, disk and network in a slim footer, sampled once a second only while the
-  // bar is showing (Settings › General can turn it off).
-  const stats = ref<SystemStats | null>(null);
-  let statsTimer = 0;
-  /** Bumped by every start and stop, so a sample still in flight can't reschedule. */
-  let statsGeneration = 0;
-  const statsShown = computed(() => snapshot.value?.showStats !== false && stats.value !== null);
+  // CPU, memory, disk and network as meters in a slim footer, from readings the app sends
+  // twice a second while the bar shows (Settings › General can turn it off).
+  const footerStats = useFooterStats();
+  const meters = footerStats.footer;
+  const statsShown = computed(() => snapshot.value?.showStats !== false && meters.value !== null);
 
-  /** Samples while the main bar shows; other views don't show the footer. */
-  function sampleStats() {
-    stopStats();
+  /** Only the main bar shows the footer; other views let readings pass. */
+  function takeStats(next: SystemStats) {
     if (snapshot.value?.showStats === false || view.value !== 'root') return;
-    const current = statsGeneration;
-    void systemStats()
-      .then((next) => {
-        if (current === statsGeneration) stats.value = next;
-      })
-      .catch(() => undefined)
-      .finally(() => {
-        if (current === statsGeneration) statsTimer = window.setTimeout(sampleStats, 1000);
-      });
-  }
-
-  function stopStats() {
-    statsGeneration += 1;
-    window.clearTimeout(statsTimer);
-    statsTimer = 0;
+    footerStats.push(next);
   }
 
   // What's playing, as a small chip at the end of the search bar.
@@ -623,7 +607,6 @@
     unlistens.push(
       await listen('bar-shown', () => {
         media.tick();
-        sampleStats();
         // Opens the connection to the suggestion service before the first keystroke.
         void warmSuggestions(armedId.value).catch(() => undefined);
         void loadApprovals();
@@ -639,6 +622,8 @@
         }
         // Still inside a view (a workspace, or a picker mid-search): reopen right there.
         if (view.value === 'resources') resourcesView.value?.start();
+        // Copies made while the bar was hidden.
+        if (view.value === 'clip') void clipView.value?.refresh();
         if (view.value !== 'root') return;
         if (WORKSPACES.includes(parked.value)) {
           enter(parked.value as View);
@@ -665,10 +650,10 @@
     unlistens.push(
       await listen('bar-hidden', () => {
         hiddenAt = Date.now();
-        stopStats();
         resourcesView.value?.stop();
       })
     );
+    unlistens.push(await listen<SystemStats>('stats', (event) => takeStats(event.payload)));
     // A zephyr:// link: text to type in, and optionally where to send it right away.
     unlistens.push(
       await listen<{ query: string; destination: string | null; run: boolean }>(
@@ -706,12 +691,7 @@
     void loadJobs();
     void loadDevices();
     devicePoll = window.setInterval(() => void loadDevices(), 60000);
-    unlistens.push(
-      await listen('clipboard-shown', () => {
-        clipQuery.value = '';
-        enter('clip');
-      })
-    );
+    unlistens.push(await listen('clipboard-shown', () => openClip('')));
     // A hotkey the user gave a mode or scoped search (Settings > Shortcuts).
     unlistens.push(
       await listen<string>('bar-open', (event) => {
@@ -741,9 +721,16 @@
     window.addEventListener('keydown', onKey, true);
     window.addEventListener('keydown', trackModifiers, true);
     window.addEventListener('keyup', trackModifiers, true);
+    window.addEventListener('keyup', onKeyUp, true);
     window.addEventListener('blur', () => {
       held.value = '';
       movable.value = false;
+      closeOnEscapeUp = false;
+      // Alt+Tab away: the Alt reached the bar, its release didn't.
+      window.clearTimeout(numbersTimer);
+      numbersTimer = 0;
+      showNumbers.value = false;
+      altAlone = false;
     });
     // A drop lands outside the page's key events, so the pointer corrects what's held.
     window.addEventListener('mousemove', trackModifiers, true);
@@ -756,7 +743,9 @@
     // popping in a second later.
     if (snapshot.value?.showStats !== false) {
       void systemStats()
-        .then((next) => (stats.value ??= next))
+        .then((next) => {
+          if (!meters.value) takeStats(next);
+        })
         .catch(() => undefined);
     }
     await focusInput();
@@ -770,6 +759,7 @@
     window.removeEventListener('keydown', onKey, true);
     window.removeEventListener('keydown', trackModifiers, true);
     window.removeEventListener('keyup', trackModifiers, true);
+    window.removeEventListener('keyup', onKeyUp, true);
     window.removeEventListener('mousemove', trackModifiers, true);
     observer?.disconnect();
     window.clearTimeout(suggestTimer);
@@ -785,13 +775,18 @@
     syncHeight();
     if (view.value === 'root') {
       scheduleSuggest();
-      sampleStats();
       void focusInput();
-    } else {
-      stopStats();
-      if (view.value === 'ai') void aiView.value?.focus();
+    } else if (view.value === 'ai') {
+      void aiView.value?.focus();
     }
   });
+
+  /** Clipboard history with `text` searched; already open, it starts over with the latest. */
+  function openClip(text: string) {
+    clipQuery.value = text;
+    if (view.value === 'clip') void clipView.value?.reopen(text);
+    else enter('clip');
+  }
 
   /** Enters a view. Workspaces become the place the bar returns to. */
   function enter(next: View) {
@@ -837,6 +832,16 @@
     } else {
       void enterAi(question);
     }
+  }
+
+  /** Set by Esc's press at the root; its release closes the bar. */
+  let closeOnEscapeUp = false;
+
+  function onKeyUp(event: KeyboardEvent) {
+    if (event.key !== 'Escape' || !closeOnEscapeUp) return;
+    closeOnEscapeUp = false;
+    event.preventDefault();
+    closeFromRoot();
   }
 
   /** Esc on the main bar: forget the parked workspace, then close. */
@@ -886,8 +891,7 @@
     } else if (id === 'claude' || id === 'ai' || id === 'typing') {
       enter(id);
     } else if (id === 'clip') {
-      clipQuery.value = '';
-      enter('clip');
+      openClip('');
     } else if (id === 'resources') {
       enter('resources');
     } else if (id === 'notes') {
@@ -911,15 +915,22 @@
     }
   }
 
+  /** An answer still on its way: the next request moves up only once it's done, and a
+   * second key press mustn't answer that one unseen. */
+  let answering = false;
+
   async function answerDevice(decision: 'allow' | 'deny') {
     const device = devicesWaiting.value[0];
-    if (!device) return;
+    if (!device || answering) return;
+    answering = true;
     try {
       if (decision === 'allow') await syncApprove(device.id);
       else await syncRevoke(device.id);
       await loadDevices();
     } catch (error) {
       notice.value = errorMessage(error);
+    } finally {
+      answering = false;
     }
   }
 
@@ -934,7 +945,8 @@
   /** Answers the oldest permission request; text typed in the bar becomes a deny reason. */
   async function answerApproval(decision: 'allow' | 'always' | 'deny') {
     const approval = approvals.value[0];
-    if (!approval) return;
+    if (!approval || answering) return;
+    answering = true;
     const typed = view.value === 'claude' ? (claudeView.value?.text ?? '') : query.value;
     try {
       await claudeAnswer(approval.id, decision, decision === 'deny' ? typed : undefined);
@@ -945,6 +957,8 @@
       await loadApprovals();
     } catch (error) {
       notice.value = errorMessage(error);
+    } finally {
+      answering = false;
     }
   }
 
@@ -977,9 +991,8 @@
     }
     const clip = /^!clip(?:\s+(.*))?$/i.exec(query.value);
     if (clip) {
-      clipQuery.value = clip[1] ?? '';
       query.value = '';
-      enter('clip');
+      openClip(clip[1] ?? '');
       return;
     }
     actionsOpen.value = false;
@@ -1139,8 +1152,8 @@
       shift: event.shiftKey,
       meta: event.metaKey,
     });
-    if (event.isComposing) return;
-    // A pending Claude permission request: never plain Enter, only these keys.
+    // WebKit ends a composition before the key that commits it, which then reads 229.
+    if (event.isComposing || event.keyCode === 229) return;
     // A computer asking to join sync, when no Claude request is ahead of it.
     if (
       !approvals.value.length &&
@@ -1151,19 +1164,22 @@
     ) {
       if (event.code === 'KeyY' || event.code === 'KeyN') {
         event.preventDefault();
+        if (event.repeat) return;
         void answerDevice(event.code === 'KeyY' ? 'allow' : 'deny');
         return;
       }
     }
+    // A pending Claude permission request: never plain Enter, only these keys.
     if (approvals.value.length && (event.metaKey || event.ctrlKey) && !event.altKey) {
+      // A held key answers once; the next request needs its own press.
       if (event.code === 'KeyY') {
         event.preventDefault();
-        void answerApproval(event.shiftKey ? 'always' : 'allow');
+        if (!event.repeat) void answerApproval(event.shiftKey ? 'always' : 'allow');
         return;
       }
       if (event.code === 'KeyN' && !event.shiftKey) {
         event.preventDefault();
-        void answerApproval('deny');
+        if (!event.repeat) void answerApproval('deny');
         return;
       }
     }
@@ -1313,9 +1329,11 @@
       return;
     }
 
+    // Esc closes the bar when it's let go, so the release doesn't land in the app underneath
+    // (a full-screen video there took it as its own Esc and left full screen).
     if (event.key === 'Escape') {
       event.preventDefault();
-      closeFromRoot();
+      if (!event.repeat) closeOnEscapeUp = true;
       return;
     }
 
@@ -1328,7 +1346,7 @@
     // Alt+1..9 (⌘1..9 on a Mac) runs the Nth row, as Enter on it would.
     if (runKeyHeld(event) && /^Digit[1-9]$/.test(event.code)) {
       const index = Number(event.code.slice(5)) - 1;
-      if (index < items.value.length) {
+      if (index < Math.min(items.value.length, visibleCount.value)) {
         event.preventDefault();
         showNumbers.value = false;
         if (!event.repeat) chooseAt(index);
@@ -1410,10 +1428,7 @@
       const url = new URL(await resolveUrl(text, 'google'));
       url.searchParams.set('udm', '50');
       await openUrl(url.toString());
-      query.value = '';
-      scope.value = null;
-      selected.value = -1;
-      notice.value = null;
+      clearAfterOpen();
     } catch (error) {
       notice.value = errorMessage(error);
     }
@@ -1673,11 +1688,13 @@
       return;
     }
     userMoved = true;
+    // Only rows that fit are shown, so moving never lands on one that isn't.
+    const count = Math.min(items.value.length, visibleCount.value);
+    if (count === 0) return;
     if (selected.value < 0) {
-      selected.value = delta > 0 ? 0 : items.value.length - 1;
+      selected.value = delta > 0 ? 0 : count - 1;
       return;
     }
-    const count = Math.min(items.value.length, visibleCount.value);
     selected.value = (Math.min(selected.value, count - 1) + delta + count) % count;
   }
 
@@ -1846,16 +1863,26 @@
     }
   }
 
-  async function switchTo(handle: number) {
+  /** Clears the text, scope, selection and message once something has opened. */
+  function clearAfterOpen() {
+    query.value = '';
+    scope.value = null;
+    selected.value = -1;
+    notice.value = null;
+  }
+
+  /** Waits on an open: the bar clears when it worked, and says why when it didn't. */
+  async function opening(request: Promise<unknown>) {
     try {
-      await windowFocus(handle);
-      query.value = '';
-      scope.value = null;
-      selected.value = -1;
-      notice.value = null;
+      await request;
+      clearAfterOpen();
     } catch (error) {
       notice.value = errorMessage(error);
     }
+  }
+
+  async function switchTo(handle: number) {
+    await opening(windowFocus(handle));
   }
 
   /** Closing asks the window, so the app can still offer to save; the list catches up. */
@@ -1884,51 +1911,19 @@
    * `privateWindow` opens a browser in its private window.
    */
   async function launch(appId: string, newWindow = false, privateWindow = false) {
-    try {
-      await launchApp(appId, newWindow, privateWindow);
-      query.value = '';
-      scope.value = null;
-      selected.value = -1;
-      notice.value = null;
-    } catch (error) {
-      notice.value = errorMessage(error);
-    }
+    await opening(launchApp(appId, newWindow, privateWindow));
   }
 
   async function openPage(settingId: string) {
-    try {
-      await openSetting(settingId);
-      query.value = '';
-      scope.value = null;
-      selected.value = -1;
-      notice.value = null;
-    } catch (error) {
-      notice.value = errorMessage(error);
-    }
+    await opening(openSetting(settingId));
   }
 
   async function openPath(path: string) {
-    try {
-      await openFile(path);
-      query.value = '';
-      scope.value = null;
-      selected.value = -1;
-      notice.value = null;
-    } catch (error) {
-      notice.value = errorMessage(error);
-    }
+    await opening(openFile(path));
   }
 
   async function reveal(path: string) {
-    try {
-      await revealFile(path);
-      query.value = '';
-      scope.value = null;
-      selected.value = -1;
-      notice.value = null;
-    } catch (error) {
-      notice.value = errorMessage(error);
-    }
+    await opening(revealFile(path));
   }
 
   async function copyPath(path: string) {
@@ -1949,10 +1944,7 @@
         outcome.kind === 'settingOpened' ||
         outcome.kind === 'fileOpened'
       ) {
-        query.value = '';
-        scope.value = null;
-        selected.value = -1;
-        notice.value = null;
+        clearAfterOpen();
         return;
       }
       if (outcome.kind === 'ask') {
@@ -2164,7 +2156,7 @@
       />
 
       <footer
-        v-if="statsShown && stats"
+        v-if="statsShown && meters"
         ref="statsEl"
         class="stats"
         aria-label="System"
@@ -2172,29 +2164,52 @@
         @mousedown.prevent
         @click="openView('resources')"
       >
-        <span class="stat" title="CPU">
+        <span class="stat" :title="`CPU: ${meters.cpu}`">
           <svg viewBox="0 0 24 24" aria-hidden="true" v-html="GLYPHS.cpu" />
-          {{ Math.round(stats.cpu) }}%
+          <span class="meter" aria-hidden="true">
+            <span
+              class="meter-fill"
+              :class="{ hot: meters.cpuHot }"
+              :style="{ transform: `scaleX(${meters.cpuScale})` }"
+            />
+          </span>
+          <span class="stat-value">{{ meters.cpu }}</span>
         </span>
-        <span class="stat" title="Memory used">
+        <span class="stat" :title="meters.memoryTitle">
           <svg viewBox="0 0 24 24" aria-hidden="true" v-html="GLYPHS.memory" />
-          {{ bytes(stats.memoryUsed) }} / {{ bytes(stats.memoryTotal, 0) }}
+          <span class="meter" aria-hidden="true">
+            <span class="meter-fill" :style="{ transform: `scaleX(${meters.memoryScale})` }" />
+          </span>
+          <span class="stat-value">{{ meters.memory }}</span>
         </span>
-        <span v-if="stats.diskTotal" class="stat" title="Free on the system disk">
+        <span v-if="meters.diskLow" class="stat stat-low" :title="meters.diskTitle">
           <svg viewBox="0 0 24 24" aria-hidden="true" v-html="GLYPHS.drive" />
-          {{ bytes(stats.diskFree) }} free
+          {{ meters.disk }}
         </span>
-        <span class="stat" title="Network, down and up">
-          <svg viewBox="0 0 24 24" aria-hidden="true" v-html="GLYPHS.updown" />
-          ↓ {{ bytes(stats.netDown) }}/s · ↑ {{ bytes(stats.netUp) }}/s
+        <span class="stat stat-network" :title="meters.networkTitle">
+          <svg
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+            :class="{ busy: meters.down > 0.55 }"
+            :style="{ opacity: 0.3 + 0.7 * meters.down }"
+            v-html="GLYPHS.down"
+          />
+          <svg
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+            :class="{ busy: meters.up > 0.55 }"
+            :style="{ opacity: 0.3 + 0.7 * meters.up }"
+            v-html="GLYPHS.up"
+          />
         </span>
         <span
-          v-if="stats.app"
+          v-if="meters.app"
           class="stat stat-app"
-          :title="`This dev build: ${stats.app.processes} processes, webview helpers included`"
+          :title="`This dev build: ${meters.app.processes} processes, webview helpers included`"
         >
           <svg viewBox="0 0 24 24" aria-hidden="true" v-html="GLYPHS.logo" />
-          {{ Math.round(stats.app.cpu) }}% · {{ bytes(stats.app.memory) }}
+          <span class="stat-app-cpu">{{ Math.round(meters.app.cpu) }}%</span>
+          <span class="stat-app-memory">{{ bytes(meters.app.memory) }}</span>
         </span>
       </footer>
     </template>

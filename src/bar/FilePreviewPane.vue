@@ -3,7 +3,7 @@
   import { errorMessage, filePreview } from '../api';
   import type { FilePreview } from '../types';
   import RowIcon from './RowIcon.vue';
-  import { bytes } from '../format';
+  import { bytes, dateTime } from '../format';
 
   // The preview beside the results (Shift+Space on a file): a picture, the first lines of a
   // text file, or the file's size, date and folder.
@@ -30,11 +30,7 @@
   );
 
   function date(seconds: number): string {
-    if (!seconds) return '';
-    return new Date(seconds * 1000).toLocaleString(undefined, {
-      dateStyle: 'medium',
-      timeStyle: 'short',
-    });
+    return seconds ? dateTime(seconds) : '';
   }
 
   function folderOf(path: string): string {

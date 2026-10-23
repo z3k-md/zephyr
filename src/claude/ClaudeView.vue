@@ -14,6 +14,7 @@
     openSetting,
   } from '../api';
   import type { ClaudeJob, ClaudeSettings, ClaudeStatus } from '../types';
+  import { MOD_KEY as mod } from '../keys';
 
   const props = defineProps<{ initialQuery: string; settings: ClaudeSettings | null }>();
   const emit = defineEmits<{ exit: [] }>();
@@ -23,9 +24,6 @@
     keys?: string;
     run: () => unknown;
   }
-
-  const isMac = navigator.userAgent.includes('Mac');
-  const mod = isMac ? '⌘' : 'Ctrl+';
 
   const inputEl = ref<HTMLTextAreaElement | null>(null);
   const text = ref(props.initialQuery);

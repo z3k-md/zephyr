@@ -11,10 +11,12 @@ mod win;
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
+
+use crate::util::now_ms;
 
 /// One app's media as the platform reports it.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -265,13 +267,6 @@ fn same_apart_from_time(a: Option<&NowPlaying>, b: Option<&NowPlaying>) -> bool 
         }
         _ => false,
     }
-}
-
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 /// Whether an app id is a web browser, whose playing tab the extension can find.

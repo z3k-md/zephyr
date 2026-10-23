@@ -65,7 +65,10 @@
     window.clearInterval(timer);
     if (on) {
       void refresh();
-      timer = window.setInterval(() => void refresh(), 1000);
+      // Closing Settings only hides it, so the section can stay "open" all session.
+      timer = window.setInterval(() => {
+        if (!document.hidden) void refresh();
+      }, 1000);
     }
   }
 

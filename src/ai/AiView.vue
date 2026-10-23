@@ -1,6 +1,7 @@
 <script setup lang="ts">
   import { computed, nextTick, onMounted, ref } from 'vue';
   import { aiAsk, aiCancel, errorMessage, hideBar, openUrl } from '../api';
+  import { MOD_KEY as mod } from '../keys';
 
   const emit = defineEmits<{ exit: [] }>();
 
@@ -11,9 +12,6 @@
     error: string | null;
     source: string | null;
   }
-
-  const isMac = navigator.userAgent.includes('Mac');
-  const mod = isMac ? '⌘' : 'Ctrl+';
 
   const inputEl = ref<HTMLTextAreaElement | null>(null);
   const scroller = ref<HTMLElement | null>(null);
@@ -37,6 +35,16 @@
       generation++;
       void aiCancel().catch(() => undefined);
       turns.value = [];
+    }
+    // A follow-up stops an answer still coming in (the backend does too); it keeps what
+    // arrived instead of waiting forever.
+    for (const earlier of turns.value) {
+      if (earlier.status !== 'waiting' && earlier.status !== 'streaming') continue;
+      if (earlier.answer) earlier.status = 'done';
+      else {
+        earlier.status = 'error';
+        earlier.error = 'Stopped';
+      }
     }
     const history = turns.value
       .filter((turn) => turn.status === 'done')

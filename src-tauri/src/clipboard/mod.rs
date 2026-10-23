@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
@@ -20,6 +20,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crypto::Cipher;
+
+use crate::util::{now_secs, write_atomic};
 
 /// Most items kept, pinned ones aside; older ones go first.
 const MAX_ITEMS: usize = 2000;
@@ -258,13 +260,6 @@ fn history() -> &'static Mutex<History> {
     })
 }
 
-fn now_secs() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs() as i64)
-        .unwrap_or(0)
-}
-
 /// Loads saved history and starts watching the clipboard.
 pub fn start(dir: PathBuf, settings: ClipboardSettings) {
     {
@@ -330,7 +325,9 @@ impl History {
         let result = serde_json::to_vec(&saved)
             .map_err(|err| err.to_string())
             .and_then(|plain| cipher.seal(&plain))
-            .and_then(|sealed| write_atomic(&self.dir.join("history.bin"), &sealed));
+            .and_then(|sealed| {
+                write_atomic(&self.dir.join("history.bin"), &sealed).map_err(|err| err.to_string())
+            });
         if let Err(err) = result {
             log::error!("couldn't save clipboard history: {err}");
         }
@@ -385,7 +382,6 @@ impl History {
             Some((png, width, height)) => {
                 let cipher = self.cipher.as_ref()?;
                 let sealed = cipher.seal(&png).ok()?;
-                fs::create_dir_all(self.dir.join("images")).ok()?;
                 write_atomic(&self.image_path(id), &sealed).ok()?;
                 Some(ImageInfo {
                     width,
@@ -490,15 +486,6 @@ fn read_saved(dir: &Path, cipher: &Cipher) -> Option<Saved> {
             None
         }
     }
-}
-
-fn write_atomic(path: &Path, data: &[u8]) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|err| err.to_string())?;
-    }
-    let tmp = path.with_extension("tmp");
-    fs::write(&tmp, data).map_err(|err| err.to_string())?;
-    fs::rename(&tmp, path).map_err(|err| err.to_string())
 }
 
 /// Links and colors get their own kinds so they can be filtered and previewed.
@@ -877,6 +864,20 @@ pub fn paste(id: u64, plain: bool, hide: impl FnOnce()) -> Result<PasteOutcome, 
 
 pub fn can_paste() -> bool {
     platform().can_paste(false)
+}
+
+/// Puts a PNG on the clipboard as an image, as a debug snapshot does. History records it like
+/// any other copy.
+pub fn copy_png(png: Vec<u8>) -> Result<(), String> {
+    // The size is in the PNG's header chunk, right after the signature.
+    let size = |at: usize| {
+        png.get(at..at + 4)
+            .map(|bytes| u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+    };
+    let (Some(width), Some(height)) = (size(16), size(20)) else {
+        return Err("That isn't a PNG".into());
+    };
+    platform().write(&Content::Image { png, width, height }, false)
 }
 
 pub fn request_paste_permission() -> bool {

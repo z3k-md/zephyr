@@ -3,12 +3,12 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { nowPlaying, nowPlayingControl, nowPlayingFocus } from '../api';
 import type { MediaControl, NowPlaying } from '../types';
 
-/** How long a paused song stays in the footer. */
+/** How long a paused song stays in the search bar. */
 const LINGER_MS = 2 * 60 * 1000;
 
 /**
  * The song or video playing on this computer, kept current from the `nowplaying` events, and
- * the buttons for it. `shown` is what the footer draws: something playing, or paused within
+ * the buttons for it. `shown` is what the bar draws: something playing, or paused within
  * the last couple of minutes.
  */
 export function useNowPlaying() {

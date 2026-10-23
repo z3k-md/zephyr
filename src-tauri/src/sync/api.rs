@@ -1,4 +1,4 @@
-//! The Supabase calls sync needs: email-code auth and the `zephyr` schema over PostgREST.
+//! The Supabase calls sync needs: Google sign-in (PKCE) and the `zephyr` schema over PostgREST.
 //! Requests go from Rust only; the webview never sees a token.
 
 use std::sync::OnceLock;

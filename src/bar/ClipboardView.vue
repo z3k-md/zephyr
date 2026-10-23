@@ -13,7 +13,9 @@
   } from '../api';
   import type { ClipDetail, ClipKind, ClipSummary } from '../types';
   import { dragGesture, dragOut } from './dragOut';
-  import { bytes } from '../format';
+  import { bytes, dateTime } from '../format';
+  import { isMac, MOD_KEY as mod } from '../keys';
+  import SelectMenu from '../components/SelectMenu.vue';
 
   const props = defineProps<{ initialQuery: string }>();
   // `picked` means an item was pasted or copied, which ends the clipboard picker.
@@ -34,9 +36,6 @@
     { id: 'files', label: 'Files' },
     { id: 'pinned', label: 'Pinned' },
   ];
-
-  const isMac = navigator.userAgent.includes('Mac');
-  const mod = isMac ? '⌘' : 'Ctrl+';
 
   const inputEl = ref<HTMLInputElement | null>(null);
 
@@ -68,7 +67,7 @@
     const text = detail.value?.text ?? '';
     if (!detail.value || !['text', 'link', 'color'].includes(detail.value.kind)) return null;
     const words = text.trim() ? text.trim().split(/\s+/).length : 0;
-    return { chars: text.length, words, lines: text.split('\n').length };
+    return { chars: text.length, words };
   });
 
   const actions = computed<Action[]>(() => {
@@ -106,6 +105,20 @@
     selected.value = 0;
     void refresh();
   });
+
+  // Typing goes back to the search once a type is picked, not to the dropdown.
+  watch(filter, () => void nextTick(() => inputEl.value?.focus()));
+
+  /** Opened again while still the bar's view: fresh text and the latest copies. */
+  async function reopen(text: string) {
+    const unchanged = query.value === text;
+    query.value = text;
+    selected.value = 0;
+    // A changed query refreshes through its watcher.
+    if (unchanged) await refresh();
+    await nextTick();
+    inputEl.value?.focus();
+  }
 
   watch(current, () => {
     confirmClear.value = false;
@@ -230,8 +243,14 @@
     filter.value = FILTERS[next].id;
   }
 
+  // The type filter opens the glass menu Settings uses, not the native white popup.
+  const clipEl = ref<HTMLElement | null>(null);
+  const filterMenu = ref<InstanceType<typeof SelectMenu> | null>(null);
+
   /** Called by the bar for every key while clipboard history is showing. */
   function onKey(event: KeyboardEvent) {
+    // An open filter menu takes its own keys.
+    if (filterMenu.value?.isOpen()) return;
     const modifier = event.metaKey || event.ctrlKey;
     if (modifier && event.code === 'KeyK') {
       event.preventDefault();
@@ -282,14 +301,15 @@
       else void paste(event.shiftKey);
       return;
     }
+    // Held down, these act once: a repeat would pin and unpin, or delete item after item.
     if (modifier && event.code === 'KeyP') {
       event.preventDefault();
-      void togglePin();
+      if (!event.repeat) void togglePin();
       return;
     }
     if (event.ctrlKey && event.code === 'KeyX' && !event.metaKey) {
       event.preventDefault();
-      void remove();
+      if (!event.repeat) void remove();
     }
   }
 
@@ -305,18 +325,12 @@
     return `${Math.floor(diff / 86400)}d`;
   }
 
-  function when(seconds: number): string {
-    return new Date(seconds * 1000).toLocaleString(undefined, {
-      dateStyle: 'medium',
-      timeStyle: 'short',
-    });
-  }
-
-  defineExpose({ onKey, refresh });
+  defineExpose({ onKey, refresh, reopen });
 </script>
 
 <template>
-  <div class="clip">
+  <div ref="clipEl" class="clip">
+    <SelectMenu ref="filterMenu" :root="clipEl" />
     <div class="input-row">
       <svg class="mark" viewBox="0 0 24 24" aria-hidden="true">
         <rect x="6" y="4" width="12" height="16" rx="2" />
@@ -443,9 +457,9 @@
             <dt>Times copied</dt>
             <dd>{{ detail.copies }}</dd>
             <dt>Last copied</dt>
-            <dd>{{ when(detail.lastCopied) }}</dd>
+            <dd>{{ dateTime(detail.lastCopied) }}</dd>
             <dt>First copied</dt>
-            <dd>{{ when(detail.firstCopied) }}</dd>
+            <dd>{{ dateTime(detail.firstCopied) }}</dd>
           </dl>
         </template>
       </section>

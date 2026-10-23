@@ -18,14 +18,15 @@
     notesList,
     openNoteWindow,
     closeNoteWindow,
+    keepNoteWindow,
     pageReady,
     revealNotes,
   } from '../api';
   import type { NoteSummary } from '../types';
   import { renderMarkdown } from './markdown';
-
-  const isMac = navigator.userAgent.includes('Mac');
-  const mod = isMac ? '⌘' : 'Ctrl+';
+  import SelectMenu from '../components/SelectMenu.vue';
+  import { MOD_KEY as mod } from '../keys';
+  import { useWindowListener } from '../windowEvents';
 
   const FONTS = [
     { label: 'System', value: '' },
@@ -91,9 +92,12 @@
     onTransaction: () => syncToolbar(),
   });
 
+  useWindowListener('keydown', onKey, true);
+  // Saved on the way out too: Quit from the tray ends the app without a close event.
+  useWindowListener('blur', onBlur);
+
   onMounted(async () => {
     pageReady();
-    window.addEventListener('keydown', onKey, true);
     // The window's close button: save (or drop an empty note) first, then close.
     unlisten = await listen('note-close', () => void closeWindow());
     // Each window holds the one note it was opened on.
@@ -102,7 +106,12 @@
   });
 
   async function closeWindow() {
-    await leave();
+    // A save that failed (the file held by antivirus or a sync app) keeps the window, and
+    // the edits, open with the error showing.
+    if (!(await leave())) {
+      await keepNoteWindow().catch(() => undefined);
+      return;
+    }
     await closeNoteWindow().catch(() => undefined);
   }
 
@@ -136,7 +145,6 @@
   }).then((stop) => (unlistenCapture = stop));
 
   onBeforeUnmount(() => {
-    window.removeEventListener('keydown', onKey, true);
     unlisten?.();
     unlistenCapture?.();
     void flush();
@@ -182,25 +190,30 @@
     syncToolbar();
   }
 
-  async function flush() {
+  /** Saves pending edits; false if that failed. */
+  async function flush(): Promise<boolean> {
     window.clearTimeout(saveTimer);
     const body = html();
-    if (!noteId.value || body === savedBody) return;
+    if (!noteId.value || body === savedBody) return true;
     try {
       await noteSave(noteId.value, body);
       savedBody = body;
       status.value = null;
+      return true;
     } catch (error) {
       status.value = errorMessage(error);
+      return false;
     }
   }
 
-  /** Leaves the current note, dropping it if nothing was ever written in it. */
-  async function leave() {
-    await flush();
+  /** Leaves the current note, dropping it if nothing was ever written in it; false if its
+   *  edits couldn't be saved. */
+  async function leave(): Promise<boolean> {
+    if (!(await flush())) return false;
     if (noteId.value && !html()) {
       await noteDelete(noteId.value).catch(() => undefined);
     }
+    return true;
   }
 
   async function focusEditor() {
@@ -342,7 +355,17 @@
     return editor.value?.isActive(name) ?? false;
   }
 
+  // The toolbar's style, font and size menus are the glass menu Settings uses.
+  const notesEl = ref<HTMLElement | null>(null);
+  const toolbarMenu = ref<InstanceType<typeof SelectMenu> | null>(null);
+
+  function onBlur() {
+    void flush();
+  }
+
   function onKey(event: KeyboardEvent) {
+    // An open toolbar menu takes its own keys.
+    if (toolbarMenu.value?.isOpen()) return;
     const modifier = event.metaKey || event.ctrlKey;
     if (modifier && event.code === 'KeyN') {
       event.preventDefault();
@@ -375,7 +398,8 @@
       void closeWindow();
       return;
     }
-    if (!browsing.value) return;
+    // The Enter or Esc that ends an IME composition belongs to the search text.
+    if (!browsing.value || event.isComposing || event.keyCode === 229) return;
     if (event.key === 'Escape') {
       event.preventDefault();
       void toggleBrowser();
@@ -404,7 +428,8 @@
 </script>
 
 <template>
-  <main class="notes">
+  <main ref="notesEl" class="notes">
+    <SelectMenu ref="toolbarMenu" :root="notesEl" />
     <header class="notes-bar">
       <button
         type="button"

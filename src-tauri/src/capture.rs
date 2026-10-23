@@ -173,6 +173,12 @@ pub fn snapshot(app: &AppHandle) {
             "note",
             json!({ "text": "No Zephyr window was showing, so there is no frame" }),
         );
+    } else if let Err(err) = std::fs::read(dir.join("frame-0001.png"))
+        .map_err(|err| err.to_string())
+        .and_then(crate::clipboard::copy_png)
+    {
+        // On the clipboard too, ready to paste.
+        log::error!("couldn't copy the snapshot: {err}");
     }
     // The page answers with its state when told a capture is running.
     let _ = app.emit("capture-state", true);

@@ -2,7 +2,8 @@
 //! shell's PATH, so the usual install locations are checked before asking the login shell.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
+
+use crate::util::hidden_command;
 
 pub fn resolve(configured: &str) -> Option<PathBuf> {
     let configured = configured.trim();
@@ -36,7 +37,7 @@ fn candidates() -> Vec<PathBuf> {
 #[cfg(not(windows))]
 fn from_shell() -> Option<PathBuf> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
-    let output = Command::new(shell)
+    let output = std::process::Command::new(shell)
         .args(["-lc", "command -v claude"])
         .output()
         .ok()?;
@@ -48,13 +49,7 @@ fn from_shell() -> Option<PathBuf> {
 /// `where` can list the npm `.cmd` shim first; only a real `.exe` is used.
 #[cfg(windows)]
 fn from_shell() -> Option<PathBuf> {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    let output = Command::new("where")
-        .arg("claude")
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .ok()?;
+    let output = hidden_command("where").arg("claude").output().ok()?;
     String::from_utf8_lossy(&output.stdout)
         .lines()
         .map(|line| PathBuf::from(line.trim()))
@@ -63,19 +58,6 @@ fn from_shell() -> Option<PathBuf> {
                 .is_some_and(|ext| ext.eq_ignore_ascii_case("exe"))
                 && path.is_file()
         })
-}
-
-/// A command for the CLI that never opens a console window on Windows.
-pub fn command(binary: &Path) -> Command {
-    #[allow(unused_mut)]
-    let mut command = Command::new(binary);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
-    command
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -96,13 +78,13 @@ pub fn status(configured: &str) -> CliStatus {
             auth_method: None,
         };
     };
-    let version = command(&path)
+    let version = hidden_command(&path)
         .arg("--version")
         .output()
         .ok()
         .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
         .filter(|version| !version.is_empty());
-    let auth: Option<serde_json::Value> = command(&path)
+    let auth: Option<serde_json::Value> = hidden_command(&path)
         .args(["auth", "status"])
         .output()
         .ok()

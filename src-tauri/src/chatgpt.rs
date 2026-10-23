@@ -122,16 +122,7 @@ pub fn cancel_sign_in() {
 /// Signs in through the browser. A returning account reuses its issued client id and goes
 /// straight back; the first time, OpenAI asks the user to approve the app.
 pub async fn sign_in(open: impl FnOnce(&str) -> Result<(), String>) -> Result<Account, String> {
-    let server = CALLBACK_PORTS
-        .iter()
-        .find_map(|port| tiny_http::Server::http(("127.0.0.1", *port)).ok())
-        .ok_or("Couldn't open a local port for sign-in")?;
-    let port = server
-        .server_addr()
-        .to_ip()
-        .map(|addr| addr.port())
-        .ok_or("Couldn't open a local port for sign-in")?;
-    let redirect = format!("http://127.0.0.1:{port}/auth/callback");
+    let (server, redirect) = crate::loopback::listen(&CALLBACK_PORTS)?;
 
     let saved = load();
     let returning = saved.as_ref().filter(|saved| !saved.client_id.is_empty());
@@ -230,61 +221,29 @@ fn wait_for_callback(
     server: &tiny_http::Server,
     state: &str,
 ) -> Result<(String, Option<String>), String> {
-    let deadline = Instant::now() + Duration::from_secs(300);
-    loop {
-        if !SIGNING_IN.load(Ordering::SeqCst) {
-            return Err("Sign-in was cancelled".into());
-        }
-        let left = deadline.saturating_duration_since(Instant::now());
-        if left.is_zero() {
-            return Err("Sign-in timed out. Try again.".into());
-        }
-        let Ok(Some(request)) = server.recv_timeout(left.min(Duration::from_secs(1))) else {
-            continue;
-        };
-        if !request.url().starts_with("/auth/callback") {
-            let _ = request.respond(tiny_http::Response::empty(404));
-            continue;
-        }
-        let url = url::Url::parse(&format!("http://127.0.0.1{}", request.url())).ok();
-        let param = |name: &str| {
-            url.as_ref().and_then(|url| {
-                url.query_pairs()
-                    .find(|(key, _)| key == name)
-                    .map(|(_, value)| value.into_owned())
-            })
-        };
-        let result = if param("state").as_deref() != Some(state) {
-            Err("The sign-in didn't match; try again".to_string())
-        } else if let Some(error) = param("error") {
-            Err(if error == "access_denied" {
-                "Sign-in was declined in the browser".to_string()
+    crate::loopback::wait(
+        server,
+        || !SIGNING_IN.load(Ordering::SeqCst),
+        "Zephyr is connected to ChatGPT. You can close this tab.",
+        |param| {
+            if param("state").as_deref() != Some(state) {
+                Err("The sign-in didn't match; try again".to_string())
+            } else if let Some(error) = param("error") {
+                Err(if error == "access_denied" {
+                    "Sign-in was declined in the browser".to_string()
+                } else {
+                    format!(
+                        "ChatGPT sign-in failed: {}",
+                        param("error_description").unwrap_or(error)
+                    )
+                })
+            } else if let Some(code) = param("code") {
+                Ok((code, param("client_id")))
             } else {
-                format!(
-                    "ChatGPT sign-in failed: {}",
-                    param("error_description").unwrap_or(error)
-                )
-            })
-        } else if let Some(code) = param("code") {
-            Ok((code, param("client_id")))
-        } else {
-            Err("The browser came back without a sign-in code".to_string())
-        };
-        let page = if result.is_ok() {
-            "Zephyr is connected to ChatGPT. You can close this tab."
-        } else {
-            "Zephyr couldn't finish signing in. Go back to Zephyr and try again."
-        };
-        let header = tiny_http::Header::from_bytes("Content-Type", "text/html; charset=utf-8")
-            .expect("static header");
-        let html = format!(
-            "<!doctype html><meta charset=utf-8><title>Zephyr</title><body style=\"font:16px \
-             -apple-system,system-ui;background:#16131f;color:#ececee;display:grid;\
-             place-items:center;height:100vh;margin:0\"><p>{page}</p>"
-        );
-        let _ = request.respond(tiny_http::Response::from_string(html).with_header(header));
-        return result;
-    }
+                Err("The browser came back without a sign-in code".to_string())
+            }
+        },
+    )
 }
 
 /// Posts a form to the token endpoint. Errors keep OpenAI's code for the caller.

@@ -1,5 +1,6 @@
-// Turns notes saved as Markdown by earlier builds into HTML for the rich text editor. It escapes everything first and only emits the tags it
-// builds itself, so text pasted into a note can never inject HTML into the notes window.
+// Turns notes saved as Markdown by earlier builds into HTML for the rich text editor. It
+// escapes everything first and only emits the tags it builds itself, so text pasted into a
+// note can never inject HTML into the notes window.
 
 function escapeHtml(text: string): string {
   return text
@@ -20,11 +21,11 @@ function inline(escaped: string): string {
       return part
         .replace(
           /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
-          (_, label: string, url: string) => `<a href="#" data-href="${url}">${label}</a>`
+          (_, label: string, url: string) => `<a href="${url}">${label}</a>`
         )
         .replace(
           /(^|[\s(])(https?:\/\/[^\s<)]+)/g,
-          (_, lead: string, url: string) => `${lead}<a href="#" data-href="${url}">${url}</a>`
+          (_, lead: string, url: string) => `${lead}<a href="${url}">${url}</a>`
         )
         .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
         .replace(/__([^_]+)__/g, '<strong>$1</strong>')
@@ -35,14 +36,12 @@ function inline(escaped: string): string {
     .join('');
 }
 
-/**
- * Renders a note. Checklist boxes carry `data-line`, the source line index, so a click can
- * toggle the matching `[ ]` in the Markdown.
- */
+/** Renders a note's Markdown as HTML the editor reads. */
 export function renderMarkdown(source: string): string {
   const lines = source.split('\n');
   const out: string[] = [];
-  let list: 'ul' | 'ol' | null = null;
+  // A checklist is its own list, in the editor's task list markup.
+  let list: 'ul' | 'ol' | 'tasks' | null = null;
   let paragraph: string[] = [];
 
   const flushParagraph = () => {
@@ -50,7 +49,7 @@ export function renderMarkdown(source: string): string {
     paragraph = [];
   };
   const closeList = () => {
-    if (list) out.push(`</${list}>`);
+    if (list) out.push(list === 'ol' ? '</ol>' : '</ul>');
     list = null;
   };
 
@@ -99,18 +98,16 @@ export function renderMarkdown(source: string): string {
     const numbered = /^\s*\d+[.)]\s+(.*)$/.exec(line);
     if (task || bullet || numbered) {
       flushParagraph();
-      const kind = numbered && !task && !bullet ? 'ol' : 'ul';
+      const kind = task ? 'tasks' : numbered && !bullet ? 'ol' : 'ul';
       if (list !== kind) {
         closeList();
-        out.push(`<${kind}>`);
+        out.push(kind === 'tasks' ? '<ul data-type="taskList">' : `<${kind}>`);
         list = kind;
       }
       if (task) {
         const done = task[1] !== ' ';
         out.push(
-          `<li class="task${done ? ' done' : ''}"><input type="checkbox" data-line="${index}"${
-            done ? ' checked' : ''
-          }> <span>${inline(escapeHtml(task[2]))}</span></li>`
+          `<li data-type="taskItem" data-checked="${done}"><p>${inline(escapeHtml(task[2]))}</p></li>`
         );
       } else {
         const text = (bullet ?? numbered)![1];

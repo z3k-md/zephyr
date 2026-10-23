@@ -4,6 +4,7 @@
   import { GLYPHS } from './glyphs';
   import { vFit } from '../fit';
   import { bytes } from '../format';
+  import { isMac, isModifierKey, MOD_KEY as mod } from '../keys';
   import {
     errorMessage,
     resourcesClosed,
@@ -39,8 +40,6 @@
   /** After a key or the pointer moves the selection, the order holds this long. */
   const HOLD_MS = 2000;
 
-  const isMac = navigator.userAgent.includes('Mac');
-  const mod = isMac ? '⌘' : 'Ctrl+';
   const alt = isMac ? '⌥' : 'Alt+';
   const finder = isMac ? 'Finder' : 'Explorer';
 
@@ -298,7 +297,7 @@
         if (!event.repeat) runAction(actions.value[actionIndex.value]);
         return;
       }
-      if (['Shift', 'Control', 'Alt', 'Meta'].includes(event.key)) return;
+      if (isModifierKey(event)) return;
       // Any other key closes the menu and does what it does in the list.
       actionsOpen.value = false;
     }
@@ -362,7 +361,6 @@
     return `${minutes}m`;
   }
 
-  /** A minute of values as a filled sparkline in a 120×28 box, newest at the right. */
   /**
    * The last minute as a filled sparkline in a 120×28 box, now at the right edge, placed by
    * each point's age; a gap of more than a few seconds (the computer asleep) breaks the line.

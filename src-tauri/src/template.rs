@@ -125,7 +125,12 @@ pub fn render(template: &str, context: &Context<'_>) -> Result<String, String> {
                 .get_or_insert_with(|| (context.clipboard)())
                 .clone()
                 .unwrap_or_default(),
-            SlotKind::Date { offset, format } => (context.now + *offset).format(format).to_string(),
+            SlotKind::Date { offset, format } => context
+                .now
+                .checked_add_signed(*offset)
+                .ok_or("The date offset goes past the dates that can be shown")?
+                .format(format)
+                .to_string(),
         };
         let mut encode = !path;
         for filter in &slot.filters {
@@ -345,14 +350,16 @@ fn parse_offset(offset: &str) -> Result<Duration, String> {
     let amount: i64 = rest[..rest.len() - unit.len_utf8()]
         .parse()
         .map_err(|_| invalid())?;
-    let amount = sign * amount;
-    match unit {
-        'm' => Ok(Duration::minutes(amount)),
-        'h' => Ok(Duration::hours(amount)),
-        'd' => Ok(Duration::days(amount)),
-        'w' => Ok(Duration::weeks(amount)),
-        _ => Err(invalid()),
-    }
+    let amount = amount.checked_mul(sign).ok_or_else(invalid)?;
+    // The try_ forms, since the plain ones panic on an offset too large to represent.
+    let duration = match unit {
+        'm' => Duration::try_minutes(amount),
+        'h' => Duration::try_hours(amount),
+        'd' => Duration::try_days(amount),
+        'w' => Duration::try_weeks(amount),
+        _ => return Err(invalid()),
+    };
+    duration.ok_or_else(|| format!("offset={offset} is too large"))
 }
 
 fn check_format(format: &str) -> Result<(), String> {
@@ -455,6 +462,9 @@ mod tests {
         assert!(validate("https://x.dev/{nope}").is_err());
         assert!(validate("https://x.dev/{query | shout}").is_err());
         assert!(validate("https://x.dev/{date offset=soon}").is_err());
+        // Huge offsets are errors, not panics.
+        assert!(validate("https://x.dev/{date offset=+99999999999999w}").is_err());
+        assert!(render_with("https://x.dev/{date offset=+1000000000w}", "", None).is_err());
         assert!(validate("https://x.dev/{query name=x}").is_err());
         assert!(validate("").is_err());
     }

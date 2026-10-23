@@ -5,11 +5,13 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_updater::{Update, UpdaterExt};
+
+use crate::util::now_ms;
 
 const FIRST_CHECK_DELAY: Duration = Duration::from_secs(5);
 /// The app lives in the tray for weeks at a time, so a launch-only check is not enough.
@@ -383,13 +385,6 @@ fn place_card(window: &tauri::WebviewWindow) {
     let x = area.position.x + area.size.width as i32 - width - margin;
     let y = area.position.y + area.size.height as i32 - height - margin;
     let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
-}
-
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 /// Dev builds can't install a real update, so this plays the whole card through with a

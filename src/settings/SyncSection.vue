@@ -13,6 +13,7 @@
     syncUseRecovery,
   } from '../api';
   import type { SyncStatus } from '../types';
+  import { PLATFORM_NAMES } from '../format';
 
   const status = ref<SyncStatus | null>(null);
   const recoveryInput = ref('');
@@ -122,8 +123,6 @@
     if (seconds < 86400) return `${Math.floor(seconds / 3600)} h ago`;
     return new Date(when).toLocaleDateString();
   }
-
-  const PLATFORMS: Record<string, string> = { macos: 'Mac', windows: 'Windows', linux: 'Linux' };
 </script>
 
 <template>
@@ -189,14 +188,17 @@
           <span class="path">
             {{ status.deviceName }} ·
             {{
-              PLATFORMS[status.devices.find((d) => d.id === status?.deviceId)?.platform ?? ''] ?? ''
+              PLATFORM_NAMES[
+                status.devices.find((d) => d.id === status?.deviceId)?.platform ?? ''
+              ] ?? ''
             }}
             · this computer
           </span>
         </li>
         <li v-for="device in others" :key="device.id">
           <span class="path">
-            {{ device.displayName }} · {{ PLATFORMS[device.platform] ?? device.platform }} · seen
+            {{ device.displayName }} · {{ PLATFORM_NAMES[device.platform] ?? device.platform }} ·
+            seen
             {{ seen(device.lastSeenAt) }}
           </span>
           <button type="button" :disabled="busy" @click="remove(device.id)">Remove</button>

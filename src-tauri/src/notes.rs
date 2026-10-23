@@ -5,7 +5,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 
 use serde::Serialize;
 
@@ -212,9 +212,7 @@ fn escape(text: &str) -> String {
 
 /// Makes a note whose first line is `text` (plain text, may be empty) and returns its id.
 pub fn create(text: &str) -> Result<String, String> {
-    let millis = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_millis());
+    let millis = crate::util::now_ms();
     let mut id = format!("note-{millis}");
     let mut suffix = 1;
     loop {

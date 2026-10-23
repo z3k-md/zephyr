@@ -3,8 +3,10 @@
 export const isMac = navigator.userAgent.includes('Mac');
 
 const MOD = isMac ? '⌘' : 'Ctrl';
-export const ALT = isMac ? '⌥' : 'Alt';
+const ALT = isMac ? '⌥' : 'Alt';
 export const CTRL = isMac ? '⌃' : 'Ctrl';
+/** The command key as the start of a keycap hint: "⌘K" on a Mac, "Ctrl+K" elsewhere. */
+export const MOD_KEY = isMac ? '⌘' : 'Ctrl+';
 
 const ORDER = ['⌃', '⌥', '⇧', '⌘'];
 
@@ -52,6 +54,38 @@ export function shortcutKeys(shortcut: string): string[] {
   return [...modifiers, ...rest];
 }
 
+const SHORTCUT_LABELS: Record<string, string> = {
+  ctrl: 'Ctrl',
+  control: 'Ctrl',
+  alt: 'Alt',
+  option: 'Alt',
+  shift: 'Shift',
+  super: 'Command',
+  command: 'Command',
+  cmd: 'Command',
+  meta: 'Command',
+  space: 'Space',
+};
+
+/** "ctrl+shift+k" as words for Settings and setup: "Ctrl+Shift+K". */
+export function formatShortcut(shortcut: string): string {
+  return shortcut
+    .split('+')
+    .filter((part) => part.length > 0)
+    .map(
+      (part) => SHORTCUT_LABELS[part.toLowerCase()] ?? part.charAt(0).toUpperCase() + part.slice(1)
+    )
+    .join('+');
+}
+
+/** A modifier pressed on its own: a combo being recorded isn't finished yet. */
+export function isModifierKey(event: KeyboardEvent): boolean {
+  return ['Control', 'Alt', 'Shift', 'Meta'].includes(event.key);
+}
+
+/** What to tell someone whose combo `captureShortcut` turned down. */
+export const SHORTCUT_HELP = 'Use at least one modifier and a letter, number, or space.';
+
 /**
  * A pressed shortcut as "ctrl+shift+k": at least one modifier and a letter, number, symbol
  * or space (function keys too when `functionKeys`); null while it's incomplete.
@@ -63,7 +97,7 @@ export function captureShortcut(event: KeyboardEvent, functionKeys = false): str
   if (event.shiftKey) parts.push('shift');
   if (event.metaKey) parts.push('super');
   if (parts.length === 0) return null;
-  if (['Control', 'Alt', 'Shift', 'Meta'].includes(event.key)) return null;
+  if (isModifierKey(event)) return null;
   if (event.key === ' ' || event.key === 'Spacebar') parts.push('space');
   else if (functionKeys && /^F\d{1,2}$/.test(event.key)) parts.push(event.key.toLowerCase());
   else if (event.key.length === 1) parts.push(event.key.toLowerCase());

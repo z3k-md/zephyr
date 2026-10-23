@@ -1,14 +1,17 @@
 //! Live system stats for the bar's footer and System Resources: CPU, memory, free space on
 //! the system disk and network throughput. A background thread reads them once a second
 //! (about a millisecond each: totals only, never the process list), so Resources always
-//! opens with the last minute.
+//! opens with the last minute. While the bar shows it reads twice a second and sends each
+//! reading to the footer.
 
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use sysinfo::{Disks, Networks, System};
+use tauri::{AppHandle, Emitter};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -46,6 +49,9 @@ struct Sampler {
     latest: Option<Stats>,
     /// The last minute of totals, with when each was read.
     history: std::collections::VecDeque<(Instant, Point)>,
+    /// Dev builds: the app's own use and when it was read, which walks every process, so
+    /// the footer's twice-a-second readings reuse it for a second.
+    app: Option<(Instant, AppUsage)>,
 }
 
 /// One sample of the totals, for the sparklines.
@@ -84,16 +90,56 @@ pub fn history() -> Vec<Point> {
         .collect()
 }
 
-/// Starts the background reading, once a second for the life of the app.
-pub fn start() {
-    std::thread::spawn(|| {
+/// How often the thread reads while the bar shows, so the footer's meters move smoothly.
+const EVERY_SHOWN: Duration = Duration::from_millis(500);
+/// The shortest gap between reads: CPU use over less means little.
+const AT_LEAST: Duration = Duration::from_millis(250);
+
+static BAR_VISIBLE: AtomicBool = AtomicBool::new(false);
+static THREAD: OnceLock<std::thread::Thread> = OnceLock::new();
+
+/// Called as the bar shows and hides. Showing wakes the thread, so the footer gets a fresh
+/// reading right away.
+pub fn set_bar_visible(visible: bool) {
+    let was = BAR_VISIBLE.swap(visible, Ordering::SeqCst);
+    if visible
+        && !was
+        && let Some(thread) = THREAD.get()
+    {
+        thread.unpark();
+    }
+}
+
+/// Starts the background reading for the life of the app: once a second, twice while the bar
+/// shows, when each reading goes to the bar as a "stats" event.
+pub fn start(app: AppHandle) {
+    let thread = std::thread::spawn(move || {
+        let mut last = Instant::now() - EVERY;
         loop {
-            if let Ok(mut guard) = SAMPLER.lock() {
-                record(guard.get_or_insert_with(Sampler::new));
+            if let Some(wait) = AT_LEAST.checked_sub(last.elapsed()) {
+                std::thread::sleep(wait);
             }
-            std::thread::sleep(EVERY);
+            last = Instant::now();
+            let visible = BAR_VISIBLE.load(Ordering::SeqCst);
+            let reading = SAMPLER.lock().ok().map(|mut guard| {
+                let sampler = guard.get_or_insert_with(Sampler::new);
+                let mut stats = record(sampler);
+                if visible && cfg!(debug_assertions) {
+                    stats.app = Some(recent_app_usage(sampler));
+                }
+                stats
+            });
+            if visible && let Some(stats) = reading {
+                let _ = app.emit_to("main", "stats", stats);
+            }
+            std::thread::park_timeout(if BAR_VISIBLE.load(Ordering::SeqCst) {
+                EVERY_SHOWN
+            } else {
+                EVERY
+            });
         }
     });
+    let _ = THREAD.set(thread.thread().clone());
 }
 
 /// Logical cores, for CPU percentages.
@@ -119,7 +165,7 @@ pub fn sample() -> Stats {
         && let Ok(mut guard) = SAMPLER.lock()
         && let Some(sampler) = guard.as_mut()
     {
-        stats.app = Some(app_usage(&mut sampler.system));
+        stats.app = Some(recent_app_usage(sampler));
     }
     stats
 }
@@ -147,12 +193,25 @@ impl Sampler {
             last: Instant::now(),
             latest: None,
             history: std::collections::VecDeque::new(),
+            app: None,
         }
     }
 }
 
-/// Reads the totals and adds them to the history. CPU usage and network rates compare
-/// against the previous reading, so the very first reads them as zero.
+/// The dev build's own use, read at most once a second.
+fn recent_app_usage(sampler: &mut Sampler) -> AppUsage {
+    if let Some((at, usage)) = &sampler.app
+        && at.elapsed() < EVERY
+    {
+        return usage.clone();
+    }
+    let usage = app_usage(&mut sampler.system);
+    sampler.app = Some((Instant::now(), usage.clone()));
+    usage
+}
+
+/// Reads the totals and adds them to the history, a point a second. CPU usage and network
+/// rates compare against the previous reading, so the very first reads them as zero.
 fn record(sampler: &mut Sampler) -> Stats {
     sampler.system.refresh_cpu_usage();
     sampler.system.refresh_memory();
@@ -197,20 +256,28 @@ fn record(sampler: &mut Sampler) -> Stats {
     {
         sampler.history.pop_front();
     }
-    sampler.history.push_back((
-        Instant::now(),
-        Point {
-            age: 0.0,
-            cpu: stats.cpu,
-            memory: if stats.memory_total > 0 {
-                stats.memory_used as f32 / stats.memory_total as f32
-            } else {
-                0.0
+    // Reads twice a second while the bar shows; the history keeps one a second. The slack
+    // allows for the thread waking a little early.
+    let due = sampler
+        .history
+        .back()
+        .is_none_or(|(at, _)| at.elapsed() + Duration::from_millis(50) >= EVERY);
+    if due {
+        sampler.history.push_back((
+            Instant::now(),
+            Point {
+                age: 0.0,
+                cpu: stats.cpu,
+                memory: if stats.memory_total > 0 {
+                    stats.memory_used as f32 / stats.memory_total as f32
+                } else {
+                    0.0
+                },
+                down: stats.net_down,
+                up: stats.net_up,
             },
-            down: stats.net_down,
-            up: stats.net_up,
-        },
-    ));
+        ));
+    }
     sampler.latest = Some(stats.clone());
     stats
 }

@@ -1,6 +1,7 @@
 <script setup lang="ts">
   import { computed, onMounted, onUnmounted, ref } from 'vue';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+  import { useWindowListener } from '../windowEvents';
 
   // The snap grid over the screen while the bar is Ctrl+dragged: the guides the bar's center
   // can snap to (thirds and the middle, both ways), the line its top edge snaps to when it
@@ -23,9 +24,10 @@
     height.value = window.innerHeight;
   }
 
+  useWindowListener('resize', resize);
+
   onMounted(async () => {
     document.documentElement.classList.add('grid-page');
-    window.addEventListener('resize', resize);
     unlisten = await listen<Preview | null>('grid-preview', (event) => {
       // Rust sends physical pixels; the page works in CSS pixels.
       const scale = window.devicePixelRatio || 1;
@@ -40,10 +42,7 @@
     });
   });
 
-  onUnmounted(() => {
-    window.removeEventListener('resize', resize);
-    unlisten?.();
-  });
+  onUnmounted(() => unlisten?.());
 
   const across = computed(() => [1 / 3, 1 / 2, 2 / 3].map((part) => width.value * part));
   const down = computed(() => [1 / 3, 1 / 2, 2 / 3].map((part) => height.value * part));

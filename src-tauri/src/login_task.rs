@@ -50,11 +50,8 @@ fn exists() -> bool {
 
 #[cfg(windows)]
 fn schtasks(args: &[&str]) -> Result<(), String> {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    let output = std::process::Command::new("schtasks")
+    let output = crate::util::hidden_command("schtasks")
         .args(args)
-        .creation_flags(CREATE_NO_WINDOW)
         .output()
         .map_err(|err| format!("Couldn't run schtasks: {err}"))?;
     if output.status.success() {

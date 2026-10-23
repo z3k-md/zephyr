@@ -453,14 +453,9 @@ pub fn stop(id: u64) {
         return;
     };
     #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        let _ = Command::new("taskkill")
-            .args(["/T", "/F", "/PID", &pid.to_string()])
-            .creation_flags(CREATE_NO_WINDOW)
-            .status();
-    }
+    let _ = crate::util::hidden_command("taskkill")
+        .args(["/T", "/F", "/PID", &pid.to_string()])
+        .status();
     #[cfg(unix)]
     unsafe {
         libc::kill(-(pid as i32), libc::SIGTERM);

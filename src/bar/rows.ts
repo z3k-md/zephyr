@@ -78,7 +78,7 @@ function view(id: string, label: string, icon: string, extra: Partial<Suggestion
 }
 
 /** Rows on the empty bar that jump straight into a view. */
-export function jumpRows(ctx: RowCtx): Suggestion[] {
+function jumpRows(ctx: RowCtx): Suggestion[] {
   const rows: Suggestion[] = [];
   const settings = ctx.snapshot;
   if (ctx.parked && ctx.parkedName) {
@@ -187,7 +187,7 @@ const COMMANDS: Command[] = [
  * Commands whose name starts with the typed text (at least two letters), with whether the
  * text is exactly one of its names; only an exact name may take Enter.
  */
-export function commandRows(ctx: RowCtx): { rows: Suggestion[]; exact: number | null } {
+function commandRows(ctx: RowCtx): { rows: Suggestion[]; exact: number | null } {
   const typed = ctx.typed.trim().toLowerCase().replace(/\s+/g, ' ');
   if (typed.length < 2 || /^[!>]/.test(typed)) return { rows: [], exact: null };
   const settings = ctx.snapshot;
@@ -231,7 +231,7 @@ export function commandRows(ctx: RowCtx): { rows: Suggestion[]; exact: number | 
 }
 
 /** A launch group's row: its name, its icon, and its apps' icons small beside it. */
-export function groupRow(group: LaunchGroup, hint = ''): Suggestion {
+function groupRow(group: LaunchGroup, hint = ''): Suggestion {
   const apps = group.items.filter((item) => item.kind === 'app');
   return view(
     `group:${group.id}`,
@@ -322,7 +322,7 @@ function searchWithRows(
   if (!exclude && ids.includes(ctx.armedId)) {
     ids = [ctx.armedId, ...ids.filter((id) => id !== ctx.armedId)];
   }
-  const shown = ids.slice(0, 3).map((id): Suggestion => {
+  return ids.slice(0, 3).map((id): Suggestion => {
     const index = ctx.strip.indexOf(id);
     return {
       kind: 'searchWith',
@@ -336,7 +336,6 @@ function searchWithRows(
       hint: '',
     };
   });
-  return shown;
 }
 
 function titleFor(row: Suggestion, ctx: RowCtx): string {
@@ -369,37 +368,6 @@ export function groups(rows: Suggestion[], ctx: RowCtx): Group[] {
   return result;
 }
 
-/** What Enter does with the selected row, for the footer. */
-export function primaryLabel(row: Suggestion | undefined, ctx: RowCtx): string | null {
-  if (!row) return null;
-  const name = destinationName(ctx, row.destinationId);
-  const isAi = destination(ctx, row.destinationId)?.kind === 'ai';
-  switch (row.kind) {
-    case 'query':
-    case 'remote':
-    case 'history':
-    case 'searchWith':
-      if (row.destinationId === 'url') return 'Open link';
-      return isAi ? `Ask ${name}` : `Search ${name}`;
-    case 'app':
-    case 'file':
-    case 'setting':
-      return `Open ${row.label}`;
-    case 'answer':
-      return `Copy ${row.label}`;
-    case 'note':
-      return 'Open note';
-    case 'noteNew':
-      return 'Create note';
-    case 'view':
-      if (row.destinationId.startsWith('scope:')) return row.label;
-      return `Open ${row.label.replace(/^Back to /, '')}`;
-    case 'destination':
-      return `Use ${row.label}`;
-  }
-  return null;
-}
-
 /** The binding an alias names, matched case-insensitively. */
 export function bindingForAlias(ctx: RowCtx, alias: string): Binding | undefined {
   const wanted = alias.trim().toLowerCase();
@@ -408,13 +376,13 @@ export function bindingForAlias(ctx: RowCtx, alias: string): Binding | undefined
 }
 
 /** The command (mode or scoped search) a view: or scope: target names. */
-export function commandFor(target: string): Command | undefined {
+function commandFor(target: string): Command | undefined {
   const id = target.startsWith('view:') ? target.slice(5) : target;
   return COMMANDS.find((command) => command.id === id);
 }
 
 /** A row for whatever a binding points at, as the bar would show it. */
-export function bindingRow(binding: Binding, groups: LaunchGroup[] = []): Suggestion | null {
+function bindingRow(binding: Binding, groups: LaunchGroup[] = []): Suggestion | null {
   const [kind, ...rest] = binding.target.split(':');
   const value = rest.join(':');
   const hint = binding.alias ? `Alias “${binding.alias}”` : '';

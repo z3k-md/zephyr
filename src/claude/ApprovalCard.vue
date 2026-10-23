@@ -1,10 +1,9 @@
 <script setup lang="ts">
   import type { ClaudeApproval } from '../types';
+  import { MOD_KEY as mod } from '../keys';
 
   defineProps<{ approval: ClaudeApproval; queued: number }>();
   defineEmits<{ answer: ['allow' | 'always' | 'deny'] }>();
-
-  const mod = navigator.userAgent.includes('Mac') ? '⌘' : 'Ctrl+';
 </script>
 
 <template>

@@ -94,7 +94,6 @@ export function captureRecording(): Promise<boolean> {
   return invoke<boolean>('capture_recording');
 }
 
-/** Moves the bar with the mouse until the button is released (⌘-drag, Ctrl+drag on Windows). */
 /** Makes the snap grid's window before the first Ctrl+drag. */
 export function prepareGrid(): Promise<void> {
   return invoke('prepare_grid');
@@ -186,10 +185,6 @@ export function setBarHeight(height: number, width?: number): Promise<void> {
 
 export function hideBar(): Promise<void> {
   return invoke('hide_bar');
-}
-
-export function showBar(): Promise<void> {
-  return invoke('show_bar');
 }
 
 export function hideSettings(): Promise<void> {
@@ -297,10 +292,6 @@ export function clipStats(): Promise<Record<string, number>> {
 
 export function saveClipboardSettings(settings: ClipboardSettings): Promise<Snapshot> {
   return invoke<Snapshot>('save_clipboard_settings', { settings });
-}
-
-export function openClipboard(): Promise<void> {
-  return invoke('open_clipboard');
 }
 
 export function notesList(query: string): Promise<NoteSummary[]> {
@@ -456,6 +447,11 @@ export function closeNoteWindow(): Promise<void> {
   return invoke('close_note_window');
 }
 
+/** From a note's window whose save failed while closing: keeps it open. */
+export function keepNoteWindow(): Promise<void> {
+  return invoke('keep_note_window');
+}
+
 export function saveOpenBehavior(
   returnToMode: boolean,
   routeCmd: string,
@@ -522,29 +518,6 @@ export function errorMessage(error: unknown): string {
   if (typeof error === 'string') return error;
   if (error instanceof Error) return error.message;
   return 'Something went wrong';
-}
-
-const SHORTCUT_LABELS: Record<string, string> = {
-  ctrl: 'Ctrl',
-  control: 'Ctrl',
-  alt: 'Alt',
-  option: 'Alt',
-  shift: 'Shift',
-  super: 'Command',
-  command: 'Command',
-  cmd: 'Command',
-  meta: 'Command',
-  space: 'Space',
-};
-
-export function formatShortcut(shortcut: string): string {
-  return shortcut
-    .split('+')
-    .filter((part) => part.length > 0)
-    .map(
-      (part) => SHORTCUT_LABELS[part.toLowerCase()] ?? part.charAt(0).toUpperCase() + part.slice(1)
-    )
-    .join('+');
 }
 
 /** A web destination's site icon as a data URL, or null to keep its letter tile. */

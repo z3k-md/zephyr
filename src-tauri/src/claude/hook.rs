@@ -328,10 +328,7 @@ fn handle(app: &AppHandle, mut request: tiny_http::Request) {
         summary: describe_tool(&tool, &input),
         tool: tool.clone(),
         detail: detail.chars().take(4000).collect(),
-        created: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_secs() as i64)
-            .unwrap_or(0),
+        created: crate::util::now_secs(),
     };
     let (sender, receiver) = mpsc::channel();
     if let Ok(mut bridge) = bridge().lock() {

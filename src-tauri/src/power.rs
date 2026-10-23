@@ -223,7 +223,7 @@ fn when(text: &str, now: DateTime<Local>) -> Option<i64> {
         .or_else(|| text.strip_prefix("after "))
     {
         let seconds = duration(rest.trim())?;
-        return (seconds > 0).then(|| now.timestamp() + seconds);
+        return (seconds > 0).then(|| now.timestamp().saturating_add(seconds));
     }
     let rest = text.strip_prefix("at ")?.trim();
     let time = clock(rest)?;
@@ -282,8 +282,12 @@ fn duration(text: &str) -> Option<i64> {
         flush(&mut number, &mut unit, &mut total)?;
         parts += 1;
     }
-    (parts > 0 && total >= 1.0).then_some(total.round() as i64)
+    // Capped at the longest timer Windows takes, so a huge number can't overflow the time.
+    (parts > 0 && total >= 1.0).then(|| total.min(MAX_DELAY as f64).round() as i64)
 }
+
+/// The longest delay `shutdown /t` accepts: ten years, in seconds.
+const MAX_DELAY: i64 = 315_360_000;
 
 /// "11pm", "11 pm", "11:30pm", "23:30", "7:15 am", "noon", "midnight".
 fn clock(text: &str) -> Option<NaiveTime> {
@@ -318,7 +322,7 @@ fn clock(text: &str) -> Option<NaiveTime> {
 
 /// "at 11:00 PM, in 2h 14m" or "in 30m" when it's soon.
 pub fn describe(at: i64, now: DateTime<Local>) -> String {
-    let left = (at - now.timestamp()).max(0);
+    let left = at.saturating_sub(now.timestamp()).max(0);
     let span = span(left);
     if left < 3600 {
         return format!("in {span}");
@@ -351,7 +355,7 @@ pub fn commands_for(action: Action, delay: Option<i64>) -> Vec<Vec<String>> {
             .collect::<Vec<_>>()
     };
     if cfg!(windows) {
-        let after = delay.unwrap_or(0).clamp(0, 315_360_000).to_string();
+        let after = delay.unwrap_or(0).clamp(0, MAX_DELAY).to_string();
         match action {
             Action::Shutdown => vec![owned(&["shutdown", "/s", "/t", &after])],
             Action::Restart => vec![owned(&["shutdown", "/r", "/t", &after])],
@@ -360,11 +364,9 @@ pub fn commands_for(action: Action, delay: Option<i64>) -> Vec<Vec<String>> {
             Action::Firmware => vec![owned(&[ELEVATED, "shutdown", "/r", "/fw", "/t", &after])],
             // These have no OS timer; a scheduled one is run by the app when it's due.
             Action::SignOut if delay.is_none() => vec![owned(&["shutdown", "/l"])],
-            Action::Sleep if delay.is_none() => vec![owned(&[
-                "rundll32.exe",
-                "powrprof.dll,SetSuspendState",
-                "0,1,0",
-            ])],
+            // Slept in-process: rundll32 passes its own arguments to SetSuspendState, so a PC
+            // with hibernation on hibernated instead (see `sleep_now`).
+            Action::Sleep if delay.is_none() => vec![owned(&[SLEEP_IN_PROCESS])],
             Action::Lock if delay.is_none() => {
                 vec![owned(&["rundll32.exe", "user32.dll,LockWorkStation"])]
             }
@@ -399,6 +401,9 @@ pub fn commands_for(action: Action, delay: Option<i64>) -> Vec<Vec<String>> {
 
 /// Stands in for a command: lock the screen in-process.
 const LOCK_IN_PROCESS: &str = "zephyr:lock";
+
+/// Stands in for a command: put Windows to sleep in-process.
+const SLEEP_IN_PROCESS: &str = "zephyr:sleep";
 
 /// Before a command: run it as an administrator (Windows asks with its UAC prompt).
 const ELEVATED: &str = "zephyr:elevated";
@@ -473,6 +478,23 @@ fn lock_screen() -> Result<(), String> {
     Err("Locking from Zephyr isn't supported here".into())
 }
 
+/// Sleeps now: not hibernate, whatever the hibernation setting, with wake events allowed.
+#[cfg(windows)]
+fn sleep_now() -> Result<(), String> {
+    use windows::Win32::System::Power::SetSuspendState;
+    // SAFETY: plain flags, no pointers.
+    if unsafe { SetSuspendState(false, false, false) } {
+        Ok(())
+    } else {
+        Err(windows::core::Error::from_thread().message())
+    }
+}
+
+#[cfg(not(windows))]
+fn sleep_now() -> Result<(), String> {
+    Err("Sleeping from Zephyr this way is only for Windows".into())
+}
+
 /// While testing, `ZEPHYR_POWER_DRY_RUN=1` logs the commands instead of running them.
 fn execute(commands: &[Vec<String>]) -> Result<(), String> {
     for command in commands {
@@ -484,19 +506,18 @@ fn execute(commands: &[Vec<String>]) -> Result<(), String> {
             lock_screen()?;
             continue;
         }
+        if command[0] == SLEEP_IN_PROCESS {
+            sleep_now()?;
+            continue;
+        }
         if command[0] == ELEVATED && command.len() > 1 {
             run_elevated(&command[1], &command[2..])?;
             continue;
         }
-        let mut process = std::process::Command::new(&command[0]);
-        process.args(&command[1..]);
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-            process.creation_flags(CREATE_NO_WINDOW);
-        }
-        let status = process.status().map_err(|err| err.to_string())?;
+        let status = crate::util::hidden_command(&command[0])
+            .args(&command[1..])
+            .status()
+            .map_err(|err| err.to_string())?;
         if !status.success() {
             return Err(format!("{} failed ({status})", command[0]));
         }
@@ -524,7 +545,8 @@ fn save(app: &AppHandle, schedule: Option<Schedule>) {
 /// Runs an action now, or schedules it for `at` (unix seconds).
 pub fn run(app: &AppHandle, action: Action, at: Option<i64>) -> Result<(), String> {
     let now = Local::now().timestamp();
-    let delay = at.map(|at| (at - now).max(0));
+    // `at` comes from the page; saturating so a wild value can't overflow.
+    let delay = at.map(|at| at.saturating_sub(now).max(0));
     match delay {
         None | Some(0) => {
             cancel(app);
@@ -589,7 +611,7 @@ fn arm(app: &AppHandle, schedule: Schedule) {
             }
         };
         if warn_at > Local::now().timestamp() && wait_until(warn_at) {
-            notify(
+            crate::util::notify(
                 &app,
                 &format!("{} in 5 minutes", schedule.action.label()),
                 "Open Zephyr to cancel it",
@@ -604,13 +626,6 @@ fn arm(app: &AppHandle, schedule: Schedule) {
         }
         save(&app, None);
     });
-}
-
-fn notify(app: &AppHandle, title: &str, body: &str) {
-    use tauri_plugin_notification::NotificationExt;
-    if let Err(err) = app.notification().builder().title(title).body(body).show() {
-        log::error!("couldn't show a notification: {err}");
-    }
 }
 
 /// On launch: picks a saved schedule back up, or drops one whose time has passed.
@@ -753,6 +768,13 @@ mod tests {
     }
 
     #[test]
+    fn a_huge_delay_is_capped_instead_of_overflowing() {
+        let now = at(20, 0);
+        let preview = preview("shutdown in 99999999999999999999h", now).unwrap();
+        assert_eq!(preview.at, Some(now.timestamp() + MAX_DELAY));
+    }
+
+    #[test]
     fn cancelling_is_its_own_preview() {
         let preview = preview("cancel shutdown", at(20, 0)).unwrap();
         assert!(preview.cancel && !preview.confirm);
@@ -781,6 +803,11 @@ mod tests {
         assert_eq!(
             commands_for(Action::SignOut, None),
             vec![vec!["shutdown", "/l"]]
+        );
+        // Sleep is in-process, so hibernation being on can't turn it into a hibernate.
+        assert_eq!(
+            commands_for(Action::Sleep, None),
+            [[SLEEP_IN_PROCESS.to_string()]]
         );
         // Sleep and lock on a timer are run in-app.
         assert!(commands_for(Action::Sleep, Some(60)).is_empty());
