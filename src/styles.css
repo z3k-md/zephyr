@@ -10,6 +10,8 @@
   --glass-strong: linear-gradient(180deg, rgba(17, 14, 27, 0.95) 0%, rgba(8, 7, 13, 0.97) 100%);
   --bg: var(--glass);
   --bg-solid: var(--glass-strong);
+  /* The Settings sidebar: a lighter glass over the window's, from the theme's tint. */
+  --side: rgba(54, 44, 76, 0.5);
   --panel: rgba(255, 255, 255, 0.05);
   --fg: #ececee;
   --muted: #8d8d93;
@@ -40,6 +42,7 @@
 :root[data-theme='sidebar'] {
   --glass: linear-gradient(180deg, rgba(44, 44, 48, 0.32) 0%, rgba(34, 34, 38, 0.42) 100%);
   --glass-strong: linear-gradient(180deg, rgba(42, 42, 46, 0.55) 0%, rgba(32, 32, 36, 0.62) 100%);
+  --side: rgba(58, 58, 64, 0.52);
   --select: #3478f6;
   --focus: #3478f6;
   /* Primary buttons are the system's blue default button. */
@@ -57,6 +60,11 @@
   }
 }
 
+/* Windows draws its own blur, so the sidebar there is a little darker. */
+:root[data-platform='windows'][data-theme='sidebar'] {
+  --side: rgba(44, 44, 44, 0.55);
+}
+
 :root[data-theme='sidebar'] .item.selected,
 :root[data-theme='sidebar'] .select-option.active {
   color: #fff;
@@ -71,6 +79,7 @@
 :root[data-theme='graphite'] {
   --glass: linear-gradient(180deg, rgba(24, 24, 27, 0.86) 0%, rgba(12, 12, 14, 0.92) 100%);
   --glass-strong: linear-gradient(180deg, rgba(22, 22, 25, 0.95) 0%, rgba(10, 10, 12, 0.97) 100%);
+  --side: rgba(46, 46, 50, 0.55);
   --select: rgba(255, 255, 255, 0.1);
   --focus: #d4d4d8;
 }
@@ -78,6 +87,7 @@
 :root[data-theme='ocean'] {
   --glass: linear-gradient(180deg, rgba(12, 20, 36, 0.86) 0%, rgba(6, 10, 19, 0.92) 100%);
   --glass-strong: linear-gradient(180deg, rgba(11, 18, 32, 0.95) 0%, rgba(5, 9, 17, 0.97) 100%);
+  --side: rgba(30, 44, 70, 0.55);
   --select: rgba(147, 197, 253, 0.14);
   --focus: #60a5fa;
 }
@@ -85,6 +95,7 @@
 :root[data-theme='forest'] {
   --glass: linear-gradient(180deg, rgba(10, 27, 25, 0.86) 0%, rgba(5, 14, 13, 0.92) 100%);
   --glass-strong: linear-gradient(180deg, rgba(9, 24, 22, 0.95) 0%, rgba(4, 12, 11, 0.97) 100%);
+  --side: rgba(24, 56, 52, 0.5);
   --select: rgba(94, 234, 212, 0.13);
   --focus: #2dd4bf;
 }
@@ -92,6 +103,7 @@
 :root[data-theme='ember'] {
   --glass: linear-gradient(180deg, rgba(32, 19, 12, 0.86) 0%, rgba(17, 10, 6, 0.92) 100%);
   --glass-strong: linear-gradient(180deg, rgba(28, 17, 11, 0.95) 0%, rgba(15, 9, 5, 0.97) 100%);
+  --side: rgba(66, 40, 26, 0.5);
   --select: rgba(253, 186, 116, 0.14);
   --focus: #fb923c;
 }
@@ -1274,12 +1286,12 @@ textarea.query {
   border-top: 1px solid var(--stroke);
 }
 
-/* The meters; a click opens System Resources. On the empty bar they sit at the right. */
+/* The meters; a click opens System Resources. */
 .meters {
   display: inline-flex;
   flex: none;
   align-items: center;
-  gap: 18px;
+  gap: 14px;
   cursor: pointer;
 }
 
@@ -1287,20 +1299,15 @@ textarea.query {
   color: var(--fg);
 }
 
-.stats.home .meters {
-  margin-left: auto;
-}
+/* ---- The weather at the footer's right (FooterWeather.vue) ---- */
 
-/* ---- The empty bar's footer: what's playing and the weather (HomeStatus.vue) ---- */
-
-.home-status {
-  display: contents;
-}
-
-.home-status button {
+.footer-weather {
   display: inline-flex;
+  flex: 0 1 auto;
   align-items: center;
+  gap: 6px;
   min-width: 0;
+  margin-left: auto;
   padding: 0;
   color: inherit;
   font: inherit;
@@ -1309,94 +1316,12 @@ textarea.query {
   cursor: pointer;
 }
 
-/* Gives way first when the footer runs short. */
-.status-track {
-  display: inline-flex;
-  flex: 0 1000 auto;
-  align-items: center;
-  gap: 2px;
-  min-width: 0;
-  max-width: 190px;
-}
-
-.home-status .status-song {
-  gap: 7px;
-  margin-right: 2px;
-  color: var(--fg);
-}
-
-.status-song:hover .status-song-text {
-  text-decoration: underline;
-  text-decoration-color: var(--stroke-strong);
-  text-underline-offset: 2px;
-}
-
-.status-cover {
-  flex: none;
-  width: 18px;
-  height: 18px;
-  object-fit: cover;
-  border-radius: 4px;
-}
-
-.status-cover.glyph {
-  color: var(--muted);
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.8;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.status-song-text {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.home-status .status-control {
-  flex: none;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  color: var(--fg);
-  border-radius: 6px;
-}
-
-.home-status .status-control:hover {
-  background: rgba(255, 255, 255, 0.1);
-}
-
-.status-control svg {
-  width: 13px;
-  height: 13px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.8;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.status-divider {
-  flex: none;
-  width: 1px;
-  height: 18px;
-  margin: 0 -4px;
-  background: var(--stroke-strong);
-}
-
-/* Its condition gives way after the track's title. */
-.home-status .status-weather {
-  flex: 0 1 auto;
-  gap: 6px;
-}
-
-.status-weather b {
+.footer-weather b {
   color: var(--fg);
   font-weight: 600;
 }
 
-.status-weather:hover b {
+.footer-weather:hover b {
   text-decoration: underline;
   text-decoration-color: var(--stroke-strong);
   text-underline-offset: 2px;
@@ -1404,8 +1329,8 @@ textarea.query {
 
 .status-icon {
   flex: none;
-  width: 16px;
-  height: 16px;
+  width: 17px;
+  height: 17px;
   color: var(--fg);
 }
 
@@ -1485,7 +1410,7 @@ textarea.query {
 .meter {
   position: relative;
   display: inline-block;
-  width: 36px;
+  width: 28px;
   height: 4px;
   overflow: hidden;
   border-radius: 2px;
@@ -1586,17 +1511,16 @@ textarea.query {
   stroke-linejoin: round;
 }
 
-/* What's playing, at the footer's right. */
+/* What's playing, at the end of the search field; it gives way to the typed text. */
 .now-playing {
   display: inline-flex;
   flex: 0 1 auto;
   align-items: center;
   gap: 2px;
   min-width: 0;
-  max-width: 55%;
-  /* Two lines and a bigger cover fit in the footer's padding, so it keeps its height; it
-     sits at the right end. */
-  margin: -5px 0 -5px auto;
+  max-width: 270px;
+  margin: -4px 0;
+  color: var(--muted);
   cursor: default;
 }
 
@@ -1624,10 +1548,10 @@ textarea.query {
 
 .now-playing-cover {
   flex: none;
-  width: 26px;
-  height: 26px;
+  width: 30px;
+  height: 30px;
   object-fit: cover;
-  border-radius: 4px;
+  border-radius: 5px;
 }
 
 .now-playing-cover.glyph {
@@ -1661,11 +1585,12 @@ textarea.query {
 
 .now-playing-song {
   color: var(--fg);
-  line-height: 15px;
+  font-size: 13px;
+  line-height: 16px;
 }
 
 .now-playing-artist {
-  font-size: 11px;
+  font-size: 11.5px;
   line-height: 14px;
 }
 
@@ -2202,39 +2127,89 @@ textarea.query {
 
 /* ---- Settings ---- */
 
-/* One column, no sidebar: General is the home page and the other pages open from its
-   tiles. The page itself never scrolls (the bar window must not), so settings scrolls
-   inside. */
+/* A sidebar of pages beside the page itself. The window never scrolls; the page scrolls
+   inside, and the sidebar stays put. Below 640 px the sidebar is a rail of icons and the
+   search moves to the top of the page. */
 .settings {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-rows: 38px auto minmax(0, 1fr);
+  grid-template-columns: 200px minmax(0, 1fr);
   height: 100vh;
   background: var(--bg-solid);
 }
 
-.settings-pane {
-  flex: 1;
-  overflow-y: auto;
-  padding: 18px 28px 48px;
+/* Lighter glass over the window's own, with an edge like a pane divider. */
+.settings-side {
+  grid-row: 1 / -1;
+  grid-column: 1;
+  background: var(--side);
+  box-shadow:
+    inset -1px 0 0 rgba(0, 0, 0, 0.35),
+    inset -2px 0 0 rgba(255, 255, 255, 0.05);
 }
 
-.settings-pane > * {
-  max-width: 680px;
-  margin-inline: auto;
-}
-
-.settings-top {
+/* The title strip across the top, in the theme rather than the system's colors: it moves
+   the window, and on Windows ends in the window buttons (macOS keeps its traffic lights). */
+.settings-titlebar {
   display: flex;
-  gap: 8px;
-  margin-bottom: 18px;
+  grid-row: 1;
+  grid-column: 1 / -1;
+  justify-content: flex-end;
+  min-width: 0;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.window-buttons {
+  display: flex;
+}
+
+.window-buttons button {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 38px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: default;
+}
+
+.window-buttons button:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--fg);
+}
+
+.window-buttons button.close:hover {
+  background: #c42b1c;
+  color: #fff;
+}
+
+.window-buttons svg {
+  width: 10px;
+  height: 10px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+
+.settings-find {
+  position: relative;
+  grid-row: 2;
+  grid-column: 1;
+  padding: 0 12px 10px;
 }
 
 .settings-search {
-  flex: 1;
-  padding: 7px 10px;
+  box-sizing: border-box;
+  width: 100%;
+  height: 28px;
+  padding: 0 9px;
   border: 1px solid var(--stroke-strong);
-  border-radius: 8px;
-  background: var(--panel);
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.18);
   outline: none;
   font-size: 13px;
 }
@@ -2243,66 +2218,160 @@ textarea.query {
   border-color: var(--focus);
 }
 
-.settings-back {
-  display: grid;
-  flex: none;
-  place-items: center;
-  width: 34px;
-  border: 1px solid var(--stroke-strong);
-  border-radius: 8px;
-  background: var(--panel);
-  color: var(--muted);
-  cursor: pointer;
+.settings-find-keys {
+  position: absolute;
+  /* Centered on the 28 px field. */
+  top: 14px;
+  right: 18px;
+  transform: translateY(-50%);
+  pointer-events: none;
 }
 
-.settings-back:hover {
-  color: var(--fg);
+.settings-search:focus + .settings-find-keys {
+  display: none;
 }
 
-.settings-back svg {
-  width: 16px;
-  height: 16px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.8;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-/* The other pages, as a grid of tiles at the bottom of General. */
-.settings-tiles {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-  margin-top: 26px;
-}
-
-.settings-tile {
+.settings-nav {
   display: flex;
+  grid-row: 3;
+  grid-column: 1;
+  flex-direction: column;
+  gap: 1px;
+  min-height: 0;
+  padding: 0 10px 12px;
+  overflow: hidden;
+}
+
+.settings-row {
+  display: flex;
+  flex: none;
   align-items: center;
-  gap: 10px;
-  padding: 11px 12px;
-  border: 1px solid var(--stroke);
-  border-radius: 10px;
-  background: var(--chip);
-  font-size: 13.5px;
+  gap: 9px;
+  height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
   text-align: left;
   cursor: pointer;
 }
 
-.settings-tile:hover {
-  background: var(--chip-hover);
+.settings-row:hover {
+  background: rgba(255, 255, 255, 0.07);
 }
 
-.settings-tile svg {
+.settings-row.chosen {
+  background: var(--active);
+  color: var(--active-fg);
+}
+
+.settings-row.quiet:not(.chosen) {
+  color: var(--muted);
+}
+
+.settings-row:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.settings-row svg {
   flex: none;
-  width: 17px;
-  height: 17px;
+  width: 16px;
+  height: 16px;
   fill: none;
-  stroke: var(--muted);
+  stroke: currentColor;
   stroke-width: 1.7;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+.settings-row span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.settings .settings-group {
+  margin: 14px 8px 4px;
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* About and Dev, at the bottom under a hairline. */
+.settings-pinned {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-top: auto;
+  padding-top: 8px;
+  border-top: 1px solid var(--stroke);
+}
+
+.settings-pane {
+  grid-row: 2 / -1;
+  grid-column: 2;
+  overflow-y: auto;
+  padding: 0 28px 48px;
+}
+
+.settings-pane > * {
+  max-width: 680px;
+  margin-inline: auto;
+}
+
+@media (max-width: 639px) {
+  .settings {
+    grid-template-columns: 56px minmax(0, 1fr);
+  }
+
+  .settings-find {
+    grid-column: 2;
+    padding: 0 28px 4px;
+  }
+
+  .settings-find-keys {
+    right: 34px;
+  }
+
+  .settings-nav {
+    grid-row: 2 / -1;
+    align-items: center;
+    padding: 0 0 12px;
+  }
+
+  .settings-row {
+    justify-content: center;
+    width: 36px;
+    height: 32px;
+    padding: 0;
+  }
+
+  .settings-row span {
+    display: none;
+  }
+
+  /* The Utilities header becomes a hairline. */
+  .settings .settings-group {
+    width: 28px;
+    height: 0;
+    margin: 8px 0;
+    overflow: hidden;
+    border-top: 1px solid var(--stroke);
+  }
+
+  .settings-pinned {
+    align-items: center;
+    width: 36px;
+  }
+
+  .settings-pane {
+    grid-row: 3;
+    padding-top: 10px;
+  }
 }
 
 .results-list {
@@ -2419,6 +2488,33 @@ textarea.query {
   color: var(--muted);
 }
 
+/* A label with a small info mark beside it; the mark's tooltip says what the setting does. */
+.field-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.info-dot {
+  display: inline-flex;
+  color: var(--faint);
+  cursor: help;
+}
+
+.info-dot:hover {
+  color: var(--fg);
+}
+
+.info-dot svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .field input,
 .field select,
 .recorder {
@@ -2449,11 +2545,17 @@ textarea.query {
 }
 
 /* A one-of choice as joined buttons (Run at boot: Off, On, High-priority). */
+/* The choice, with its ⓘ beside it; an error goes on its own line under them. */
 .boot-choice {
   display: flex;
-  flex-direction: column;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
   max-width: 440px;
+}
+
+.boot-choice .notice {
+  flex-basis: 100%;
 }
 
 .segments {
@@ -2650,7 +2752,7 @@ textarea.query {
 
 /* Setup centers the choice and its note. */
 .onboarding-step .boot-choice {
-  align-items: center;
+  justify-content: center;
 }
 
 .onboarding-step .segments {
@@ -2819,7 +2921,9 @@ textarea.query {
   list-style: none;
   border: 1px solid var(--stroke-strong);
   border-radius: 10px;
-  background: rgba(30, 24, 46, 0.97);
+  /* The theme's own glass, blurred over what's beneath. */
+  background: var(--glass-strong);
+  backdrop-filter: blur(24px) saturate(1.4);
   box-shadow:
     inset 0 1px 0 var(--highlight),
     0 12px 32px rgba(0, 0, 0, 0.45),
@@ -2852,8 +2956,8 @@ textarea.query {
 }
 
 .select-option.active {
-  background: var(--focus);
-  color: #fff;
+  background: var(--select);
+  color: var(--fg);
 }
 
 /* Settings › Weather for: the city field and its matches under it. */

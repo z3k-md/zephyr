@@ -3,6 +3,7 @@ import { listen } from '@tauri-apps/api/event';
 import App from './App.vue';
 import { captureSnapshot, captureToggle, getSnapshot } from './api';
 import { isSnapshot, type Snapshot } from './types';
+import { pickedUnit } from './bar/weather';
 import './styles.css';
 
 // Lets the styles follow the native window chrome, which differs between platforms.
@@ -61,10 +62,12 @@ void listen<{ ctrl: boolean; shift: boolean; meta: boolean }>('alt-space', (even
   );
 });
 
-// The palette from Settings > Appearance, in every window, switching live when it changes.
+// The palette from Settings > Appearance and the weather's unit, in every window, switching
+// live when they change.
 function apply(snapshot: Snapshot) {
   document.documentElement.dataset.theme = snapshot.theme || 'sidebar';
   bugCapture = snapshot.bugCapture;
+  pickedUnit.value = snapshot.weatherUnit;
 }
 void getSnapshot()
   .then(apply)

@@ -816,9 +816,17 @@ fn build_settings(app: &AppHandle, section: Option<&str>) -> Result<(), String> 
     .min_inner_size(560.0, 480.0)
     .center()
     .resizable(true)
-    .focused(true)
-    .build()
-    .map_err(|err| err.to_string())?;
+    .focused(true);
+    // The page draws its own title strip in the theme, with the sidebar running up to the
+    // top: Windows drops the system's title bar (keeping the shadow and rounded corners) and
+    // the page adds the window buttons; macOS keeps its traffic lights over the page.
+    #[cfg(windows)]
+    let window = window.decorations(false).shadow(true);
+    #[cfg(target_os = "macos")]
+    let window = window
+        .title_bar_style(tauri::TitleBarStyle::Overlay)
+        .hidden_title(true);
+    let window = window.build().map_err(|err| err.to_string())?;
     #[cfg(windows)]
     no_window_menu(app, &window);
     open_on_active_space(app, &window);

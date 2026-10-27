@@ -14,6 +14,7 @@
   import RowIcon from '../bar/RowIcon.vue';
   import AppPicker from './AppPicker.vue';
   import type { Binding, GroupItem, LaunchGroup, Snapshot } from '../types';
+  import InfoTip from '../components/InfoTip.vue';
 
   // Settings › Launch groups: named sets of apps (and links and folders) the bar opens in
   // one go. Each group has a name, which the bar finds it by, an optional hotkey, and its
@@ -199,11 +200,12 @@
 
 <template>
   <section id="section-launchgroups">
-    <h2>Launch groups</h2>
-    <p class="lede">
-      Open several apps at once by typing a group's name in the bar or pressing its hotkey. Apps
-      already open come to the front.
-    </p>
+    <h2>
+      Launch groups
+      <InfoTip
+        text="Open several apps at once by typing a group's name in the bar or pressing its hotkey. Apps already open come to the front."
+      />
+    </h2>
     <p v-if="error" class="notice">{{ error }}</p>
     <article v-for="group in groups" :key="group.id" class="launch-group">
       <div class="launch-group-head">

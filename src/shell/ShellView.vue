@@ -121,7 +121,7 @@
     if (current && current.status !== 'running') {
       list.push({ label: 'Clear output', run: () => (run.value = null) });
     }
-    list.push({ label: 'Choose the shell', run: () => openSetting('zephyr.shell') });
+    list.push({ label: 'Choose the shell', run: () => openSetting('zephyr.terminal') });
     return list;
   });
 
@@ -421,7 +421,7 @@
         class="text-button"
         title="Choose the shell"
         @mousedown.prevent
-        @click="openSetting('zephyr.shell')"
+        @click="openSetting('zephyr.terminal')"
       >
         {{ run?.shell || shellName || 'Shell' }}
       </button>

@@ -1,5 +1,6 @@
 <script setup lang="ts">
   import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+  import { vTip } from '../tip';
 
   // One line of text that scrolls when it's too long to fit: it rests for a moment, glides
   // left at a steady pace and comes round again. Text that fits, or reduced motion, stays put
@@ -41,6 +42,10 @@
     );
   }
 
+  function restart() {
+    if (document.visibilityState === 'visible') void update();
+  }
+
   watch(
     () => props.text,
     () => void nextTick(update)
@@ -51,17 +56,23 @@
     observer = new ResizeObserver(() => void update());
     if (box.value) observer.observe(box.value);
     still.addEventListener('change', update);
+    // The lap keeps going while the window is hidden; each time it's back (the bar summoned),
+    // the text starts over from rest rather than mid-scroll.
+    window.addEventListener('focus', restart);
+    document.addEventListener('visibilitychange', restart);
   });
 
   onUnmounted(() => {
     lap?.cancel();
     observer?.disconnect();
     still.removeEventListener('change', update);
+    window.removeEventListener('focus', restart);
+    document.removeEventListener('visibilitychange', restart);
   });
 </script>
 
 <template>
-  <span ref="box" class="marquee" :class="{ moving }" :title="moving ? text : undefined">
+  <span ref="box" v-tip="moving ? text : undefined" class="marquee" :class="{ moving }">
     <span ref="track" class="marquee-track"
       ><span ref="first">{{ text }}</span
       ><span v-if="moving" class="marquee-copy" aria-hidden="true">{{ text }}</span></span

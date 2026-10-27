@@ -472,6 +472,12 @@ pub async fn weather_places(text: String) -> Result<Vec<crate::weather::Place>, 
     crate::weather::places(&text).await
 }
 
+/// Connects to the city search ahead of typing in Settings › Weather.
+#[tauri::command]
+pub async fn weather_warm() {
+    crate::weather::warm().await;
+}
+
 /// The weather for a city typed in the bar ("weather tokyo").
 #[tauri::command]
 pub async fn weather_at(text: String) -> Result<Option<crate::weather::Forecast>, String> {
@@ -489,6 +495,26 @@ pub fn save_weather_place(
         Ok(())
     })?;
     crate::weather::refresh();
+    publish(&app, snapshot)
+}
+
+/// `c`, `f`, or none for the region's own way.
+#[tauri::command]
+pub fn save_weather_unit(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    unit: Option<String>,
+) -> Result<Persisted, String> {
+    if unit
+        .as_deref()
+        .is_some_and(|unit| unit != "c" && unit != "f")
+    {
+        return Err("Pick Celsius or Fahrenheit".into());
+    }
+    let snapshot = state.update(|persisted| {
+        persisted.weather_unit = unit;
+        Ok(())
+    })?;
     publish(&app, snapshot)
 }
 
@@ -720,6 +746,21 @@ pub fn open_settings(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub fn hide_settings(app: AppHandle) {
     window::hide_settings(&app);
+}
+
+/// The page's own title strip, for a window without the system's: `drag` moves the window
+/// (from a press on the strip), `minimize`, `maximize` (or restore), and `close`.
+#[tauri::command]
+pub fn window_chrome(window: tauri::WebviewWindow, action: String) -> Result<(), String> {
+    match action.as_str() {
+        "drag" => window.start_dragging(),
+        "minimize" => window.minimize(),
+        "maximize" if window.is_maximized().unwrap_or(false) => window.unmaximize(),
+        "maximize" => window.maximize(),
+        "close" => window.close(),
+        _ => return Err(format!("No window action {action}")),
+    }
+    .map_err(|err| err.to_string())
 }
 
 #[tauri::command]

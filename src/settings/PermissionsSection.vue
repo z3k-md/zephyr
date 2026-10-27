@@ -2,6 +2,7 @@
   import { onMounted, onUnmounted, ref, watch } from 'vue';
   import { errorMessage, permissionRequest, permissionsStatus } from '../api';
   import type { Permission, PermissionId } from '../types';
+  import InfoTip from '../components/InfoTip.vue';
 
   // Settings › Permissions (macOS): what the app may do, why it wants each, and an Allow that
   // asks in place. Status is re-read every second while the page is open, so a switch turned
@@ -82,8 +83,10 @@
 
 <template>
   <section id="section-permissions">
-    <h2>Permissions</h2>
-    <p class="lede">Zephyr asks for each of these the first time a feature needs it.</p>
+    <h2>
+      Permissions
+      <InfoTip text="Zephyr asks for each of these the first time a feature needs it." />
+    </h2>
     <p v-if="error" class="notice">{{ error }}</p>
     <ul class="permissions">
       <li v-for="permission in permissions" :key="permission.id" class="permission">
@@ -93,8 +96,10 @@
           :title="permission.status === 'granted' ? 'Allowed' : 'Not allowed'"
         />
         <span class="permission-text">
-          <strong>{{ ABOUT[permission.id].name }}</strong>
-          <span class="hint-text">{{ ABOUT[permission.id].why }}</span>
+          <strong>
+            {{ ABOUT[permission.id].name }}
+            <InfoTip :text="ABOUT[permission.id].why" />
+          </strong>
           <span v-if="waiting === permission.id && ABOUT[permission.id].settings" class="lede">
             Turn on Zephyr in the list that opened. This updates on its own.
           </span>

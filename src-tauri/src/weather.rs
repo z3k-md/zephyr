@@ -226,12 +226,19 @@ async fn fetch_for(
     Ok((forecast(&client, place).await?, asked))
 }
 
+/// One client for every request, so its connections (and their TLS) are reused: a city search
+/// that set up a new one each keystroke spent most of its time on the handshake.
 fn client() -> Result<reqwest::Client, String> {
-    reqwest::Client::builder()
-        .user_agent("Zephyr")
-        .timeout(Duration::from_secs(10))
-        .build()
-        .map_err(|err| err.to_string())
+    static CLIENT: OnceLock<Result<reqwest::Client, String>> = OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .user_agent("Zephyr")
+                .timeout(Duration::from_secs(10))
+                .build()
+                .map_err(|err| err.to_string())
+        })
+        .clone()
 }
 
 /// The forecast for one place: the weather now, the next 48 hours and seven days.
@@ -287,6 +294,17 @@ async fn ip_place(client: &reqwest::Client) -> Result<Place, String> {
     })
 }
 
+/// Opens the connection to the city search when its field is focused, so the first letters
+/// typed don't wait on DNS and TLS (most of a cold search's second or so).
+pub async fn warm() {
+    if let Ok(client) = client() {
+        let _ = client
+            .head("https://geocoding-api.open-meteo.com/v1/search")
+            .send()
+            .await;
+    }
+}
+
 /// Cities whose name starts with `text`, for the Settings field.
 pub async fn places(text: &str) -> Result<Vec<Place>, String> {
     #[derive(Deserialize)]
@@ -303,14 +321,26 @@ pub async fn places(text: &str) -> Result<Vec<Place>, String> {
         country: String,
         latitude: f64,
         longitude: f64,
+        #[serde(default)]
+        population: u64,
     }
     let text = text.trim();
     if text.chars().count() < 2 {
         return Ok(Vec::new());
     }
+    // Backspacing and retyping asks for the same text again; the answer doesn't change.
+    static SEEN: Mutex<Vec<(String, Vec<Place>)>> = Mutex::new(Vec::new());
+    let key = text.to_lowercase();
+    if let Some((_, places)) = SEEN
+        .lock()
+        .ok()
+        .and_then(|seen| seen.iter().find(|(seen, _)| *seen == key).cloned())
+    {
+        return Ok(places);
+    }
     let found: Found = client()?
         .get(format!(
-            "https://geocoding-api.open-meteo.com/v1/search?name={}&count=6&language=en",
+            "https://geocoding-api.open-meteo.com/v1/search?name={}&count=20&language=en",
             urlencoding::encode(text)
         ))
         .send()
@@ -320,9 +350,13 @@ pub async fn places(text: &str) -> Result<Vec<Place>, String> {
         .json()
         .await
         .map_err(|err| err.to_string())?;
-    Ok(found
-        .results
+    // The geocoder puts exact names first, so a few villages called "Billi" beat Billings;
+    // the biggest places are the likely ones.
+    let mut results = found.results;
+    results.sort_by_key(|city| std::cmp::Reverse(city.population));
+    let places = results
         .into_iter()
+        .take(6)
         .map(|found| Place {
             name: found.name,
             region: found.admin1,
@@ -330,7 +364,14 @@ pub async fn places(text: &str) -> Result<Vec<Place>, String> {
             latitude: found.latitude,
             longitude: found.longitude,
         })
-        .collect())
+        .collect::<Vec<_>>();
+    if let Ok(mut seen) = SEEN.lock() {
+        if seen.len() >= 64 {
+            seen.remove(0);
+        }
+        seen.push((key, places.clone()));
+    }
+    Ok(places)
 }
 
 /// The forecast for a city typed in the bar ("weather tokyo"), kept for 30 minutes.

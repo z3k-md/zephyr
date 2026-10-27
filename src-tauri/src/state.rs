@@ -87,6 +87,9 @@ pub struct Persisted {
     pub launch_groups: Vec<LaunchGroup>,
     /// Where the weather is for; none uses where the IP address says the computer is.
     pub weather_place: Option<crate::weather::Place>,
+    /// `c` or `f` for the weather's temperatures (and wind in km/h or mph); none follows
+    /// the region's own way.
+    pub weather_unit: Option<String>,
 }
 
 /// The palettes Settings > Appearance offers; the first is the default.
@@ -227,6 +230,7 @@ impl Persisted {
             bindings: Vec::new(),
             launch_groups: Vec::new(),
             weather_place: None,
+            weather_unit: None,
         }
     }
 

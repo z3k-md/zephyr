@@ -13,6 +13,7 @@ import type {
   NowPlaying,
   Forecast,
   Place,
+  WeatherUnit,
   UpdateStatus,
   PowerAction,
   PowerPreview,
@@ -159,6 +160,11 @@ export function hideBar(): Promise<void> {
 
 export function hideSettings(): Promise<void> {
   return invoke('hide_settings');
+}
+
+/** The page's own title strip: move, minimize, maximize or restore, or close its window. */
+export function windowChrome(action: 'drag' | 'minimize' | 'maximize' | 'close'): Promise<void> {
+  return invoke('window_chrome', { action });
 }
 
 export function openSettings(): Promise<void> {
@@ -423,6 +429,11 @@ export function weatherPlaces(text: string): Promise<Place[]> {
   return invoke<Place[]>('weather_places', { text });
 }
 
+/** Connects to the city search ahead of typing. */
+export function weatherWarm(): Promise<void> {
+  return invoke('weather_warm');
+}
+
 /** The weather for a city typed in the bar. */
 export function weatherAt(text: string): Promise<Forecast | null> {
   return invoke<Forecast | null>('weather_at', { text });
@@ -430,6 +441,11 @@ export function weatherAt(text: string): Promise<Forecast | null> {
 
 export function saveWeatherPlace(place: Place | null): Promise<Snapshot> {
   return invoke<Snapshot>('save_weather_place', { place });
+}
+
+/** Celsius or Fahrenheit for the weather; null follows the region's own way. */
+export function saveWeatherUnit(unit: WeatherUnit | null): Promise<Snapshot> {
+  return invoke<Snapshot>('save_weather_unit', { unit });
 }
 
 /** What's playing now; later changes arrive as `nowplaying` events. */

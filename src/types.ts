@@ -39,7 +39,11 @@ export interface Snapshot {
   bindings: Binding[];
   /** Where the weather is for; null uses where the IP address says. */
   weatherPlace: Place | null;
+  /** Celsius or Fahrenheit; null follows the region's own way. */
+  weatherUnit: WeatherUnit | null;
 }
+
+export type WeatherUnit = 'c' | 'f';
 
 /** A place weather is for. */
 export interface Place {

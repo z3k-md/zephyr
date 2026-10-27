@@ -1,11 +1,11 @@
 import { onMounted, onUnmounted, ref } from 'vue';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { weather } from '../api';
-import type { Forecast } from '../types';
+import type { Forecast, WeatherUnit } from '../types';
 
-// Weather for the Today line and the weather card. Rust fetches it in the background (every
-// 30 minutes) and sends each new one; it's all metric there, and shown in °F and mph only
-// where that's the local way.
+// Weather for the footer and the weather card. Rust fetches it in the background (every
+// 30 minutes) and sends each new one; it's all metric there, and shown in °F and mph when
+// that's picked in Settings › Weather, or is the local way.
 
 /** The last forecast, kept current from the `weather` events. */
 export function useWeather() {
@@ -29,16 +29,25 @@ function region(): string {
   }
 }
 
-export const imperial = IMPERIAL_REGIONS.includes(region());
+/** The region's own unit, for when none is picked in Settings. */
+export const regionUnit: WeatherUnit = IMPERIAL_REGIONS.includes(region()) ? 'f' : 'c';
 
-/** "58°" from °C, in the local unit. */
+/** The unit picked in Settings › Weather, if any; kept current from the settings (main.ts). */
+export const pickedUnit = ref<WeatherUnit | null>(null);
+
+/** Fahrenheit and mph, picked or the region's way. */
+function imperial(): boolean {
+  return (pickedUnit.value ?? regionUnit) === 'f';
+}
+
+/** "58°" from °C, in the chosen unit. */
 export function degrees(celsius: number): string {
-  return `${Math.round(imperial ? (celsius * 9) / 5 + 32 : celsius)}°`;
+  return `${Math.round(imperial() ? (celsius * 9) / 5 + 32 : celsius)}°`;
 }
 
 /** "9 mph" or "15 km/h". */
 export function windSpeed(kmh: number): string {
-  return imperial ? `${Math.round(kmh / 1.609)} mph` : `${Math.round(kmh)} km/h`;
+  return imperial() ? `${Math.round(kmh / 1.609)} mph` : `${Math.round(kmh)} km/h`;
 }
 
 export type Wet = 'rain' | 'snow' | null;

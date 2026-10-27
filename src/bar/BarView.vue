@@ -45,7 +45,7 @@
   import TypingView from '../typing/TypingView.vue';
   import DeviceCard from './DeviceCard.vue';
   import ResultList from './ResultList.vue';
-  import HomeStatus from './HomeStatus.vue';
+  import FooterWeather from './FooterWeather.vue';
   import WeatherCard from './WeatherCard.vue';
   import { placeName, useWeather } from './weather';
   import Keys from '../components/Keys.vue';
@@ -69,7 +69,6 @@
     type SystemStats,
     type SuggestResponse,
     type PowerPreview,
-    type MediaControl,
     type Forecast,
   } from '../types';
 
@@ -868,7 +867,6 @@
     query.value = '';
     scope.value = null;
     selected.value = -1;
-    pausedHere.value = false;
     notice.value = null;
   }
 
@@ -1267,7 +1265,12 @@
   function showWeather() {
     if (!forecast.value) return;
     query.value = 'weather';
-    void focusInput();
+    // The caret at the end, not the word selected, so typing a city just carries on.
+    void nextTick(() => {
+      const input = inputEl.value;
+      input?.focus();
+      input?.setSelectionRange(input.value.length, input.value.length);
+    });
   }
 
   function googleUrl(text: string): string {
@@ -1522,29 +1525,6 @@
     bottom: `${previewBounds.value.bottom}px`,
   }));
 
-  // The empty bar: the list at full width, and what's playing and the weather in the footer
-  // beside the meters. The first key typed (or a scope) puts the footer back to the meters
-  // and the track strip, in the same frame.
-  const home = computed(
-    () =>
-      view.value === 'root' &&
-      !query.value &&
-      !scope.value &&
-      !actionsOpen.value &&
-      !previewShown.value &&
-      !loadError.value
-  );
-  /** What's playing, in the empty bar's footer: only while something plays, and still there
-   *  when paused from here until the bar next opens, so its play button can be pressed. */
-  const pausedHere = ref(false);
-  const homeTrack = computed(() =>
-    media.track.value?.playing || (pausedHere.value && media.track.value) ? media.track.value : null
-  );
-  function pressMedia(control: MediaControl) {
-    if (control === 'toggle' && media.track.value?.playing) pausedHere.value = true;
-    media.press(control);
-  }
-
   function measurePreview() {
     const bar = root.value;
     const input = inputRowEl.value;
@@ -1766,6 +1746,15 @@
             @select="trackCaret"
           />
         </div>
+        <!-- What's playing, at the end of the field, in every view of the main bar. -->
+        <NowPlayingStrip
+          v-if="playingNow"
+          :track="playingNow"
+          @toggle="media.press('toggle')"
+          @next="media.press('next')"
+          @previous="media.press('previous')"
+          @focus="media.focus()"
+        />
         <!-- With Ctrl held the bar can be dragged. -->
         <span v-if="movable" class="move-hint">
           <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -1834,25 +1823,14 @@
         :style="previewStyle"
       />
 
-      <!-- On the empty bar: what's playing and the weather, then the meters at the right.
-           While typing: the meters, then the track strip at the right. A click on the meters
-           opens System Resources. -->
+      <!-- The meters at the left (a click opens System Resources); the weather at the right. -->
       <footer
-        v-if="(statsShown && meters) || playingNow || (home && (homeTrack || forecast))"
+        v-if="(statsShown && meters) || forecast"
         ref="statsEl"
         class="stats"
-        :class="{ home }"
         aria-label="System"
         @mousedown.prevent
       >
-        <HomeStatus
-          v-if="home"
-          :track="homeTrack"
-          :forecast="forecast"
-          @press="pressMedia"
-          @focus="media.focus()"
-          @weather="showWeather"
-        />
         <span
           v-if="statsShown && meters"
           class="meters"
@@ -1898,14 +1876,7 @@
             {{ meters.disk }}
           </span>
         </span>
-        <NowPlayingStrip
-          v-if="!home && playingNow"
-          :track="playingNow"
-          @toggle="media.press('toggle')"
-          @next="media.press('next')"
-          @previous="media.press('previous')"
-          @focus="media.focus()"
-        />
+        <FooterWeather v-if="forecast" :forecast="forecast" @open="showWeather" />
       </footer>
     </template>
   </div>

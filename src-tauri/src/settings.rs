@@ -504,10 +504,16 @@ const ZEPHYR: &[Setting] = &[
         &["bug report", "captures", "snapshot", "developer"],
     ),
     zephyr(
-        "zephyr.shell",
-        "Zephyr Shell",
-        "general:shell",
-        &["terminal", "bash", "powershell", "command", "wsl"],
+        "zephyr.terminal",
+        "Zephyr Terminal",
+        "terminal",
+        &["shell", "bash", "powershell", "command", "wsl"],
+    ),
+    zephyr(
+        "zephyr.resources",
+        "Zephyr Resources",
+        "resources",
+        &["footer stats", "cpu meter", "gpu", "system resources"],
     ),
     zephyr(
         "zephyr.sync",
@@ -537,6 +543,17 @@ const ZEPHYR: &[Setting] = &[
         "Zephyr Shortcuts",
         "shortcuts",
         &["aliases", "hotkeys", "keyboard shortcuts"],
+    ),
+    zephyr(
+        "zephyr.weather",
+        "Zephyr Weather",
+        "weather",
+        &[
+            "weather location",
+            "celsius",
+            "fahrenheit",
+            "temperature units",
+        ],
     ),
     zephyr(
         "zephyr.launchgroups",
@@ -913,7 +930,10 @@ mod tests {
             assert!(intent_titles(&catalog, "display prefs")[0].starts_with("Display"));
             let dark = intent_titles(&catalog, "settings dark");
             assert!(["Colors", "Appearance"].contains(&dark[0]), "{dark:?}");
-            assert_eq!(intent_titles(&catalog, "shell settings")[0], "Zephyr Shell");
+            assert_eq!(
+                intent_titles(&catalog, "shell settings")[0],
+                "Zephyr Terminal"
+            );
             assert!(intent_titles(&catalog, "iphone wifi settings not working").is_empty());
             assert!(intent_titles(&catalog, "wifi").is_empty());
         }

@@ -21,6 +21,7 @@
     saveShowStats,
     openOnboarding,
     hideSettings,
+    windowChrome,
     saveOnboardingEveryLaunch,
     permissionRequest,
     pauseShortcuts,
@@ -39,11 +40,13 @@
   import PermissionsSection from './PermissionsSection.vue';
   import LaunchGroupsSection from './LaunchGroupsSection.vue';
   import { THEMES } from '../themes';
-  import { captureShortcut, formatShortcut, isMac, isModifierKey, SHORTCUT_HELP } from '../keys';
+  import { captureShortcut, isMac, isModifierKey, SHORTCUT_HELP } from '../keys';
   import Keys from '../components/Keys.vue';
+  import InfoTip from '../components/InfoTip.vue';
+  import { vTip } from '../tip';
   import ShortcutsSection from './ShortcutsSection.vue';
   import BootChoice from './BootChoice.vue';
-  import WeatherPlaceField from './WeatherPlaceField.vue';
+  import WeatherSection from './WeatherSection.vue';
   import SelectMenu from '../components/SelectMenu.vue';
   import { GLYPHS } from '../bar/glyphs';
   import {
@@ -120,11 +123,9 @@
     // creates this window), then catch up on data.
     unlistens.push(
       await listen<string>('settings-shown', (event) => {
+        // Opened plainly, it starts at General; it never remembers the last page.
         if (event.payload) void revealSection(event.payload);
-        else {
-          search.value = '';
-          paneEl.value?.scrollTo({ top: 0 });
-        }
+        else open('general');
         window.setTimeout(() => void refresh(), 50);
       })
     );
@@ -142,21 +143,71 @@
     for (const unlisten of unlistens) unlisten();
   });
 
-  // One page at a time: General is the home page, and the rest open from its tiles.
+  // One page at a time, picked from the sidebar: the app's own settings, then its utilities
+  // (each tool that has settings, A to Z, so a new one joins on its own), then About and Dev
+  // at the bottom.
+  interface Section {
+    id: string;
+    label: string;
+    icon: string;
+    group?: 'utilities';
+    pinned?: boolean;
+    /** Words that find the page in search besides its label and its controls' own. */
+    keywords?: string;
+  }
   const SECTIONS = [
     { id: 'general', label: 'General', icon: 'gear' },
-    { id: 'sync', label: 'Sync', icon: 'sync' },
-    { id: 'clipboard', label: 'Clipboard', icon: 'clipboard' },
-    { id: 'notes', label: 'Notes', icon: 'note' },
     { id: 'shortcuts', label: 'Shortcuts', icon: 'keyboard' },
     { id: 'launchgroups', label: 'Launch groups', icon: 'grid' },
     { id: 'files', label: 'Files', icon: 'folder' },
+    { id: 'sync', label: 'Sync', icon: 'sync' },
     ...(isMac ? [{ id: 'permissions', label: 'Permissions', icon: 'shield' }] : []),
-    { id: 'dev', label: 'Dev', icon: 'code' },
-    { id: 'about', label: 'About', icon: 'info' },
-  ];
-  const PAGES = SECTIONS.filter((section) => section.id !== 'general');
+    { id: 'clipboard', label: 'Clipboard', icon: 'clipboard', group: 'utilities' },
+    { id: 'resources', label: 'Resources', icon: 'cpu', group: 'utilities' },
+    { id: 'terminal', label: 'Terminal', icon: 'prompt', group: 'utilities' },
+    { id: 'notes', label: 'Notes', icon: 'note', group: 'utilities' },
+    {
+      id: 'weather',
+      label: 'Weather',
+      icon: 'weatherPartly',
+      group: 'utilities',
+      keywords: 'location city celsius fahrenheit units',
+    },
+    { id: 'about', label: 'About', icon: 'info', pinned: true },
+    { id: 'dev', label: 'Dev', icon: 'code', pinned: true },
+  ] as Section[];
+  const MAIN = SECTIONS.filter((section) => !section.group && !section.pinned);
+  const UTILITIES = SECTIONS.filter((section) => section.group === 'utilities').sort((a, b) =>
+    a.label.localeCompare(b.label)
+  );
+  const PINNED = SECTIONS.filter((section) => section.pinned);
+  /** The sidebar's order, for ↑ and ↓. */
+  const NAV = [...MAIN, ...UTILITIES, ...PINNED];
   const active = ref('general');
+
+  // The title strip the page draws in place of the system's: a press drags the window, a
+  // double-click maximizes it, and on Windows it has the window buttons.
+  const isWindows = navigator.userAgent.includes('Windows');
+  function onTitleDown(event: MouseEvent) {
+    if (event.button === 0 && event.detail === 1) void windowChrome('drag');
+  }
+
+  // Below 640 px the sidebar is a rail of icons, and their names are tooltips.
+  const narrowQuery = window.matchMedia('(max-width: 639px)');
+  const narrow = ref(narrowQuery.matches);
+  narrowQuery.addEventListener('change', (event) => (narrow.value = event.matches));
+
+  /** ↑ and ↓ move between the sidebar's rows and open each. */
+  function onNavKey(event: KeyboardEvent) {
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+    event.preventDefault();
+    const at = NAV.findIndex((section) => section.id === active.value);
+    const next = NAV[(at + (event.key === 'ArrowDown' ? 1 : -1) + NAV.length) % NAV.length];
+    open(next.id);
+    void nextTick(() =>
+      document.querySelector<HTMLElement>(`[data-section="${next.id}"]`)?.focus()
+    );
+  }
   const search = ref('');
   const searchEl = ref<HTMLInputElement | null>(null);
   const paneEl = ref<HTMLElement | null>(null);
@@ -197,7 +248,10 @@
     for (const section of SECTIONS) {
       const root = document.getElementById(`section-${section.id}`);
       if (!root) continue;
-      if (section.label.toLowerCase().includes(query)) {
+      if (
+        section.label.toLowerCase().includes(query) ||
+        section.keywords?.split(' ').some((word) => word.startsWith(query))
+      ) {
         found.push({ section: section.id, label: section.label, element: root });
       }
       const labels = root.querySelectorAll<HTMLElement>(
@@ -293,7 +347,7 @@
   }
 
   // Esc closes Settings, unless something open took it first: a dropdown, a shortcut
-  // being recorded, or search text (which Esc clears). A page goes back to General first.
+  // being recorded, or search text (which Esc clears).
   function onEscape(event: KeyboardEvent) {
     if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing) return;
     if (search.value) {
@@ -301,8 +355,7 @@
       return;
     }
     event.preventDefault();
-    if (active.value !== 'general') open('general');
-    else void hideSettings();
+    void hideSettings();
   }
 
   function onShortcutKey(event: KeyboardEvent) {
@@ -355,18 +408,29 @@
     }
     const shortcut = captureShortcut(event);
     if (!shortcut) {
-      formError.value = SHORTCUT_HELP;
+      summonError.value = SHORTCUT_HELP;
       return;
     }
     listening.value = false;
     void commitShortcut(shortcut);
   }
 
+  /** The new key caps say it took; only a failure (taken, or not a shortcut) says more, at
+   *  the recorder itself. */
+  const summonError = ref<string | null>(null);
+
   async function commitShortcut(shortcut: string) {
     const current = snapshot.value;
     if (!current) return;
-    const saved = await save(saveSettings(shortcut, current.launchAtStartup));
-    if (saved) status.value = `Summon shortcut is ${formatShortcut(shortcut)}.`;
+    busy.value = true;
+    try {
+      apply(await saveSettings(shortcut, current.launchAtStartup));
+      summonError.value = null;
+    } catch (error) {
+      summonError.value = errorMessage(error);
+    } finally {
+      busy.value = false;
+    }
   }
 
   async function updates() {
@@ -592,27 +656,85 @@
 
 <template>
   <main ref="settingsEl" class="settings">
-    <div ref="paneEl" class="settings-pane">
-      <div class="settings-top">
-        <button
-          v-if="!search && active !== 'general'"
-          type="button"
-          class="settings-back"
-          aria-label="Back to settings"
-          @click="open('general')"
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true" v-html="GLYPHS.back" />
+    <header class="settings-titlebar" @mousedown="onTitleDown" @dblclick="windowChrome('maximize')">
+      <div v-if="isWindows" class="window-buttons" @mousedown.stop @dblclick.stop>
+        <button type="button" aria-label="Minimize" @click="windowChrome('minimize')">
+          <svg viewBox="0 0 10 10" aria-hidden="true"><path d="M0 5h10" /></svg>
         </button>
-        <input
-          ref="searchEl"
-          v-model="search"
-          class="settings-search"
-          type="search"
-          placeholder="Search settings"
-          spellcheck="false"
-          @keydown="onSearchKey"
-        />
+        <button type="button" aria-label="Maximize" @click="windowChrome('maximize')">
+          <svg viewBox="0 0 10 10" aria-hidden="true">
+            <rect x=".5" y=".5" width="9" height="9" />
+          </svg>
+        </button>
+        <button type="button" class="close" aria-label="Close" @click="windowChrome('close')">
+          <svg viewBox="0 0 10 10" aria-hidden="true"><path d="M0 0l10 10M10 0 0 10" /></svg>
+        </button>
       </div>
+    </header>
+    <!-- The sidebar's glass; the search and the rows sit over it (beside the pages on a
+         narrow window, where the sidebar is a rail of icons and search tops the pane). -->
+    <div class="settings-side" aria-hidden="true" />
+    <div class="settings-find">
+      <input
+        ref="searchEl"
+        v-model="search"
+        class="settings-search"
+        type="search"
+        placeholder="Search"
+        aria-label="Search settings"
+        spellcheck="false"
+        @keydown="onSearchKey"
+      />
+      <Keys v-if="!search" class="settings-find-keys" keys="mod+f" small />
+    </div>
+    <nav class="settings-nav" aria-label="Settings" @keydown="onNavKey">
+      <template v-for="section in MAIN" :key="section.id">
+        <button
+          v-tip="narrow ? section.label : null"
+          type="button"
+          class="settings-row"
+          :class="{ chosen: !search && active === section.id }"
+          :data-section="section.id"
+          :aria-current="!search && active === section.id ? 'page' : undefined"
+          @click="open(section.id)"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true" v-html="GLYPHS[section.icon]" />
+          <span>{{ section.label }}</span>
+        </button>
+      </template>
+      <h3 class="settings-group">Utilities</h3>
+      <button
+        v-for="section in UTILITIES"
+        :key="section.id"
+        v-tip="narrow ? section.label : null"
+        type="button"
+        class="settings-row"
+        :class="{ chosen: !search && active === section.id }"
+        :data-section="section.id"
+        :aria-current="!search && active === section.id ? 'page' : undefined"
+        @click="open(section.id)"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true" v-html="GLYPHS[section.icon]" />
+        <span>{{ section.label }}</span>
+      </button>
+      <div class="settings-pinned">
+        <button
+          v-for="section in PINNED"
+          :key="section.id"
+          v-tip="narrow ? section.label : null"
+          type="button"
+          class="settings-row quiet"
+          :class="{ chosen: !search && active === section.id }"
+          :data-section="section.id"
+          :aria-current="!search && active === section.id ? 'page' : undefined"
+          @click="open(section.id)"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true" v-html="GLYPHS[section.icon]" />
+          <span>{{ section.label }}</span>
+        </button>
+      </div>
+    </nav>
+    <div ref="paneEl" class="settings-pane">
       <p v-if="formError" class="notice">{{ formError }}</p>
       <p v-else-if="status" class="status">{{ status }}</p>
 
@@ -635,19 +757,23 @@
       </section>
 
       <section v-if="snapshot" v-show="!search && active === 'general'" id="section-general">
-        <h2>Settings</h2>
+        <h2>General</h2>
         <div class="field" data-focus="summon">
           <span>Summon shortcut</span>
           <button
             type="button"
             class="recorder"
             :class="{ listening }"
-            @click="listening = true"
+            @click="
+              listening = true;
+              summonError = null;
+            "
             @blur="listening = false"
           >
             <template v-if="listening">Press a shortcut</template>
             <Keys v-else :keys="snapshot.summonShortcut" />
           </button>
+          <p v-if="summonError" class="notice">{{ summonError }}</p>
         </div>
         <div class="field" data-focus="startup">
           <span>Run at boot</span>
@@ -671,28 +797,6 @@
           <select :value="snapshot.resumeSeconds" :disabled="busy" @change="changeResume">
             <option v-for="option in RESUME" :key="option.seconds" :value="option.seconds">
               {{ option.label }}
-            </option>
-          </select>
-        </label>
-        <label class="check">
-          <input
-            type="checkbox"
-            :checked="snapshot.showStats"
-            :disabled="busy"
-            @change="toggleStats"
-          />
-          Show CPU, memory, disk and network at the bottom of the bar
-        </label>
-        <WeatherPlaceField :snapshot="snapshot" @apply="apply" />
-        <label v-if="shell?.available.length" class="field" data-focus="shell">
-          <span>Run commands with</span>
-          <select :value="shell.program" :disabled="busy" @change="changeShell">
-            <option
-              v-for="item in SHELLS.filter((entry) => shell?.available.includes(entry.id))"
-              :key="item.id"
-              :value="item.id"
-            >
-              {{ item.label }}
             </option>
           </select>
         </label>
@@ -723,18 +827,6 @@
         <div class="field inline">
           <button type="button" @click="openOnboarding">Run setup again</button>
         </div>
-        <nav class="settings-tiles" aria-label="More settings">
-          <button
-            v-for="page in PAGES"
-            :key="page.id"
-            type="button"
-            class="settings-tile"
-            @click="open(page.id)"
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true" v-html="GLYPHS[page.icon]" />
-            <span>{{ page.label }}</span>
-          </button>
-        </nav>
       </section>
 
       <section v-if="snapshot" v-show="!search && active === 'about'" id="section-about">
@@ -758,9 +850,9 @@
           />
           {{ isMac ? '⌃R' : 'Ctrl+R' }} records and {{ isMac ? '⌃⇧S' : 'Ctrl+Shift+S' }} snapshots
           the Zephyr window in front
+          <InfoTip text="Only Zephyr's windows are captured, never other apps." />
         </label>
         <div class="field inline">
-          <span class="hint-text">Only Zephyr's windows are captured, never other apps.</span>
           <button type="button" @click="showCaptures">Show captures</button>
         </div>
         <template v-if="isDev">
@@ -887,6 +979,46 @@
       <LaunchGroupsSection
         v-if="snapshot"
         v-show="!search && active === 'launchgroups'"
+        :snapshot="snapshot"
+        @apply="apply"
+      />
+      <section v-if="snapshot" v-show="!search && active === 'resources'" id="section-resources">
+        <h2>Resources</h2>
+        <label class="check">
+          <input
+            type="checkbox"
+            :checked="snapshot.showStats"
+            :disabled="busy"
+            @change="toggleStats"
+          />
+          Show CPU, GPU and memory at the bottom of the bar
+          <InfoTip text="A click on them opens System Resources." />
+        </label>
+      </section>
+
+      <section v-if="snapshot" v-show="!search && active === 'terminal'" id="section-terminal">
+        <h2>Terminal</h2>
+        <label v-if="shell?.available.length" class="field" data-focus="shell">
+          <span class="field-label">
+            Run commands with
+            <InfoTip text="For commands typed after > in the bar, and Shell." />
+          </span>
+          <select :value="shell.program" :disabled="busy" @change="changeShell">
+            <option
+              v-for="item in SHELLS.filter((entry) => shell?.available.includes(entry.id))"
+              :key="item.id"
+              :value="item.id"
+            >
+              {{ item.label }}
+            </option>
+          </select>
+        </label>
+        <p v-else class="hint-text">Commands run in your login shell.</p>
+      </section>
+
+      <WeatherSection
+        v-if="snapshot"
+        v-show="!search && active === 'weather'"
         :snapshot="snapshot"
         @apply="apply"
       />

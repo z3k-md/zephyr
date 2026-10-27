@@ -80,7 +80,9 @@ pub fn pause(app: &AppHandle) {
 
 static RECORDING: AtomicBool = AtomicBool::new(false);
 
-/// Whether a shortcut is being recorded (between `pause` and the next `register`).
+/// Whether a shortcut is being recorded (between `pause` and the next `register`); Windows
+/// passes Alt+Space to the page then (window.rs).
+#[cfg(windows)]
 pub fn recording() -> bool {
     RECORDING.load(Ordering::SeqCst)
 }

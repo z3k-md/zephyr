@@ -13,6 +13,7 @@
   import Keys from '../components/Keys.vue';
   import { useWindowListener } from '../windowEvents';
   import type { Binding, Snapshot } from '../types';
+  import InfoTip from '../components/InfoTip.vue';
 
   // Settings › Shortcuts: a global hotkey and/or a typed alias for any command, app, bookmark
   // or settings page. Apps, bookmarks and pages are added from the bar (Ctrl+K, Set hotkey or
@@ -140,13 +141,12 @@
 
 <template>
   <section id="section-shortcuts">
-    <h2>Shortcuts</h2>
-    <p class="lede">
-      Give a command, app or bookmark a hotkey that works from anywhere, or an alias you type in the
-      bar. A command's alias then a space goes straight into that command; a direct alias (for a
-      symbol like <code>=</code>) fires as soon as it's typed. To add an app or bookmark, select it
-      in the bar, press Ctrl+K and choose Set hotkey or alias.
-    </p>
+    <h2>
+      Shortcuts
+      <InfoTip
+        text="A hotkey works from anywhere; an alias is typed in the bar. A command's alias then a space goes straight into that command, and a direct alias (for a symbol like =) fires as soon as it's typed. To add an app or bookmark, select it in the bar, press Ctrl+K and choose Set hotkey or alias."
+      />
+    </h2>
 
     <label class="field">
       <span>Add a command</span>

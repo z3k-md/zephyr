@@ -2,6 +2,7 @@
   import { computed, ref } from 'vue';
   import { errorMessage, saveInstantStartup, saveSettings } from '../api';
   import type { Snapshot } from '../types';
+  import InfoTip from '../components/InfoTip.vue';
 
   // Run at boot, as one choice: off, on, or (Windows) high-priority, which starts from a
   // Task Scheduler task instead of the startup list Windows holds back for a few seconds
@@ -17,8 +18,8 @@
     ...(isWindows ? [{ id: 'fast' as const, label: 'High-priority' }] : []),
   ];
   const CAVEAT =
-    'Starts Zephyr from a scheduled task so it’s ready sooner. Windows Defender or other ' +
-    'antivirus may flag this; if it does, add an exception for Zephyr.';
+    'High-priority starts Zephyr from a scheduled task so it’s ready sooner. Windows ' +
+    'Defender or other antivirus may flag it; if it does, add an exception for Zephyr.';
 
   const busy = ref(false);
   const error = ref<string | null>(null);
@@ -68,7 +69,7 @@
         {{ option.label }}
       </button>
     </div>
-    <p v-if="mode === 'fast'" class="hint-text">{{ CAVEAT }}</p>
+    <InfoTip v-if="isWindows" :text="CAVEAT" />
     <p v-if="error" class="notice">{{ error }}</p>
   </div>
 </template>

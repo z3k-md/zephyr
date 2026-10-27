@@ -14,6 +14,7 @@
   } from '../api';
   import type { SyncStatus } from '../types';
   import { PLATFORM_NAMES } from '../format';
+  import InfoTip from '../components/InfoTip.vue';
 
   const status = ref<SyncStatus | null>(null);
   const recoveryInput = ref('');
@@ -127,8 +128,10 @@
 
 <template>
   <section id="section-sync">
-    <h2>Sync</h2>
-    <p class="lede">Notes and clipboard, end-to-end encrypted.</p>
+    <h2>
+      Sync
+      <InfoTip text="Notes and clipboard, end-to-end encrypted." />
+    </h2>
     <p v-if="error" class="notice">{{ error }}</p>
 
     <template v-if="phase === 'signedOut'">
