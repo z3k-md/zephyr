@@ -1,7 +1,7 @@
 import { reactive } from 'vue';
-import { appIcon, siteIcon, siteIconUrl } from '../api';
+import { appIcon, siteIconUrl } from '../api';
 
-// Real icons for rows: an installed app's own icon, and a web destination's site icon. Each is
+// Real icons for rows: an installed app's own icon, and a bookmarked site's icon. Each is
 // fetched once and kept for the session; they arrive after the rows draw, so typing never
 // waits. null means there is none (the row keeps its letter tile).
 const icons = reactive<Record<string, string | null>>({});
@@ -12,17 +12,6 @@ export function iconFor(appId: string, size: number): string | null {
     icons[key] = null;
     const pixels = Math.round(size * (window.devicePixelRatio || 1));
     void appIcon(appId, pixels)
-      .then((url) => (icons[key] = url))
-      .catch(() => undefined);
-  }
-  return icons[key];
-}
-
-export function siteIconFor(destinationId: string): string | null {
-  const key = `dest:${destinationId}`;
-  if (!(key in icons)) {
-    icons[key] = null;
-    void siteIcon(destinationId)
       .then((url) => (icons[key] = url))
       .catch(() => undefined);
   }

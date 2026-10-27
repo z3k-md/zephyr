@@ -5,10 +5,8 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_opener::OpenerExt;
 
-use crate::ai::{self, AiEvent, AiSettings};
 use crate::apps::{self, Catalog};
 use crate::clipboard;
-use crate::destination::Destination;
 use crate::files;
 use crate::notes;
 use crate::query::{self, Decision, DispatchOutcome};
@@ -48,41 +46,21 @@ pub fn get_snapshot(state: State<'_, AppState>) -> Result<Persisted, String> {
 pub async fn suggest(
     state: State<'_, AppState>,
     query: String,
-    destination_id: String,
     include_remote: bool,
 ) -> Result<SuggestResponse, String> {
     let snapshot = state.snapshot()?;
     let installed = apps::index().snapshot();
     let catalog = catalog(&installed, &snapshot);
-    let mut response = suggest::gather(
-        &query,
-        &destination_id,
-        &snapshot.destinations,
-        &snapshot.history,
-        catalog,
-        include_remote,
-    )
-    .await;
+    let mut response = suggest::gather(&query, &snapshot.history, catalog, include_remote).await;
     crate::running::annotate(&mut response, &installed, &query);
     Ok(response)
 }
 
-/// Connects to the destination's suggestion service when the bar opens, so the first
-/// keystroke's suggestions aren't slow.
+/// Connects to Google's suggestion service when the bar opens, so the first keystroke's
+/// suggestions aren't slow.
 #[tauri::command]
-pub async fn warm_suggestions(
-    state: State<'_, AppState>,
-    destination_id: String,
-) -> Result<(), String> {
-    let destination = state
-        .snapshot()?
-        .destinations
-        .into_iter()
-        .find(|destination| destination.id == destination_id);
-    if let Some(destination) = destination {
-        suggest::warm(&destination).await;
-    }
-    Ok(())
+pub async fn warm_suggestions() {
+    suggest::warm().await;
 }
 
 fn catalog<'a>(installed: &'a [apps::App], snapshot: &'a Persisted) -> Catalog<'a> {
@@ -421,16 +399,30 @@ pub fn launch_group(app: AppHandle, id: String) -> Result<(), String> {
     crate::launch_groups::launch(&app, &id)
 }
 
-/// Every installed app as (id, name), for picking a launch group's apps in Settings.
+/// Installed apps matching `text` as the bar ranks them, for Settings' app picker; with no
+/// text, the most launched.
 #[tauri::command]
-pub fn installed_apps() -> Vec<(String, String)> {
-    let mut apps: Vec<(String, String)> = apps::index()
-        .snapshot()
-        .iter()
+pub fn search_apps(
+    state: State<'_, AppState>,
+    text: String,
+    limit: usize,
+) -> Result<Vec<(String, String)>, String> {
+    let snapshot = state.snapshot()?;
+    let installed = apps::index().snapshot();
+    let now = now_secs();
+    let text = text.trim();
+    let found: Vec<&apps::App> = if text.is_empty() {
+        apps::recent(&installed, &snapshot.launches, now, limit)
+    } else {
+        apps::ranked(&installed, &snapshot.launches, text, now, limit)
+            .into_iter()
+            .map(|(app, _)| app)
+            .collect()
+    };
+    Ok(found
+        .into_iter()
         .map(|app| (app.id.clone(), app.name.clone()))
-        .collect();
-    apps.sort_by_key(|(_, name)| name.to_lowercase());
-    apps
+        .collect())
 }
 
 /// Opens first-run setup again (Settings › General › Run setup again).
@@ -468,24 +460,35 @@ pub fn save_onboarding_every_launch(
     publish(&app, snapshot)
 }
 
-/// Picks the one AI the bar offers in Search with and on Tab and ⌘↵.
+/// The last weather fetched for the Today line, if any.
 #[tauri::command]
-pub fn save_ai_choice(
+pub fn weather() -> Option<crate::weather::Forecast> {
+    crate::weather::latest()
+}
+
+/// Cities matching what's typed in Settings' weather field.
+#[tauri::command]
+pub async fn weather_places(text: String) -> Result<Vec<crate::weather::Place>, String> {
+    crate::weather::places(&text).await
+}
+
+/// The weather for a city typed in the bar ("weather tokyo").
+#[tauri::command]
+pub async fn weather_at(text: String) -> Result<Option<crate::weather::Forecast>, String> {
+    crate::weather::forecast_at(&text).await
+}
+
+#[tauri::command]
+pub fn save_weather_place(
     app: AppHandle,
     state: State<'_, AppState>,
-    id: String,
+    place: Option<crate::weather::Place>,
 ) -> Result<Persisted, String> {
     let snapshot = state.update(|persisted| {
-        if !persisted
-            .destinations
-            .iter()
-            .any(|destination| destination.id == id)
-        {
-            return Err("That destination no longer exists".into());
-        }
-        persisted.ai_choice = id;
+        persisted.weather_place = place;
         Ok(())
     })?;
+    crate::weather::refresh();
     publish(&app, snapshot)
 }
 
@@ -575,22 +578,14 @@ pub async fn dispatch(
     app: AppHandle,
     state: State<'_, AppState>,
     query: String,
-    destination_id: String,
     interpret: bool,
 ) -> Result<DispatchOutcome, String> {
     let snapshot = state.snapshot()?;
     let installed = apps::index().snapshot();
     let catalog = catalog(&installed, &snapshot);
-    let decision = query::decide(
-        &query,
-        &destination_id,
-        &destination_id,
-        interpret,
-        &snapshot.destinations,
-        catalog,
-    );
-    // Text that would have launched an app but went to the web by an explicit key was meant
-    // for the web; remember it so plain Enter stops launching the app for it.
+    let decision = query::decide(&query, interpret, catalog);
+    // Text that would have launched an app but went to the web from its row was meant for
+    // the web; remember it so plain Enter stops launching the app for it.
     let typed = query::parse_input(&query).query;
     let overrode_app = catalog.would_launch(&typed)
         || (!catalog.overridden(&typed)
@@ -603,49 +598,30 @@ pub async fn dispatch(
             )
             .is_empty());
 
-    match decision {
-        Decision::Open {
-            destination_id,
-            query,
-            url,
-        } => {
-            if crate::template::is_path(&url) {
-                app.opener()
-                    .open_path(&url, None::<&str>)
-                    .map_err(|err| format!("Couldn't open {url}: {err}"))?;
-            } else {
-                app.opener()
-                    .open_url(&url, None::<&str>)
-                    .map_err(|err| format!("Couldn't open it: {err}"))?;
-            }
-            record(&app, &state, "history", |persisted| {
-                persisted.record(&query, &destination_id, now_secs());
-                if overrode_app && destination_id != "url" {
-                    persisted.record_app_override(&typed);
-                }
-            });
-            window::hide_bar(&app);
-            log::info!("opened {destination_id}");
-            Ok(DispatchOutcome::Opened { destination_id })
+    let (text, url, link) = match decision {
+        Decision::Search { query } => {
+            let url = crate::web::search_url(&query);
+            (query, url, false)
         }
-        Decision::Launch { app_id } => launch(&app, &state, &app_id),
-        Decision::OpenSetting { setting_id } => open_setting_page(&app, &setting_id),
-        Decision::OpenFile { path } => open_file_path(&app, &state, &path),
-        Decision::Ask {
-            destination_id,
-            query,
-        } => {
-            record(&app, &state, "history", |persisted| {
-                persisted.record(&query, &destination_id, now_secs())
-            });
-            Ok(DispatchOutcome::Ask { query })
+        Decision::Link { url } => (url.clone(), url, true),
+        Decision::Launch { app_id } => return launch(&app, &state, &app_id),
+        Decision::OpenSetting { setting_id } => return open_setting_page(&app, &setting_id),
+        Decision::OpenFile { path } => return open_file_path(&app, &state, &path),
+        Decision::Empty => return Ok(DispatchOutcome::Empty),
+        Decision::Rejected { message } => return Err(message),
+    };
+    app.opener()
+        .open_url(&url, None::<&str>)
+        .map_err(|err| format!("Couldn't open it: {err}"))?;
+    record(&app, &state, "history", |persisted| {
+        persisted.record(&text, link, now_secs());
+        if overrode_app && !link {
+            persisted.record_app_override(&typed);
         }
-        Decision::Arm { destination_id } => Ok(DispatchOutcome::Armed { destination_id }),
-        Decision::Palette => Ok(DispatchOutcome::Palette),
-        Decision::UnknownBang { trigger } => Ok(DispatchOutcome::UnknownBang { trigger }),
-        Decision::Empty => Ok(DispatchOutcome::Empty),
-        Decision::Rejected { message } => Err(message),
-    }
+    });
+    window::hide_bar(&app);
+    log::info!("opened a {}", if link { "link" } else { "search" });
+    Ok(DispatchOutcome::Opened)
 }
 
 #[tauri::command]
@@ -654,7 +630,6 @@ pub fn save_settings(
     state: State<'_, AppState>,
     summon_shortcut: String,
     launch_at_startup: bool,
-    default_destination_id: String,
 ) -> Result<Persisted, String> {
     let shortcut = shortcut::canonical_shortcut(&summon_shortcut)?;
     let previous = state.snapshot()?;
@@ -686,11 +661,8 @@ pub fn save_settings(
     }
 
     match state.update(|persisted| {
-        persisted.set_general(
-            shortcut.clone(),
-            launch_at_startup,
-            default_destination_id.clone(),
-        )
+        persisted.set_general(shortcut.clone(), launch_at_startup);
+        Ok(())
     }) {
         Ok(snapshot) => publish(&app, snapshot),
         Err(err) => {
@@ -713,46 +685,6 @@ pub fn save_instant_startup(
     apply_autostart(&app, current.launch_at_startup, enabled)?;
     let snapshot = state.update(|persisted| {
         persisted.instant_startup = enabled;
-        Ok(())
-    })?;
-    publish(&app, snapshot)
-}
-
-#[tauri::command]
-pub fn save_destination(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    destination: Destination,
-) -> Result<Persisted, String> {
-    let snapshot = state.update(|persisted| persisted.upsert(destination))?;
-    publish(&app, snapshot)
-}
-
-#[tauri::command]
-pub fn remove_destination(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    id: String,
-) -> Result<Persisted, String> {
-    let snapshot = state.update(|persisted| persisted.remove(&id))?;
-    publish(&app, snapshot)
-}
-
-#[tauri::command]
-pub fn move_destination(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    id: String,
-    delta: i32,
-) -> Result<Persisted, String> {
-    let snapshot = state.update(|persisted| persisted.move_destination(&id, delta))?;
-    publish(&app, snapshot)
-}
-
-#[tauri::command]
-pub fn clear_history(app: AppHandle, state: State<'_, AppState>) -> Result<Persisted, String> {
-    let snapshot = state.update(|persisted| {
-        persisted.clear_history();
         Ok(())
     })?;
     publish(&app, snapshot)
@@ -863,153 +795,6 @@ fn autolaunch(app: &AppHandle, enabled: bool) -> Result<(), String> {
             .map_err(|err| format!("Couldn't turn off startup: {err}"))?;
     }
     Ok(())
-}
-
-/// Streams an answer into the bar. Resolves when the answer ends; a newer ask or hiding the
-/// bar stops it early.
-#[tauri::command]
-pub async fn ai_ask(
-    state: State<'_, AppState>,
-    question: String,
-    history: Option<Vec<ai::ChatTurn>>,
-    on_event: Channel<AiEvent>,
-) -> Result<(), String> {
-    let settings = state.snapshot()?.ai;
-    let history = history.unwrap_or_default();
-    ai::ask(&settings, &history, &question, |event| {
-        let _ = on_event.send(event);
-    })
-    .await;
-    Ok(())
-}
-
-#[tauri::command]
-pub fn ai_cancel() {
-    ai::cancel();
-}
-
-#[tauri::command]
-pub fn save_ai_settings(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    settings: AiSettings,
-) -> Result<Persisted, String> {
-    let snapshot = state.update(|persisted| persisted.set_ai(settings))?;
-    publish(&app, snapshot)
-}
-
-#[tauri::command]
-pub fn ai_presets() -> &'static [ai::Preset] {
-    ai::PRESETS
-}
-
-#[tauri::command]
-pub fn ai_set_key(provider: String, key: Option<String>) -> Result<(), String> {
-    ai::set_key(&provider, key.as_deref())
-}
-
-#[tauri::command]
-pub fn ai_has_key(provider: String) -> bool {
-    ai::has_key(&provider)
-}
-
-#[tauri::command]
-pub async fn ai_models(settings: AiSettings) -> Result<Vec<String>, String> {
-    ai::models_for(&settings).await
-}
-
-#[tauri::command]
-pub async fn ai_detect_local() -> Vec<ai::LocalServer> {
-    ai::detect_local().await
-}
-
-// Sign in with ChatGPT
-
-#[tauri::command]
-pub fn chatgpt_account() -> Option<crate::chatgpt::Account> {
-    crate::chatgpt::account()
-}
-
-/// Signs in through the browser, then makes ChatGPT the AI provider.
-#[tauri::command]
-pub async fn chatgpt_sign_in(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<crate::chatgpt::Account, String> {
-    let opener = app.clone();
-    let account = crate::chatgpt::sign_in(|url| {
-        opener
-            .opener()
-            .open_url(url, None::<&str>)
-            .map_err(|err| format!("Couldn't open the browser: {err}"))
-    })
-    .await?;
-    // Without the plan, ChatGPT can't answer, so the AI stays as it was.
-    if !account.plan {
-        return Ok(account);
-    }
-    let snapshot = state.update(|persisted| {
-        let mut settings = persisted.ai.clone();
-        if settings.provider != ai::CHATGPT {
-            settings.provider = ai::CHATGPT.into();
-            settings.model = String::new();
-        }
-        persisted.set_ai(settings)
-    })?;
-    publish(&app, snapshot)?;
-    Ok(account)
-}
-
-#[tauri::command]
-pub fn chatgpt_cancel_sign_in() {
-    crate::chatgpt::cancel_sign_in();
-}
-
-#[tauri::command]
-pub async fn chatgpt_sign_out() -> Result<(), String> {
-    crate::chatgpt::sign_out().await
-}
-
-/// The link a search would open, for the action panel's Copy link.
-#[tauri::command]
-pub fn resolve_url(
-    state: State<'_, AppState>,
-    query: String,
-    destination_id: String,
-) -> Result<String, String> {
-    let snapshot = state.snapshot()?;
-    let destination = crate::destination::enabled(&snapshot.destinations, &destination_id)
-        .filter(|destination| !destination.is_ai())
-        .ok_or("That destination has no link")?;
-    crate::destination::build_url(&destination.url_template, &query::parse_input(&query).query)
-}
-
-/// Every web destination as JSON, for backup or sharing.
-#[tauri::command]
-pub fn export_destinations(state: State<'_, AppState>) -> Result<String, String> {
-    let snapshot = state.snapshot()?;
-    let web: Vec<&Destination> = snapshot
-        .destinations
-        .iter()
-        .filter(|destination| !destination.is_ai())
-        .collect();
-    serde_json::to_string_pretty(&web).map_err(|err| err.to_string())
-}
-
-#[tauri::command]
-pub fn import_destinations(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    json: String,
-) -> Result<Persisted, String> {
-    let value: serde_json::Value =
-        serde_json::from_str(json.trim()).map_err(|err| format!("That isn't valid JSON: {err}"))?;
-    // Accept a bare list, or an object with a destinations list such as a state file.
-    let list = value.get("destinations").cloned().unwrap_or(value);
-    let incoming: Vec<crate::state::ImportedDestination> = serde_json::from_value(list)
-        .map_err(|err| format!("That JSON isn't a list of destinations: {err}"))?;
-    let snapshot = state.update(|persisted| persisted.import(incoming).map(|_| ()))?;
-    publish(&app, snapshot)
 }
 
 // Clipboard history
@@ -1166,6 +951,22 @@ pub fn close_note_window(app: AppHandle, window: tauri::WebviewWindow) {
     crate::note_windows::close(&app, &window);
 }
 
+/// While a shortcut is being recorded, Zephyr's own shortcuts are off, so pressing one of
+/// them records it instead of opening the bar.
+#[tauri::command]
+pub fn pause_shortcuts(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    paused: bool,
+) -> Result<(), String> {
+    if paused {
+        shortcut::pause(&app);
+        return Ok(());
+    }
+    let snapshot = state.snapshot()?;
+    shortcut::register(&app, &snapshot.summon_shortcut, snapshot.extra_shortcuts())
+}
+
 #[tauri::command]
 pub fn save_notes_shortcut(
     app: AppHandle,
@@ -1203,99 +1004,6 @@ pub fn save_typing_result(
         let _ = publish(&app, snapshot);
     }
     Ok(best)
-}
-
-// Claude jobs
-
-#[tauri::command]
-pub fn claude_jobs() -> Vec<crate::claude::Job> {
-    crate::claude::jobs()
-}
-
-#[tauri::command]
-pub fn claude_approvals() -> Vec<crate::claude::hook::Approval> {
-    crate::claude::hook::approvals()
-}
-
-/// `!claude [alias] task`: starts a job in the aliased project, or the last one used.
-#[tauri::command]
-pub fn claude_submit(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    input: String,
-    project_id: Option<String>,
-) -> Result<String, String> {
-    let config = state.snapshot()?.claude;
-    let (routed, task) = crate::claude::route(&config, &input);
-    let project = match project_id {
-        Some(id) => config.projects.iter().find(|project| project.id == id),
-        None => routed,
-    }
-    .ok_or("Add a project in Settings > Claude first")?;
-    let task = if task.is_empty() { input.trim() } else { task };
-    let id = crate::claude::submit(&app, &project.id, task)?;
-    window::dismiss_bar(&app);
-    Ok(id)
-}
-
-#[tauri::command]
-pub fn claude_follow_up(app: AppHandle, job_id: String, prompt: String) -> Result<(), String> {
-    crate::claude::follow_up(&app, &job_id, &prompt)?;
-    window::dismiss_bar(&app);
-    Ok(())
-}
-
-#[tauri::command]
-pub fn claude_cancel(app: AppHandle, job_id: String) -> Result<(), String> {
-    crate::claude::cancel(&app, &job_id)
-}
-
-#[tauri::command]
-pub fn claude_remove(app: AppHandle, job_id: String) -> Result<(), String> {
-    crate::claude::remove(&app, &job_id)
-}
-
-#[tauri::command]
-pub fn claude_open_terminal(app: AppHandle, job_id: String) -> Result<(), String> {
-    crate::claude::open_in_terminal(&app, &job_id)
-}
-
-/// `decision`: "allow", "always" or "deny" (with an optional reason).
-#[tauri::command]
-pub fn claude_answer(
-    app: AppHandle,
-    approval_id: String,
-    decision: String,
-    reason: Option<String>,
-) -> Result<(), String> {
-    use crate::claude::hook::Decision;
-    let decision = match decision.as_str() {
-        "allow" => Decision::Allow,
-        "always" => Decision::AllowAlways,
-        "deny" => Decision::Deny(reason.unwrap_or_default().trim().to_string()),
-        _ => return Err("Unknown answer".into()),
-    };
-    crate::claude::hook::answer(&app, &approval_id, decision)
-}
-
-#[tauri::command]
-pub async fn claude_status(
-    state: State<'_, AppState>,
-) -> Result<crate::claude::binary::CliStatus, String> {
-    let configured = state.snapshot()?.claude.binary;
-    tauri::async_runtime::spawn_blocking(move || crate::claude::binary::status(&configured))
-        .await
-        .map_err(|err| err.to_string())
-}
-
-#[tauri::command]
-pub fn save_claude_settings(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    settings: crate::claude::ClaudeSettings,
-) -> Result<Persisted, String> {
-    let snapshot = state.update(|persisted| persisted.set_claude(settings))?;
-    publish(&app, snapshot)
 }
 
 #[tauri::command]
@@ -1349,7 +1057,7 @@ pub fn open_url(app: AppHandle, url: String) -> Result<(), String> {
         window::hide_bar(&app);
         return Ok(());
     }
-    let port = crate::claude::hook::port();
+    let port = crate::handoff::port();
     let target = if port > 0 && found.is_none() {
         format!(
             "http://127.0.0.1:{port}/zephyr/open?u={}",
@@ -1363,28 +1071,6 @@ pub fn open_url(app: AppHandle, url: String) -> Result<(), String> {
         .map_err(|err| err.to_string())?;
     window::hide_bar(&app);
     Ok(())
-}
-
-/// The browser profiles with bookmarks, for Settings > Bookmarks.
-#[tauri::command]
-pub async fn bookmark_sources() -> Vec<crate::bookmarks::Source> {
-    tauri::async_runtime::spawn_blocking(crate::bookmarks::sources)
-        .await
-        .unwrap_or_default()
-}
-
-#[tauri::command]
-pub fn save_bookmark_sources(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    disabled: Vec<String>,
-) -> Result<Persisted, String> {
-    crate::bookmarks::configure(&disabled);
-    let snapshot = state.update(|persisted| {
-        persisted.bookmarks_disabled = disabled;
-        Ok(())
-    })?;
-    publish(&app, snapshot)
 }
 
 /// A site's icon by address (a bookmark), as a `data:` URL.
@@ -1445,34 +1131,6 @@ pub async fn now_playing_focus(app: AppHandle) -> Result<bool, String> {
         crate::window::hide_bar(&app);
     }
     Ok(focused)
-}
-
-#[tauri::command]
-pub fn save_steam_games(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    enabled: bool,
-) -> Result<Persisted, String> {
-    let snapshot = state.update(|persisted| {
-        persisted.steam_games = enabled;
-        Ok(())
-    })?;
-    crate::steam::configure(enabled);
-    apps::AppIndex::rescan(apps::index());
-    publish(&app, snapshot)
-}
-
-#[tauri::command]
-pub fn save_show_now_playing(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    show: bool,
-) -> Result<Persisted, String> {
-    let snapshot = state.update(|persisted| {
-        persisted.show_now_playing = show;
-        Ok(())
-    })?;
-    publish(&app, snapshot)
 }
 
 /// Runs a command typed in the bar after `>`; output streams through `on_event`.
@@ -1540,28 +1198,6 @@ pub fn save_shell_program(
     publish(&app, snapshot)
 }
 
-#[tauri::command]
-pub fn save_shell_terminal(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    terminal: String,
-) -> Result<Persisted, String> {
-    let snapshot = state.update(|persisted| persisted.shell.set_terminal(&terminal))?;
-    publish(&app, snapshot)
-}
-
-#[tauri::command]
-pub fn clear_shell_history(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<Persisted, String> {
-    let snapshot = state.update(|persisted| {
-        persisted.shell.history.clear();
-        Ok(())
-    })?;
-    publish(&app, snapshot)
-}
-
 /// One entry for the running bug capture's log; does nothing when not recording.
 #[tauri::command]
 pub fn capture_event(kind: String, data: serde_json::Value) {
@@ -1573,7 +1209,25 @@ pub fn capture_recording() -> bool {
     crate::capture::recording()
 }
 
-/// Turns the bug capture shortcuts on or off; turning them off ends a running recording.
+/// Ctrl+R in a Zephyr window: starts or stops a bug recording, when captures are on.
+#[tauri::command]
+pub fn capture_toggle(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    if state.snapshot()?.bug_capture || crate::capture::recording() {
+        crate::capture::toggle(&app);
+    }
+    Ok(())
+}
+
+/// Ctrl+Shift+S in a Zephyr window: a bug snapshot, when captures are on.
+#[tauri::command]
+pub fn capture_snapshot(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    if state.snapshot()?.bug_capture {
+        crate::capture::snapshot(&app);
+    }
+    Ok(())
+}
+
+/// Turns bug captures on or off; turning them off ends a running recording.
 #[tauri::command]
 pub fn save_bug_capture(
     app: AppHandle,
@@ -1587,7 +1241,6 @@ pub fn save_bug_capture(
     if !enabled && crate::capture::recording() {
         crate::capture::toggle(&app);
     }
-    shortcut::register(&app, &snapshot.summon_shortcut, snapshot.extra_shortcuts())?;
     publish(&app, snapshot)
 }
 
@@ -1630,27 +1283,6 @@ pub fn bar_move_end(app: AppHandle) {
     let _ = app;
 }
 
-/// A web destination's site icon as a `data:` URL, or `None` to keep its letter tile.
-#[tauri::command]
-pub async fn site_icon(
-    state: State<'_, AppState>,
-    destination_id: String,
-) -> Result<Option<String>, String> {
-    let template = state
-        .snapshot()?
-        .destinations
-        .into_iter()
-        .find(|destination| {
-            destination.id == destination_id
-                && destination.kind == crate::destination::DestinationKind::Web
-        })
-        .map(|destination| destination.url_template);
-    Ok(match template {
-        Some(template) => crate::icons::site_icon(&template).await,
-        None => None,
-    })
-}
-
 /// An app's icon as a PNG `data:` URL at `size` pixels, or `None` to keep the generic glyph.
 #[tauri::command]
 pub async fn app_icon(app_id: String, size: u32) -> Option<String> {
@@ -1677,8 +1309,8 @@ pub async fn pick_folder(app: AppHandle) -> Result<Option<String>, String> {
         .map(|path| path.to_string_lossy().into_owned()))
 }
 
-/// Remembers the view the bar should come back to (`claude`, `ai`, `notes`, …; empty for the
-/// search bar), so it survives hiding and restarts.
+/// Remembers the view the bar should come back to (`notes`, `clipboard`, …; empty for
+/// the search bar), so it survives hiding and restarts.
 #[tauri::command]
 pub fn set_active_mode(state: State<'_, AppState>, mode: String) -> Result<(), String> {
     state.update(|persisted| {
@@ -1693,13 +1325,9 @@ pub fn save_open_behavior(
     app: AppHandle,
     state: State<'_, AppState>,
     return_to_mode: bool,
-    route_cmd: String,
-    route_alt: String,
 ) -> Result<Persisted, String> {
     let snapshot = state.update(|persisted| {
         persisted.return_to_mode = return_to_mode;
-        persisted.route_cmd = route_cmd.trim().to_string();
-        persisted.route_alt = route_alt.trim().to_string();
         Ok(())
     })?;
     publish(&app, snapshot)
@@ -1768,8 +1396,8 @@ pub async fn sync_sign_out() -> Result<(), String> {
     crate::sync::sign_out().await
 }
 
-/// Saves a hotkey and alias for one command, app, destination or bookmark (both empty removes
-/// it), then registers the hotkeys again.
+/// Saves a hotkey and alias for one command, app, bookmark, launch group or settings page
+/// (both empty removes it), then registers the hotkeys again.
 #[tauri::command]
 pub fn save_binding(
     app: AppHandle,
@@ -1782,17 +1410,10 @@ pub fn save_binding(
     } else {
         ""
     };
-    let (recording, snapshotting) = if current.bug_capture {
-        (crate::capture::SHORTCUT, crate::capture::SNAPSHOT_SHORTCUT)
-    } else {
-        ("", "")
-    };
     let taken = [
         (current.summon_shortcut.as_str(), "the bar"),
         (clipboard, "clipboard history"),
         (current.notes_shortcut.as_str(), "notes"),
-        (recording, "a bug recording"),
-        (snapshotting, "a bug snapshot"),
     ];
     let updated = crate::bindings::upsert(&current.bindings, binding, &taken)?;
     let snapshot = state.update(|persisted| {
@@ -1844,7 +1465,7 @@ pub fn take_pending_binding() -> Option<PendingBinding> {
 }
 
 /// Runs what a binding's hotkey points at: a mode or scoped search opens the bar there, an
-/// app or bookmark opens without the bar, and a destination opens the bar armed with it.
+/// app, bookmark, launch group or settings page opens without the bar.
 pub fn run_binding(app: &AppHandle, target: &str) {
     let (kind, value) = target.split_once(':').unwrap_or((target, ""));
     let result = match (kind, value) {
@@ -1867,15 +1488,6 @@ pub fn run_binding(app: &AppHandle, target: &str) {
         ("bookmark", url) => open_url(app.clone(), url.to_string()),
         ("group", id) => crate::launch_groups::launch(app, id),
         ("setting", id) => open_setting_page(app, id).map(|_| ()),
-        ("dest", id) => {
-            window::show_bar(app);
-            app.emit_to(
-                "main",
-                "bar-input",
-                serde_json::json!({ "query": "", "destination": id, "run": false }),
-            )
-            .map_err(|err| err.to_string())
-        }
         _ => Err(format!("Nothing to run for {target}")),
     };
     if let Err(err) = result {

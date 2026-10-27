@@ -1,6 +1,6 @@
 <script setup lang="ts">
   import { computed } from 'vue';
-  import { iconFor, siteIconFor, siteIconForUrl } from './appIcons';
+  import { iconFor, siteIconForUrl } from './appIcons';
   import { GLYPHS } from './glyphs';
   // The app's own icon, for rows that open its Settings window.
   import zephyrIcon from '../../src-tauri/icons/64x64.png';
@@ -10,30 +10,25 @@
     size: 20,
   });
 
-  // dest:ai has no site to draw from, so it gets the sparkle.
   const glyph = computed(() => {
     if (props.icon.startsWith('glyph:')) return GLYPHS[props.icon.slice(6)] ?? null;
-    if (props.icon === 'dest:ai') return GLYPHS.sparkle;
     // A Steam game whose art isn't in Steam's cache (or hasn't loaded yet).
     if (props.icon.startsWith('app:steam:')) return GLYPHS.gamepad;
     return null;
   });
 
-  // An installed app's own icon; the monogram stands in until it loads or if it has none.
-  // A web destination's site icon (Google's G) takes over from its letter tile once fetched.
+  // An installed app's own icon, or a bookmarked site's; the monogram stands in until it
+  // loads or if it has none.
   const image = computed(() => {
     if (props.icon === 'zephyr') return zephyrIcon;
     if (props.icon.startsWith('app:')) return iconFor(props.icon.slice(4), props.size);
     if (props.icon.startsWith('site:')) return siteIconForUrl(props.icon.slice(5));
-    if (props.icon.startsWith('dest:') && props.icon !== 'dest:ai') {
-      return siteIconFor(props.icon.slice(5));
-    }
     return null;
   });
 
   const letter = computed(() => (props.label.match(/[\p{L}\p{N}]/u)?.[0] ?? '·').toUpperCase());
 
-  /** A stable hue per name, so a destination keeps its color. */
+  /** A stable hue per name, so a row keeps its color. */
   const hue = computed(() => {
     let hash = 0;
     for (const char of props.label) hash = (hash * 31 + char.charCodeAt(0)) | 0;

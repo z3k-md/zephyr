@@ -1,34 +1,25 @@
 <script setup lang="ts">
-  import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue';
+  import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import {
-    chatgptAccount,
-    chatgptSignIn,
     errorMessage,
     finishOnboarding,
     getSnapshot,
-    openSettings,
     pageReady,
-    saveAiChoice,
+    pauseShortcuts,
     saveSettings,
     saveTheme,
   } from '../api';
-  import { askAiName, chosenAi, isAiLike } from '../aiChoice';
   import { GLYPHS } from '../bar/glyphs';
   import { THEMES } from '../themes';
-  import InstantStartup from '../settings/InstantStartup.vue';
-  import { captureShortcut, formatShortcut, isMac, isModifierKey, SHORTCUT_HELP } from '../keys';
-  import { isSnapshot, type ChatgptAccount, type Snapshot } from '../types';
+  import BootChoice from '../settings/BootChoice.vue';
+  import Keys from '../components/Keys.vue';
+  import { captureShortcut, heldModifiers, isModifierKey, SHORTCUT_HELP } from '../keys';
+  import { isSnapshot, type Snapshot } from '../types';
 
-  // First-run setup: five quick choices, each already set to a good default, so any step
+  // First-run setup: three quick choices, each already set to a good default, so any step
   // can be skipped. Finishing or skipping marks it done for good.
-  const STEPS = [
-    { label: 'Shortcut', icon: 'keyboard' },
-    { label: 'Search', icon: 'search' },
-    { label: 'AI', icon: 'sparkle' },
-    { label: 'Theme', icon: 'palette' },
-    { label: 'Done', icon: 'check' },
-  ] as const;
+  const STEPS = ['Shortcut', 'Theme', 'Startup'] as const;
   const last = STEPS.length - 1;
   const step = ref(0);
   /** Which way the last move went, for the slide. */
@@ -37,24 +28,17 @@
   const error = ref<string | null>(null);
   const busy = ref(false);
   const listening = ref(false);
-  const chatgpt = ref<ChatgptAccount | null>(null);
-  const signingIn = ref(false);
+  /** The modifiers held while recording, shown as they're pressed. */
+  const held = ref('');
+  // Zephyr's own shortcuts are off while one is recorded, so the current one records too.
+  watch(listening, (recording) => {
+    held.value = '';
+    void pauseShortcuts(recording).catch(() => undefined);
+  });
   /** Esc once asks; Esc again (or the button) skips. */
   const confirmSkip = ref(false);
   const nextButton = ref<HTMLButtonElement | null>(null);
   let unlisten: UnlistenFn | null = null;
-
-  const searchOptions = computed(() =>
-    (snapshot.value?.destinations ?? []).filter(
-      (destination) => !destination.disabled && !isAiLike(destination)
-    )
-  );
-  const aiOptions = computed(() =>
-    (snapshot.value?.destinations ?? []).filter(
-      (destination) => !destination.disabled && isAiLike(destination)
-    )
-  );
-  const aiId = computed(() => chosenAi(snapshot.value)?.id ?? '');
 
   onMounted(async () => {
     try {
@@ -62,18 +46,23 @@
     } catch (err) {
       error.value = errorMessage(err);
     }
-    chatgpt.value = await chatgptAccount().catch(() => null);
     pageReady();
     unlisten = await listen<unknown>('state-changed', (event) => {
       if (isSnapshot(event.payload)) snapshot.value = event.payload;
     });
     window.addEventListener('keydown', onKey, true);
+    window.addEventListener('keyup', onKeyUp, true);
   });
 
   onUnmounted(() => {
     unlisten?.();
     window.removeEventListener('keydown', onKey, true);
+    window.removeEventListener('keyup', onKeyUp, true);
   });
+
+  function onKeyUp(event: KeyboardEvent) {
+    if (listening.value) held.value = heldModifiers(event);
+  }
 
   async function run(task: () => Promise<Snapshot | void>) {
     busy.value = true;
@@ -88,8 +77,8 @@
     }
   }
 
-  function save(shortcut: string, startup: boolean, destination: string) {
-    return run(() => saveSettings(shortcut, startup, destination));
+  function save(shortcut: string, startup: boolean) {
+    return run(() => saveSettings(shortcut, startup));
   }
 
   function go(to: number) {
@@ -111,6 +100,12 @@
     await run(() => finishOnboarding());
   }
 
+  /** This window takes the theme at once, so the choice shows while it's being made. */
+  function chooseTheme(id: string) {
+    document.documentElement.dataset.theme = id;
+    void run(() => saveTheme(id));
+  }
+
   function recordShortcut(event: KeyboardEvent) {
     const current = snapshot.value;
     if (!current) return;
@@ -125,7 +120,7 @@
       return;
     }
     listening.value = false;
-    void save(shortcut, current.launchAtStartup, current.defaultDestinationId);
+    void save(shortcut, current.launchAtStartup);
   }
 
   // Enter goes on, ⇧Enter or ⌘[ goes back, Esc asks to skip. A shortcut being recorded
@@ -135,6 +130,7 @@
     if (listening.value) {
       event.preventDefault();
       event.stopPropagation();
+      held.value = heldModifiers(event);
       recordShortcut(event);
       return;
     }
@@ -157,19 +153,6 @@
       next();
     }
   }
-
-  async function signIn() {
-    signingIn.value = true;
-    error.value = null;
-    try {
-      chatgpt.value = await chatgptSignIn();
-      snapshot.value = await getSnapshot();
-    } catch (err) {
-      error.value = errorMessage(err);
-    } finally {
-      signingIn.value = false;
-    }
-  }
 </script>
 
 <template>
@@ -178,8 +161,8 @@
     <nav class="train" aria-label="Setup steps">
       <ol>
         <li
-          v-for="(item, index) in STEPS"
-          :key="item.label"
+          v-for="(label, index) in STEPS"
+          :key="label"
           :class="{ current: index === step, done: index < step }"
         >
           <button
@@ -192,7 +175,7 @@
               <svg v-if="index < step" viewBox="0 0 24 24" v-html="GLYPHS.check" />
               <template v-else>{{ index + 1 }}</template>
             </span>
-            {{ item.label }}
+            {{ label }}
           </button>
         </li>
       </ol>
@@ -201,91 +184,27 @@
     <div class="onboarding-body">
       <Transition :name="`slide-${direction}`" mode="out-in">
         <section :key="step" class="onboarding-step">
-          <span class="onboarding-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" v-html="GLYPHS[STEPS[step].icon]" />
-          </span>
-
           <template v-if="step === 0">
-            <h1>Welcome to Zephyr</h1>
-            <p class="lede">One shortcut opens the bar from anywhere.</p>
+            <h1>Choose a hotkey</h1>
             <button
               type="button"
               class="recorder big"
               :class="{ listening }"
               :disabled="busy"
               @click="listening = true"
+              @blur="listening = false"
             >
-              {{ listening ? 'Press a shortcut…' : formatShortcut(snapshot.summonShortcut) }}
+              <template v-if="listening && held">
+                <Keys :keys="held" />
+                <span class="recorder-more">…</span>
+              </template>
+              <template v-else-if="listening">Press a shortcut…</template>
+              <Keys v-else :keys="snapshot.summonShortcut" />
             </button>
-            <p class="hint-text">Click to change it, or keep this one.</p>
           </template>
 
           <template v-else-if="step === 1">
-            <h1>Where searches go</h1>
-            <p class="lede">Text you type goes here. Tab switches for a single search.</p>
-            <div class="choices" role="radiogroup" aria-label="Search">
-              <button
-                v-for="destination in searchOptions"
-                :key="destination.id"
-                type="button"
-                role="radio"
-                class="choice"
-                :aria-checked="snapshot.defaultDestinationId === destination.id"
-                :class="{ chosen: snapshot.defaultDestinationId === destination.id }"
-                :disabled="busy"
-                @click="save(snapshot.summonShortcut, snapshot.launchAtStartup, destination.id)"
-              >
-                {{ destination.name }}
-              </button>
-            </div>
-          </template>
-
-          <template v-else-if="step === 2">
-            <h1>Your AI</h1>
-            <p class="lede">
-              One AI sits in the bar, on Tab and {{ isMac ? '⌘↵' : 'Ctrl+Enter' }}.
-            </p>
-            <div class="choices" role="radiogroup" aria-label="AI">
-              <button
-                v-for="option in aiOptions"
-                :key="option.id"
-                type="button"
-                role="radio"
-                class="choice"
-                :aria-checked="aiId === option.id"
-                :class="{ chosen: aiId === option.id }"
-                :disabled="busy"
-                @click="run(() => saveAiChoice(option.id))"
-              >
-                {{ option.kind === 'ai' ? `${askAiName(snapshot)} (in Zephyr)` : option.name }}
-              </button>
-            </div>
-            <div v-if="aiId === 'ai'" class="onboarding-ai">
-              <p v-if="chatgpt?.plan" class="hint-text">
-                Answering with your ChatGPT plan ({{ chatgpt.email }}).
-              </p>
-              <template v-else>
-                <button
-                  v-if="!signingIn"
-                  type="button"
-                  class="chatgpt-button"
-                  :disabled="busy"
-                  @click="signIn"
-                >
-                  Continue with ChatGPT
-                </button>
-                <span v-else class="hint-text">Finish signing in in your browser…</span>
-                <p class="hint-text">
-                  Or an API key or local model, in
-                  <a href="#" @click.prevent="openSettings">Settings › AI</a>.
-                </p>
-              </template>
-            </div>
-          </template>
-
-          <template v-else-if="step === 3">
-            <h1>Pick a look</h1>
-            <p class="lede">Every Zephyr window follows it, right away.</p>
+            <h1>Choose a theme</h1>
             <div class="themes compact" role="radiogroup" aria-label="Theme">
               <button
                 v-for="theme in THEMES"
@@ -296,7 +215,7 @@
                 :aria-checked="snapshot.theme === theme.id"
                 :class="{ chosen: snapshot.theme === theme.id }"
                 :disabled="busy"
-                @click="run(() => saveTheme(theme.id))"
+                @click="chooseTheme(theme.id)"
               >
                 <span class="theme-swatch" :style="{ background: theme.tint }" aria-hidden="true">
                   <span class="theme-row" />
@@ -309,27 +228,8 @@
           </template>
 
           <template v-else>
-            <h1>You're set</h1>
-            <p class="lede">
-              Press {{ formatShortcut(snapshot.summonShortcut) }} and type: an app, a search, a
-              question, or "settings".
-            </p>
-            <label class="check">
-              <input
-                type="checkbox"
-                :checked="snapshot.launchAtStartup"
-                :disabled="busy"
-                @change="
-                  save(
-                    snapshot.summonShortcut,
-                    !snapshot.launchAtStartup,
-                    snapshot.defaultDestinationId
-                  )
-                "
-              />
-              Start Zephyr when you sign in
-            </label>
-            <InstantStartup :snapshot="snapshot" @apply="(next) => (snapshot = next)" />
+            <h1>Run at boot</h1>
+            <BootChoice :snapshot="snapshot" @apply="(next) => (snapshot = next)" />
           </template>
 
           <p v-if="error" class="notice">{{ error }}</p>
@@ -339,7 +239,8 @@
 
     <footer class="onboarding-foot">
       <button type="button" class="link-button" :disabled="busy" @click="finish">
-        {{ confirmSkip ? 'Press Esc again to skip setup' : 'Skip setup' }}
+        <template v-if="confirmSkip">Press <Keys keys="esc" small /> again to skip setup</template>
+        <template v-else>Skip setup</template>
       </button>
       <span class="spacer" />
       <button v-if="step > 0" type="button" :disabled="busy" @click="go(step - 1)">Back</button>

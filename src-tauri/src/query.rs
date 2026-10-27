@@ -1,25 +1,24 @@
 use serde::Serialize;
 
 use crate::apps::{self, Catalog};
-use crate::destination::{self, Destination};
-use crate::{files, settings, template};
+use crate::{bookmarks, files, settings};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Parsed {
     pub query: String,
-    pub bang: Option<String>,
-    pub only_bang: bool,
+    /// The bang that narrows the text to one kind of result (`!app`, `!f`, `!set`…), if any.
+    pub scope: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decision {
-    Open {
-        destination_id: String,
+    /// A web search for the text.
+    Search {
         query: String,
-        url: String,
     },
-    Arm {
-        destination_id: String,
+    /// A link typed out, opened as it is.
+    Link {
+        url: String,
     },
     Launch {
         app_id: String,
@@ -29,14 +28,6 @@ pub enum Decision {
     },
     OpenFile {
         path: String,
-    },
-    Ask {
-        destination_id: String,
-        query: String,
-    },
-    Palette,
-    UnknownBang {
-        trigger: String,
     },
     Empty,
     Rejected {
@@ -51,156 +42,89 @@ pub enum Decision {
     tag = "kind"
 )]
 pub enum DispatchOutcome {
-    Opened { destination_id: String },
-    Armed { destination_id: String },
+    Opened,
     Launched { app_id: String },
     SettingOpened { setting_id: String },
     FileOpened { path: String },
-    Ask { query: String },
-    Palette,
-    UnknownBang { trigger: String },
     Empty,
 }
 
-pub fn parse_input(input: &str) -> Parsed {
-    let trimmed = input.trim();
-    if trimmed.is_empty() {
-        return Parsed {
-            query: String::new(),
-            bang: None,
-            only_bang: false,
-        };
-    }
-    if trimmed == "!" {
-        return Parsed {
-            query: String::new(),
-            bang: Some(String::new()),
-            only_bang: true,
-        };
-    }
+/// Bang words that narrow the bar to one kind of result rather than being part of the text.
+pub fn is_scope(word: &str) -> bool {
+    apps::is_scope(word)
+        || settings::is_scope(word)
+        || files::is_scope(word)
+        || crate::notes::is_scope(word)
+        || bookmarks::is_scope(word)
+        || word == "type"
+}
 
-    let mut bangs = Vec::new();
+pub fn parse_input(input: &str) -> Parsed {
+    let mut scopes = Vec::new();
     let mut words = Vec::new();
-    for token in trimmed.split_whitespace() {
+    for token in input.split_whitespace() {
         if let Some(body) = token.strip_prefix('!')
-            && destination::is_trigger(body)
+            && is_scope(&body.to_lowercase())
         {
-            bangs.push(body.to_lowercase());
+            scopes.push(body.to_lowercase());
             continue;
         }
         words.push(token);
     }
-
     Parsed {
         query: words.join(" "),
-        bang: bangs.last().cloned(),
-        only_bang: words.is_empty() && !bangs.is_empty(),
+        scope: scopes.pop(),
     }
 }
 
-pub fn decide(
-    input: &str,
-    armed_id: &str,
-    explicit_id: &str,
-    interpret: bool,
-    destinations: &[Destination],
-    catalog: Catalog<'_>,
-) -> Decision {
-    if !interpret {
-        return decide_explicit(input, explicit_id, destinations);
-    }
-
+/// What Enter does with `input`. `interpret` is off for a picked suggestion or recent
+/// search, whose text goes to the web as it is rather than to an app it happens to name.
+pub fn decide(input: &str, interpret: bool, catalog: Catalog<'_>) -> Decision {
     let parsed = parse_input(input);
-    if parsed.only_bang {
-        let prefix = parsed.bang.unwrap_or_default();
-        if prefix.is_empty() {
-            return Decision::Palette;
-        }
-        if apps::is_scope(&prefix)
-            || settings::is_scope(&prefix)
-            || files::is_scope(&prefix)
-            || crate::notes::is_scope(&prefix)
-            || prefix == "type"
-        {
-            return Decision::Empty;
-        }
-        return match destination::exact_trigger(destinations, &prefix) {
-            // A fixed link (no {query}) has nothing to wait for, so its bang opens it.
-            Some(destination)
-                if !destination.is_ai() && !template::uses_input(&destination.url_template) =>
-            {
-                open_search(destination, "")
-            }
-            Some(destination) => Decision::Arm {
-                destination_id: destination.id.clone(),
-            },
-            None => Decision::Palette,
-        };
-    }
-
-    if let Some(trigger) = parsed.bang.as_deref()
-        && apps::is_scope(trigger)
-    {
-        return match catalog.ranked(&parsed.query, 1).first() {
-            Some((app, _)) => Decision::Launch {
-                app_id: app.id.clone(),
-            },
-            None => Decision::Rejected {
-                message: format!("No app matches {}", parsed.query),
-            },
-        };
-    }
-
-    if let Some(trigger) = parsed.bang.as_deref()
-        && settings::is_scope(trigger)
-    {
-        return match settings::ranked(catalog.settings, &parsed.query, 1).first() {
-            Some(setting) => Decision::OpenSetting {
-                setting_id: setting.id.to_string(),
-            },
-            None => Decision::Rejected {
-                message: format!("No setting matches {}", parsed.query),
-            },
-        };
-    }
-
-    if let Some(trigger) = parsed.bang.as_deref()
-        && files::is_scope(trigger)
-    {
-        return match catalog.files(&parsed.query, 1).into_iter().next() {
-            Some(hit) => Decision::OpenFile { path: hit.path },
-            None => Decision::Rejected {
-                message: format!("No file matches {}", parsed.query),
-            },
-        };
-    }
-
-    // Notes open from the suggestion rows; plain Enter has nothing else to do.
-    if parsed
-        .bang
-        .as_deref()
-        .is_some_and(|bang| crate::notes::is_scope(bang) || bang == "type")
-    {
-        return Decision::Empty;
-    }
-
-    if let Some(trigger) = parsed.bang {
-        return match destination::exact_trigger(destinations, &trigger) {
-            Some(destination) => open_search(destination, &parsed.query),
-            None => Decision::UnknownBang { trigger },
-        };
-    }
-
     if parsed.query.is_empty() {
         return Decision::Empty;
     }
+    if !interpret {
+        return web(&parsed.query);
+    }
+
+    match parsed.scope.as_deref() {
+        Some(scope) if apps::is_scope(scope) => {
+            return match catalog.ranked(&parsed.query, 1).first() {
+                Some((app, _)) => Decision::Launch {
+                    app_id: app.id.clone(),
+                },
+                None => Decision::Rejected {
+                    message: format!("No app matches {}", parsed.query),
+                },
+            };
+        }
+        Some(scope) if settings::is_scope(scope) => {
+            return match settings::ranked(catalog.settings, &parsed.query, 1).first() {
+                Some(setting) => Decision::OpenSetting {
+                    setting_id: setting.id.to_string(),
+                },
+                None => Decision::Rejected {
+                    message: format!("No setting matches {}", parsed.query),
+                },
+            };
+        }
+        Some(scope) if files::is_scope(scope) => {
+            return match catalog.files(&parsed.query, 1).into_iter().next() {
+                Some(hit) => Decision::OpenFile { path: hit.path },
+                None => Decision::Rejected {
+                    message: format!("No file matches {}", parsed.query),
+                },
+            };
+        }
+        // Notes, bookmarks and the typing test open from their rows; plain Enter has
+        // nothing else to do.
+        Some(_) => return Decision::Empty,
+        None => {}
+    }
 
     if looks_like_url(&parsed.query) {
-        return Decision::Open {
-            destination_id: "url".into(),
-            query: ensure_scheme(&parsed.query),
-            url: ensure_scheme(&parsed.query),
-        };
+        return web(&parsed.query);
     }
 
     // A bare "settings" opens the system's settings app (the app's own Settings when there's none).
@@ -228,86 +152,19 @@ pub fn decide(
         };
     }
 
-    match find(destinations, armed_id) {
-        Found::Ready(destination) => open_search(destination, &parsed.query),
-        Found::Disabled(name) => Decision::Rejected {
-            message: format!("{name} is turned off"),
-        },
-        Found::Missing => Decision::Rejected {
-            message: "That destination is missing.".into(),
-        },
-    }
+    web(&parsed.query)
 }
 
-fn decide_explicit(input: &str, explicit_id: &str, destinations: &[Destination]) -> Decision {
-    // A dispatch key chooses the destination. A bang in the text is syntax, not part of the query.
-    let query = parse_input(input).query;
-    if query.is_empty() {
-        return match find(destinations, explicit_id) {
-            Found::Ready(destination) => Decision::Arm {
-                destination_id: destination.id.clone(),
-            },
-            Found::Disabled(name) => Decision::Rejected {
-                message: format!("{name} is turned off"),
-            },
-            Found::Missing => Decision::Empty,
-        };
-    }
-
-    if explicit_id == "url" {
-        let url = ensure_scheme(&query);
-        return Decision::Open {
-            destination_id: "url".into(),
-            query: url.clone(),
-            url,
-        };
-    }
-
-    match find(destinations, explicit_id) {
-        Found::Ready(destination) => open_search(destination, &query),
-        Found::Disabled(name) => Decision::Rejected {
-            message: format!("{name} is turned off"),
-        },
-        Found::Missing => Decision::Rejected {
-            message: "That destination is missing.".into(),
-        },
-    }
-}
-
-fn open_search(destination: &Destination, query: &str) -> Decision {
-    let fixed_link = !destination.is_ai() && !template::uses_input(&destination.url_template);
-    if query.is_empty() && !fixed_link {
-        return Decision::Arm {
-            destination_id: destination.id.clone(),
-        };
-    }
-    if destination.is_ai() {
-        return Decision::Ask {
-            destination_id: destination.id.clone(),
+/// A link opens as typed; anything else is searched.
+fn web(query: &str) -> Decision {
+    if looks_like_url(query) {
+        Decision::Link {
+            url: ensure_scheme(query),
+        }
+    } else {
+        Decision::Search {
             query: query.to_string(),
-        };
-    }
-    match destination::build_url(&destination.url_template, query) {
-        Ok(url) => Decision::Open {
-            destination_id: destination.id.clone(),
-            query: query.to_string(),
-            url,
-        },
-        Err(message) => Decision::Rejected { message },
-    }
-}
-
-enum Found<'a> {
-    Ready(&'a Destination),
-    Disabled(String),
-    Missing,
-}
-
-fn find<'a>(destinations: &'a [Destination], id: &str) -> Found<'a> {
-    match destinations.iter().find(|destination| destination.id == id) {
-        Some(destination) if destination.disabled => Found::Disabled(destination.name.clone()),
-        Some(destination) => Found::Ready(destination),
-        None => Found::Missing,
+        }
     }
 }
 
@@ -352,7 +209,6 @@ fn ensure_scheme(url: &str) -> String {
 mod tests {
     use super::*;
     use crate::apps::{App, Catalog};
-    use crate::destination::builtins;
     use crate::files::FileIndex;
     use crate::settings::{Setting, Target};
 
@@ -400,61 +256,33 @@ mod tests {
         }]
     }
 
+    fn search(query: &str) -> Decision {
+        Decision::Search {
+            query: query.into(),
+        }
+    }
+
     #[test]
     fn an_app_name_launches_and_free_text_still_searches() {
         let apps = excel();
-        let destinations = builtins();
         assert_eq!(
-            decide(
-                "exc",
-                "google",
-                "google",
-                true,
-                &destinations,
-                installed(&apps, &[])
-            ),
+            decide("exc", true, installed(&apps, &[])),
             Decision::Launch {
                 app_id: "excel-id".into()
             }
         );
-        assert!(
-            open(&decide(
-                "excel pivot tables",
-                "google",
-                "google",
-                true,
-                &destinations,
-                installed(&apps, &[])
-            ))
-            .contains("google.com")
+        assert_eq!(
+            decide("excel pivot tables", true, installed(&apps, &[])),
+            search("excel pivot tables")
         );
     }
 
     #[test]
-    fn explicit_keys_beat_an_app_match() {
+    fn a_picked_suggestion_searches_even_when_it_names_an_app() {
         let apps = excel();
-        let destinations = builtins();
-        assert!(
-            open(&decide(
-                "excel !g",
-                "google",
-                "google",
-                true,
-                &destinations,
-                installed(&apps, &[])
-            ))
-            .contains("google.com")
-        );
-        assert!(
-            open(&decide(
-                "excel",
-                "google",
-                "wikipedia",
-                false,
-                &destinations,
-                installed(&apps, &[])
-            ))
-            .contains("wikipedia.org")
+        assert_eq!(
+            decide("excel", false, installed(&apps, &[])),
+            search("excel")
         );
     }
 
@@ -463,30 +291,16 @@ mod tests {
         static OVERRIDES: std::sync::LazyLock<Vec<String>> =
             std::sync::LazyLock::new(|| vec!["excel".to_string()]);
         let apps = excel();
-        assert!(
-            open(&decide(
-                "excel",
-                "google",
-                "google",
-                true,
-                &builtins(),
-                installed(&apps, &OVERRIDES)
-            ))
-            .contains("google.com")
+        assert_eq!(
+            decide("excel", true, installed(&apps, &OVERRIDES)),
+            search("excel")
         );
     }
 
     #[test]
     fn a_settings_word_opens_the_page_unless_sent_to_the_web_before() {
         let decide_with = |text: &str, apps: &[App], overrides: &[String]| {
-            decide(
-                text,
-                "google",
-                "google",
-                true,
-                &builtins(),
-                installed(apps, overrides),
-            )
+            decide(text, true, installed(apps, overrides))
         };
         let page = Decision::OpenSetting {
             setting_id: "win.display".into(),
@@ -496,17 +310,16 @@ mod tests {
         assert_eq!(decide_with("displays prefs", &[], &[]), page);
         // Picking the web row once keeps this text on the web.
         let sent = ["display settings".to_string()];
-        assert!(open(&decide_with("display settings", &[], &sent)).contains("google.com"));
-        assert!(
-            open(&decide_with(
-                "iphone display settings not working",
-                &[],
-                &[]
-            ))
-            .contains("google.com")
+        assert_eq!(
+            decide_with("display settings", &[], &sent),
+            search("display settings")
+        );
+        assert_eq!(
+            decide_with("iphone display settings not working", &[], &[]),
+            search("iphone display settings not working")
         );
         // An exact page name without a settings word still searches.
-        assert!(open(&decide_with("display", &[], &[])).contains("google.com"));
+        assert_eq!(decide_with("display", &[], &[]), search("display"));
         // An app named exactly the text wins.
         let named = [App {
             id: "ds".into(),
@@ -531,24 +344,14 @@ mod tests {
             }
             .into(),
         }];
-        let decide_with = |apps: &[App]| {
-            decide(
-                "settings",
-                "google",
-                "google",
-                true,
-                &builtins(),
-                installed(apps, &[]),
-            )
-        };
         assert_eq!(
-            decide_with(&system),
+            decide("settings", true, installed(&system, &[])),
             Decision::Launch {
                 app_id: "system-settings".into()
             }
         );
         assert_eq!(
-            decide_with(&[]),
+            decide("settings", true, none()),
             Decision::OpenSetting {
                 setting_id: "zephyr.settings".into()
             }
@@ -558,51 +361,25 @@ mod tests {
     #[test]
     fn the_app_scope_launches_the_best_match_or_says_none() {
         let apps = excel();
-        let destinations = builtins();
+        let catalog = installed(&apps, &[]);
         assert_eq!(
-            decide(
-                "!app xl",
-                "google",
-                "google",
-                true,
-                &destinations,
-                installed(&apps, &[])
-            ),
+            decide("!app xl", true, catalog),
             Decision::Rejected {
                 message: "No app matches xl".into()
             }
         );
         assert_eq!(
-            decide(
-                "cel !app",
-                "google",
-                "google",
-                true,
-                &destinations,
-                installed(&apps, &[])
-            ),
+            decide("cel !app", true, catalog),
             Decision::Launch {
                 app_id: "excel-id".into()
             }
         );
-        assert_eq!(
-            decide(
-                "!app",
-                "google",
-                "google",
-                true,
-                &destinations,
-                installed(&apps, &[])
-            ),
-            Decision::Empty
-        );
+        assert_eq!(decide("!app", true, catalog), Decision::Empty);
     }
 
     #[test]
     fn the_settings_scope_opens_the_best_match_and_free_text_never_does() {
-        let destinations = builtins();
-        let decide_text =
-            |text: &str| decide(text, "google", "google", true, &destinations, none());
+        let decide_text = |text: &str| decide(text, true, none());
         assert_eq!(
             decide_text("!set dark mode"),
             Decision::OpenSetting {
@@ -623,8 +400,8 @@ mod tests {
         );
         assert_eq!(decide_text("!set"), Decision::Empty);
         // Unscoped, Enter keeps searching even when the text names a setting exactly.
-        assert!(open(&decide_text("display")).contains("google.com"));
-        assert!(open(&decide_text("dark mode")).contains("google.com"));
+        assert_eq!(decide_text("display"), search("display"));
+        assert_eq!(decide_text("dark mode"), search("dark mode"));
     }
 
     #[test]
@@ -641,9 +418,7 @@ mod tests {
             files: &files,
             ..none()
         };
-        let destinations = builtins();
-        let decide_text =
-            |text: &str| decide(text, "google", "google", true, &destinations, catalog);
+        let decide_text = |text: &str| decide(text, true, catalog);
         let expected = root
             .join("Documents")
             .join("budget.xlsx")
@@ -666,203 +441,53 @@ mod tests {
             }
         );
         assert_eq!(decide_text("!f"), Decision::Empty);
-        assert!(open(&decide_text("budget")).contains("google.com"));
-    }
-
-    fn open(decision: &Decision) -> &str {
-        match decision {
-            Decision::Open { url, .. } => url,
-            other => panic!("expected open, got {other:?}"),
-        }
+        assert_eq!(decide_text("budget"), search("budget"));
     }
 
     #[test]
-    fn enter_uses_the_armed_destination() {
-        let decision = decide("crispr", "pubmed", "pubmed", true, &builtins(), none());
-        assert!(open(&decision).contains("pubmed.ncbi.nlm.nih.gov"));
-        assert!(open(&decision).contains("crispr"));
-    }
-
-    #[test]
-    fn bangs_work_at_either_end_and_the_last_one_wins() {
-        let destinations = builtins();
-        assert!(
-            open(&decide(
-                "!pm crispr",
-                "google",
-                "google",
-                true,
-                &destinations,
-                none()
-            ))
-            .contains("pubmed")
-        );
-        assert!(
-            open(&decide(
-                "crispr !wiki",
-                "google",
-                "google",
-                true,
-                &destinations,
-                none()
-            ))
-            .contains("wikipedia.org")
-        );
-        assert!(
-            open(&decide(
-                "crispr !wiki !yt",
-                "google",
-                "google",
-                true,
-                &destinations,
-                none()
-            ))
-            .contains("youtube.com")
-        );
-    }
-
-    #[test]
-    fn an_exact_bang_with_no_query_arms_that_destination() {
-        let decision = decide("!wiki", "google", "google", true, &builtins(), none());
+    fn only_scope_words_are_bangs() {
         assert_eq!(
-            decision,
-            Decision::Arm {
-                destination_id: "wikipedia".into()
+            parse_input("crispr !pm"),
+            Parsed {
+                query: "crispr !pm".into(),
+                scope: None,
             }
         );
-    }
-
-    #[test]
-    fn a_partial_bang_opens_the_palette() {
-        assert_eq!(
-            decide("!you", "google", "google", true, &builtins(), none()),
-            Decision::Palette
-        );
-        assert_eq!(
-            decide("!", "google", "google", true, &builtins(), none()),
-            Decision::Palette
-        );
-    }
-
-    #[test]
-    fn unknown_bangs_do_not_fall_through_to_google() {
-        assert_eq!(
-            decide(
-                "crispr !nope",
-                "google",
-                "google",
-                true,
-                &builtins(),
-                none()
-            ),
-            Decision::UnknownBang {
-                trigger: "nope".into()
-            }
-        );
+        assert_eq!(decide("crispr !wiki", true, none()), search("crispr !wiki"));
+        assert_eq!(decide("!", true, none()), search("!"));
     }
 
     #[test]
     fn urls_open_directly() {
-        let destinations = builtins();
-        assert_eq!(
-            open(&decide(
-                "example.com/docs",
-                "google",
-                "google",
-                true,
-                &destinations,
-                none()
-            )),
-            "https://example.com/docs"
-        );
-        assert_eq!(
-            open(&decide(
-                "https://example.com",
-                "google",
-                "google",
-                true,
-                &destinations,
-                none()
-            )),
-            "https://example.com"
-        );
-        assert!(
-            open(&decide(
-                "localhost:1420",
-                "google",
-                "google",
-                true,
-                &destinations,
-                none()
-            ))
-            .starts_with("https://localhost:1420")
-        );
+        let link = |text: &str| match decide(text, true, none()) {
+            Decision::Link { url } => url,
+            other => panic!("expected a link, got {other:?}"),
+        };
+        assert_eq!(link("example.com/docs"), "https://example.com/docs");
+        assert_eq!(link("https://example.com"), "https://example.com");
+        assert!(link("localhost:1420").starts_with("https://localhost:1420"));
     }
 
     #[test]
     fn ordinary_words_and_punctuation_stay_searches() {
-        let destinations = builtins();
-        let decision = decide(
-            "C++ templates",
-            "google",
-            "google",
-            true,
-            &destinations,
-            none(),
+        assert_eq!(
+            decide("C++ templates", true, none()),
+            search("C++ templates")
         );
-        let url = open(&decision);
-        assert!(url.contains("google.com"));
         assert!(!looks_like_url("3.14"));
         assert!(!looks_like_url("hello!world"));
-        let decision = decide(
-            "hello!world",
-            "google",
-            "google",
-            true,
-            &destinations,
-            none(),
-        );
-        let searched = open(&decision);
-        assert!(searched.contains("google.com"));
-        assert!(searched.contains("hello%21world"));
-    }
-
-    #[test]
-    fn a_chosen_suggestion_uses_that_destination() {
-        let decision = decide("crispr", "google", "pubmed", false, &builtins(), none());
-        assert!(open(&decision).contains("pubmed"));
-    }
-
-    #[test]
-    fn a_dispatch_key_strips_a_bang_and_keeps_the_chosen_destination() {
-        let decision = decide(
-            "crispr !wiki",
-            "wikipedia",
-            "pubmed",
-            false,
-            &builtins(),
-            none(),
-        );
-        let url = open(&decision);
-        assert!(url.contains("pubmed"));
-        assert!(url.contains("crispr"));
-        assert!(!url.contains("wiki"));
+        assert_eq!(decide("hello!world", true, none()), search("hello!world"));
     }
 
     #[test]
     fn outcome_json_is_camel_case() {
-        let json = serde_json::to_value(DispatchOutcome::UnknownBang {
-            trigger: "nope".into(),
+        let json = serde_json::to_value(DispatchOutcome::SettingOpened {
+            setting_id: "win.colors".into(),
         })
         .unwrap();
-        assert_eq!(json["kind"], "unknownBang");
-        assert_eq!(json["trigger"], "nope");
-
-        let opened = serde_json::to_value(DispatchOutcome::Opened {
-            destination_id: "google".into(),
-        })
-        .unwrap();
+        assert_eq!(json["kind"], "settingOpened");
+        assert_eq!(json["settingId"], "win.colors");
+        let opened = serde_json::to_value(DispatchOutcome::Opened).unwrap();
         assert_eq!(opened["kind"], "opened");
-        assert_eq!(opened["destinationId"], "google");
     }
 }

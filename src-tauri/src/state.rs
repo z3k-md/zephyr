@@ -1,17 +1,14 @@
-use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
-use crate::ai::AiSettings;
 use crate::apps::{self, LaunchEntry};
 use crate::clipboard::ClipboardSettings;
-use crate::destination::{self, Destination};
+use crate::files;
 use crate::history::{self, HistoryEntry};
 use crate::shortcut::{DEFAULT_SHORTCUT, LEGACY_DEFAULT_SHORTCUT};
-use crate::{files, settings};
 
 /// A field missing from the file falls back to its default instead of discarding every setting.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,8 +21,6 @@ pub struct Persisted {
     /// Windows: start from a logon task right at sign-in instead of the startup list, which
     /// Windows delays. Off unless chosen, since Defender may flag the task.
     pub instant_startup: bool,
-    pub default_destination_id: String,
-    pub destinations: Vec<Destination>,
     pub history: Vec<HistoryEntry>,
     pub launches: Vec<LaunchEntry>,
     /// Lowercased texts the user sent to the web even though they matched an app.
@@ -38,8 +33,6 @@ pub struct Persisted {
     pub file_opens: Vec<LaunchEntry>,
     /// Settings pages opened from the bar, by setting id, for ranking.
     pub setting_opens: Vec<LaunchEntry>,
-    /// The provider and model behind the Ask AI destination; keys are in the keychain.
-    pub ai: AiSettings,
     /// Clipboard history: on or off, its shortcut, retention and ignored apps.
     pub clipboard: ClipboardSettings,
     /// Global shortcut that opens the notes window; empty for none.
@@ -47,23 +40,16 @@ pub struct Persisted {
     pub notes_shortcut: String,
     /// Best typing test result per mode, e.g. `time-30` or `words-25`.
     pub typing_bests: Vec<TypingBest>,
-    /// Projects and limits for background Claude Code jobs (`!claude`).
-    pub claude: crate::claude::ClaudeSettings,
     /// Reopening the bar within this many seconds returns to the view it closed on
-    /// (Claude, clipboard, typing); 0 always starts at the search box.
+    /// (clipboard, typing, notes); 0 always starts at the search box.
     #[serde(default = "default_resume_seconds")]
     pub resume_seconds: u32,
-    /// The view the bar opens to while one is active (`claude`, `ai`, `notes`, …); empty for
-    /// the search bar.
+    /// The view the bar opens to while one is active (`notes`, `clipboard`, …); empty for the search
+    /// bar.
     pub active_mode: String,
     /// Open to the active mode rather than the search bar.
     #[serde(default = "yes")]
     pub return_to_mode: bool,
-    /// Where ⌘↵ sends the text: empty for "the other primary" (Ask AI or web search), a
-    /// destination id, or `claude:<project id>`.
-    pub route_cmd: String,
-    /// Where ⌥↵ sends the text: empty for a Claude job in the last project used.
-    pub route_alt: String,
     /// The shell for commands run from the bar (`>`), and the ones run so far.
     pub shell: crate::shell::ShellSettings,
     /// Where the user Ctrl+dragged the bar, in physical pixels; none opens it centered on the
@@ -83,14 +69,6 @@ pub struct Persisted {
     pub onboarding_every_launch: bool,
     /// A shutdown, restart, sleep, lock or sign-out set for later from the bar.
     pub power: Option<crate::power::Schedule>,
-    /// Browser profiles whose bookmarks stay out of the bar, by source id (`chrome/Default`).
-    pub bookmarks_disabled: Vec<String>,
-    /// Whether the bar's footer shows the song or video playing, with its controls.
-    #[serde(default = "yes")]
-    pub show_now_playing: bool,
-    /// Whether installed Steam games are listed with the apps.
-    #[serde(default = "yes")]
-    pub steam_games: bool,
     /// Notes open in their own windows, reopened where they were at the next start.
     pub note_windows: Vec<NoteWindow>,
     /// Whether Ctrl+Alt+R and Ctrl+Alt+S record and snapshot the bar for bug reports.
@@ -103,12 +81,12 @@ pub struct Persisted {
     /// Whether the bar's footer shows CPU, memory, disk and network.
     #[serde(default = "yes")]
     pub show_stats: bool,
-    /// The one AI the bar offers (a destination id); empty means the first AI listed.
-    pub ai_choice: String,
-    /// Hotkeys and aliases the user gave commands, apps, destinations and bookmarks.
+    /// Hotkeys and aliases the user gave commands, apps and bookmarks.
     pub bindings: Vec<Binding>,
     /// Apps (and links and folders) opened together: "Coding", "Gaming".
     pub launch_groups: Vec<LaunchGroup>,
+    /// Where the weather is for; none uses where the IP address says the computer is.
+    pub weather_place: Option<crate::weather::Place>,
 }
 
 /// The palettes Settings > Appearance offers; the first is the default.
@@ -140,13 +118,13 @@ pub struct GroupItem {
     pub label: String,
 }
 
-/// A hotkey and/or an alias for one thing the bar can do. `target` names it: `view:ai`,
+/// A hotkey and/or an alias for one thing the bar can do. `target` names it: `view:clip`,
 /// `scope:files`, `app:<id>`, `dest:<id>`, `bookmark:<url>`, `group:<id>` or `setting:<id>`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Binding {
     pub target: String,
-    /// What Settings calls it ("Ask AI", "Spotify").
+    /// What Settings calls it ("Clipboard", "Spotify").
     pub label: String,
     /// A global shortcut that runs it from anywhere; empty for none.
     pub hotkey: String,
@@ -202,7 +180,7 @@ fn default_notes_shortcut() -> String {
     "ctrl+alt+n".into()
 }
 
-const SCHEMA_VERSION: u32 = 2;
+const SCHEMA_VERSION: u32 = 3;
 
 /// Files written before `version` existed should still migrate.
 fn missing_schema_version() -> u32 {
@@ -222,8 +200,6 @@ impl Persisted {
             summon_shortcut: DEFAULT_SHORTCUT.to_string(),
             launch_at_startup: false,
             instant_startup: false,
-            default_destination_id: "google".into(),
-            destinations: destination::builtins(),
             history: Vec::new(),
             launches: Vec::new(),
             app_overrides: Vec::new(),
@@ -231,16 +207,12 @@ impl Persisted {
             file_excludes: Vec::new(),
             file_opens: Vec::new(),
             setting_opens: Vec::new(),
-            ai: AiSettings::default(),
             clipboard: ClipboardSettings::default(),
             notes_shortcut: default_notes_shortcut(),
             typing_bests: Vec::new(),
-            claude: crate::claude::ClaudeSettings::default(),
             resume_seconds: default_resume_seconds(),
             active_mode: String::new(),
             return_to_mode: true,
-            route_cmd: String::new(),
-            route_alt: String::new(),
             shell: crate::shell::ShellSettings::default(),
             bar_position: None,
             theme: default_theme(),
@@ -248,32 +220,13 @@ impl Persisted {
             onboarding_done: false,
             onboarding_every_launch: false,
             power: None,
-            bookmarks_disabled: Vec::new(),
-            show_now_playing: true,
-            steam_games: true,
             note_windows: Vec::new(),
             bug_capture: true,
             protected_folders: false,
             show_stats: true,
-            ai_choice: String::new(),
             bindings: Vec::new(),
             launch_groups: Vec::new(),
-        }
-    }
-
-    /// Adds built-ins a newer version introduced, at their built-in position, so a new
-    /// primary destination lands in the pinned strip rather than after every custom one.
-    pub fn merge_builtins(&mut self) {
-        for (position, builtin) in destination::builtins().into_iter().enumerate() {
-            if self
-                .destinations
-                .iter()
-                .any(|destination| destination.id == builtin.id)
-            {
-                continue;
-            }
-            let at = position.min(self.destinations.len());
-            self.destinations.insert(at, builtin);
+            weather_place: None,
         }
     }
 
@@ -289,11 +242,6 @@ impl Persisted {
         if settings.enabled {
             if clashes(&self.notes_shortcut) {
                 return Err("That shortcut already opens notes".into());
-            }
-            if self.bug_capture
-                && (clashes(crate::capture::SHORTCUT) || clashes(crate::capture::SNAPSHOT_SHORTCUT))
-            {
-                return Err("That shortcut already takes a bug capture".into());
             }
             if let Some(binding) = self
                 .bindings
@@ -331,7 +279,6 @@ impl Persisted {
                 .enabled
                 .then_some(self.clipboard.shortcut.as_str()),
             notes: Some(self.notes_shortcut.as_str()),
-            capture: self.bug_capture,
             bindings: &self.bindings,
         }
     }
@@ -363,18 +310,8 @@ impl Persisted {
         }
     }
 
-    pub fn set_claude(&mut self, settings: crate::claude::ClaudeSettings) -> Result<(), String> {
-        self.claude = settings.normalized()?;
-        Ok(())
-    }
-
-    pub fn set_ai(&mut self, settings: AiSettings) -> Result<(), String> {
-        self.ai = settings.normalized()?;
-        Ok(())
-    }
-
-    pub fn record(&mut self, query: &str, destination_id: &str, now: i64) {
-        history::record(&mut self.history, query, destination_id, now);
+    pub fn record(&mut self, query: &str, link: bool, now: i64) {
+        history::record(&mut self.history, query, link, now);
     }
 
     pub fn record_launch(&mut self, app_id: &str, now: i64) {
@@ -414,222 +351,41 @@ impl Persisted {
         apps::record_override(&mut self.app_overrides, query);
     }
 
-    pub fn set_general(
-        &mut self,
-        shortcut: String,
-        launch_at_startup: bool,
-        default_destination_id: String,
-    ) -> Result<(), String> {
-        if !self
-            .destinations
-            .iter()
-            .any(|destination| destination.id == default_destination_id && !destination.disabled)
-        {
-            return Err("Choose an enabled destination as the default".into());
-        }
+    pub fn set_general(&mut self, shortcut: String, launch_at_startup: bool) {
         self.summon_shortcut = shortcut;
         self.launch_at_startup = launch_at_startup;
-        self.default_destination_id = default_destination_id;
-        Ok(())
     }
 
-    pub fn upsert(&mut self, mut incoming: Destination) -> Result<(), String> {
-        incoming.name = incoming.name.trim().to_string();
-        incoming.triggers = normalize_triggers(&incoming.triggers)?;
-        incoming.url_template = incoming.url_template.trim().to_string();
-
-        let mut next = self.clone();
-        if let Some(existing) = next
-            .destinations
-            .iter_mut()
-            .find(|destination| destination.id == incoming.id)
-        {
-            let builtin = existing.builtin;
-            existing.name = incoming.name;
-            existing.triggers = incoming.triggers;
-            existing.url_template = incoming.url_template;
-            existing.suggest = incoming.suggest;
-            existing.suggest_url = incoming.suggest_url.trim().to_string();
-            existing.suggest_path = incoming.suggest_path.trim().to_string();
-            existing.pinned = incoming.pinned;
-            existing.disabled = incoming.disabled;
-            existing.builtin = builtin;
-            if existing.is_ai() {
-                existing.url_template.clear();
-            }
-        } else {
-            if incoming.builtin || !incoming.id.starts_with("custom-") {
-                return Err("New destinations need a custom id".into());
-            }
-            incoming.builtin = false;
-            incoming.kind = destination::DestinationKind::Web;
-            incoming.suggest_url = incoming.suggest_url.trim().to_string();
-            incoming.suggest_path = incoming.suggest_path.trim().to_string();
-            next.destinations.push(incoming);
-        }
-        next.ensure_invariants()?;
-        *self = next;
-        Ok(())
-    }
-
-    /// Adds or updates every destination in an exported list, all or nothing. Entries whose id
-    /// matches update that destination; the rest are added as custom ones.
-    pub fn import(&mut self, incoming: Vec<ImportedDestination>) -> Result<usize, String> {
-        if incoming.is_empty() {
-            return Err("There are no destinations in that JSON".into());
-        }
-        let mut next = self.clone();
-        let mut count = 0;
-        for (index, item) in incoming.into_iter().enumerate() {
-            let existing = item
-                .id
-                .as_deref()
-                .and_then(|id| {
-                    next.destinations
-                        .iter()
-                        .find(|destination| destination.id == id)
-                })
-                .cloned();
-            let destination = match existing {
-                Some(existing) if existing.is_ai() => continue,
-                Some(existing) => Destination {
-                    name: item.name,
-                    triggers: item.triggers,
-                    url_template: item.url_template,
-                    suggest: item.suggest,
-                    suggest_url: item.suggest_url,
-                    suggest_path: item.suggest_path,
-                    pinned: item.pinned.unwrap_or(existing.pinned),
-                    disabled: item.disabled.unwrap_or(existing.disabled),
-                    ..existing
-                },
-                None => Destination {
-                    id: format!("custom-import-{}-{index}", crate::util::now_ms()),
-                    name: item.name,
-                    triggers: item.triggers,
-                    url_template: item.url_template,
-                    suggest: item.suggest,
-                    suggest_url: item.suggest_url,
-                    suggest_path: item.suggest_path,
-                    pinned: item.pinned.unwrap_or(true),
-                    builtin: false,
-                    disabled: item.disabled.unwrap_or(false),
-                    kind: destination::DestinationKind::Web,
-                },
-            };
-            let name = destination.name.clone();
-            next.upsert(destination)
-                .map_err(|err| format!("{name}: {err}"))?;
-            count += 1;
-        }
-        *self = next;
-        Ok(count)
-    }
-
-    pub fn remove(&mut self, id: &str) -> Result<(), String> {
-        let Some(existing) = self
-            .destinations
-            .iter()
-            .find(|destination| destination.id == id)
-        else {
-            return Err("That destination is missing.".into());
-        };
-        if existing.builtin {
-            return Err("Built-in destinations can be turned off, not deleted".into());
-        }
-        let mut next = self.clone();
-        next.destinations.retain(|destination| destination.id != id);
-        next.history.retain(|entry| entry.destination_id != id);
-        next.ensure_invariants()?;
-        *self = next;
-        Ok(())
-    }
-
-    pub fn move_destination(&mut self, id: &str, delta: i32) -> Result<(), String> {
-        let Some(index) = self
-            .destinations
-            .iter()
-            .position(|destination| destination.id == id)
-        else {
-            return Err("That destination is missing.".into());
-        };
-        let target = index as i32 + delta;
-        if target < 0 || target >= self.destinations.len() as i32 {
-            return Ok(());
-        }
-        self.destinations.swap(index, target as usize);
-        Ok(())
-    }
-
-    pub fn clear_history(&mut self) {
-        self.history.clear();
-    }
-
-    /// Moves installs that still have the old default summon shortcut onto the current one.
+    /// Brings a file from an older version up to date; says whether anything changed.
     fn migrate(&mut self) -> bool {
+        // An older build run since (an installed release, say) can put back what went with
+        // destinations, so they go on every load, not only on the move to version 3.
+        let dropped = self.drop_destinations();
         if self.version >= SCHEMA_VERSION {
-            return false;
+            return dropped;
         }
-        if self.summon_shortcut == LEGACY_DEFAULT_SHORTCUT {
+        // Installs that still have the old default summon shortcut move onto the current one.
+        if self.version < 2 && self.summon_shortcut == LEGACY_DEFAULT_SHORTCUT {
             self.summon_shortcut = DEFAULT_SHORTCUT.to_string();
         }
         self.version = SCHEMA_VERSION;
         true
     }
 
-    fn ensure_invariants(&mut self) -> Result<(), String> {
-        if self
-            .destinations
-            .iter()
-            .all(|destination| destination.disabled)
-        {
-            return Err("At least one destination has to stay on".into());
-        }
-
-        let mut seen = HashSet::new();
-        for destination in &self.destinations {
-            if destination.name.trim().is_empty() {
-                return Err("Destination name is required".into());
-            }
-            if destination.name.chars().count() > 40 {
-                return Err("Destination name must be 40 characters or fewer".into());
-            }
-            if destination.triggers.is_empty() {
-                return Err(format!("{} needs a trigger", destination.name));
-            }
-            if !destination.is_ai() {
-                crate::template::validate(&destination.url_template)
-                    .map_err(|err| format!("{}: {err}", destination.name))?;
-            }
-            if destination.suggest == destination::SuggestKind::Custom {
-                destination::validate_suggest_source(
-                    &destination.suggest_url,
-                    &destination.suggest_path,
-                )
-                .map_err(|err| format!("{}: {err}", destination.name))?;
-            }
-            if destination.disabled {
-                continue;
-            }
-            for trigger in &destination.triggers {
-                if !seen.insert(trigger.clone()) {
-                    return Err(format!("Trigger !{trigger} is already used"));
-                }
-            }
-        }
-
-        let default_ok = self.destinations.iter().any(|destination| {
-            destination.id == self.default_destination_id && !destination.disabled
-        });
-        if !default_ok {
-            self.default_destination_id = self
-                .destinations
-                .iter()
-                .find(|destination| !destination.disabled)
-                .map(|destination| destination.id.clone())
-                .unwrap_or_else(|| "google".into());
-        }
-        Ok(())
+    /// Searches used to go to one of several sites (destinations); now they all go to Google.
+    /// History for the others goes, with the hotkeys and aliases that armed one and the old
+    /// AI views. Says whether there were any.
+    fn drop_destinations(&mut self) -> bool {
+        let before = (self.history.len(), self.bindings.len());
+        self.history
+            .retain(|entry| matches!(entry.destination_id.as_str(), "google" | "url"));
+        self.bindings
+            .retain(|binding| match binding.target.split_once(':') {
+                Some(("dest", _)) => false,
+                Some(("view", view)) => !matches!(view, "ai" | "claude"),
+                _ => true,
+            });
+        before != (self.history.len(), self.bindings.len())
     }
 
     pub fn save(&self, path: &Path) -> Result<(), String> {
@@ -663,7 +419,6 @@ impl Persisted {
         };
         match serde_json::from_slice::<Self>(&bytes) {
             Ok(mut state) => {
-                state.merge_builtins();
                 // Violet was the default before Sidebar; anyone who never picked moves over.
                 if !state.theme_chosen && state.theme == "violet" {
                     state.theme = default_theme();
@@ -683,71 +438,6 @@ impl Persisted {
             }
         }
     }
-}
-
-/// One destination as exported; only the name, triggers and template are required.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ImportedDestination {
-    #[serde(default)]
-    pub id: Option<String>,
-    pub name: String,
-    pub triggers: Vec<String>,
-    pub url_template: String,
-    #[serde(default = "no_suggestions")]
-    pub suggest: destination::SuggestKind,
-    #[serde(default)]
-    pub suggest_url: String,
-    #[serde(default)]
-    pub suggest_path: String,
-    #[serde(default)]
-    pub pinned: Option<bool>,
-    #[serde(default)]
-    pub disabled: Option<bool>,
-}
-
-fn no_suggestions() -> destination::SuggestKind {
-    destination::SuggestKind::None
-}
-
-fn normalize_triggers(triggers: &[String]) -> Result<Vec<String>, String> {
-    let mut normalized = Vec::new();
-    for trigger in triggers {
-        let Some(trigger) = destination::normalize_trigger(trigger) else {
-            return Err(format!(
-                "Trigger !{} can only use letters, numbers, and hyphens",
-                trigger.trim().trim_start_matches('!')
-            ));
-        };
-        if apps::is_scope(&trigger) {
-            return Err(format!("!{trigger} is reserved for finding apps"));
-        }
-        if settings::is_scope(&trigger) {
-            return Err(format!("!{trigger} is reserved for finding settings"));
-        }
-        if files::is_scope(&trigger) {
-            return Err(format!("!{trigger} is reserved for finding files"));
-        }
-        if crate::notes::is_scope(&trigger) {
-            return Err(format!("!{trigger} is reserved for notes"));
-        }
-        if trigger == "clip" {
-            return Err("!clip is reserved for clipboard history".into());
-        }
-        if trigger == "claude" {
-            return Err("!claude is reserved for Claude jobs".into());
-        }
-        if trigger == "type" {
-            return Err("!type is reserved for the typing test".into());
-        }
-        if !normalized.contains(&trigger) {
-            normalized.push(trigger);
-        }
-    }
-    if normalized.is_empty() {
-        return Err("A destination needs at least one trigger".into());
-    }
-    Ok(normalized)
 }
 
 pub struct AppState {
@@ -791,51 +481,7 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::destination::SuggestKind;
     use crate::shortcut::{DEFAULT_SHORTCUT, LEGACY_DEFAULT_SHORTCUT};
-
-    fn custom(id: &str, trigger: &str) -> Destination {
-        Destination {
-            id: id.into(),
-            name: "Example".into(),
-            triggers: vec![trigger.into()],
-            url_template: "https://example.com/?q={query}".into(),
-            suggest: SuggestKind::None,
-            suggest_url: String::new(),
-            suggest_path: String::new(),
-            pinned: true,
-            builtin: false,
-            disabled: false,
-            kind: Default::default(),
-        }
-    }
-
-    #[test]
-    fn cannot_turn_off_every_destination() {
-        let mut state = Persisted::fresh();
-        for destination in &mut state.destinations {
-            destination.disabled = true;
-        }
-        state.destinations[0].disabled = false;
-        let mut last = state.destinations[0].clone();
-        last.disabled = true;
-        assert!(state.upsert(last).is_err());
-    }
-
-    #[test]
-    fn duplicate_triggers_are_rejected_and_rolled_back() {
-        let mut state = Persisted::fresh();
-        let before = state.destinations.len();
-        let result = state.upsert(custom("custom-1", "g"));
-        assert!(result.is_err());
-        assert_eq!(state.destinations.len(), before);
-    }
-
-    #[test]
-    fn builtins_cannot_be_deleted() {
-        let mut state = Persisted::fresh();
-        assert!(state.remove("google").is_err());
-    }
 
     #[test]
     fn legacy_default_shortcut_moves_to_the_platform_default() {
@@ -844,7 +490,7 @@ mod tests {
         state.summon_shortcut = LEGACY_DEFAULT_SHORTCUT.into();
         assert!(state.migrate());
         assert_eq!(state.summon_shortcut, DEFAULT_SHORTCUT);
-        assert_eq!(state.version, 2);
+        assert_eq!(state.version, SCHEMA_VERSION);
         assert!(!state.migrate());
     }
 
@@ -855,7 +501,37 @@ mod tests {
         state.summon_shortcut = "ctrl+alt+k".into();
         assert!(state.migrate());
         assert_eq!(state.summon_shortcut, "ctrl+alt+k");
-        assert_eq!(state.version, 2);
+        assert_eq!(state.version, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn what_pointed_at_other_destinations_is_dropped() {
+        let mut state: Persisted = serde_json::from_str(
+            r#"{
+                "version": 3,
+                "defaultDestinationId": "pubmed",
+                "destinations": [
+                    {"id": "google", "name": "Google", "triggers": ["g"], "urlTemplate": "https://www.google.com/search?q={query}", "suggest": "google", "pinned": true, "builtin": true, "disabled": false}
+                ],
+                "history": [
+                    {"query": "cats", "destinationId": "google", "uses": 1, "lastUsed": 1},
+                    {"query": "example.com", "destinationId": "url", "uses": 1, "lastUsed": 1},
+                    {"query": "crispr", "destinationId": "pubmed", "uses": 1, "lastUsed": 1}
+                ],
+                "bindings": [
+                    {"target": "view:ai", "label": "Ask AI", "hotkey": "ctrl+alt+a"},
+                    {"target": "dest:google", "label": "Google", "alias": "s"},
+                    {"target": "app:code", "label": "Code", "alias": "c"}
+                ]
+            }"#,
+        )
+        .unwrap();
+        assert!(state.migrate());
+        let kept: Vec<&str> = state.history.iter().map(|e| e.query.as_str()).collect();
+        assert_eq!(kept, ["cats", "example.com"]);
+        assert_eq!(state.bindings.len(), 1);
+        assert_eq!(state.bindings[0].target, "app:code");
+        assert!(!state.migrate());
     }
 
     #[test]
@@ -866,7 +542,6 @@ mod tests {
         assert_eq!(state.summon_shortcut, "ctrl+alt+k");
         assert!(state.launch_at_startup);
         assert_eq!(state.version, 1);
-        assert!(!state.destinations.is_empty());
         assert!(state.history.is_empty());
     }
 
@@ -876,63 +551,14 @@ mod tests {
         let app_state = AppState::load(dir.join("state.json"));
         let before = app_state.snapshot().unwrap();
         let result = app_state.update(|persisted| {
-            persisted.history.clear();
-            persisted.upsert(custom("custom-1", "g"))
+            persisted.summon_shortcut = "ctrl+alt+k".into();
+            Err("no".into())
         });
         assert!(result.is_err());
         assert_eq!(
-            app_state.snapshot().unwrap().destinations,
-            before.destinations
+            app_state.snapshot().unwrap().summon_shortcut,
+            before.summon_shortcut
         );
         let _ = fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn missing_builtins_are_added_without_resetting_edits() {
-        let mut state = Persisted::fresh();
-        state.destinations[0].name = "Search".into();
-        state
-            .destinations
-            .retain(|destination| destination.id != "youtube");
-        state.merge_builtins();
-        assert_eq!(state.destinations[0].name, "Search");
-        assert!(
-            state
-                .destinations
-                .iter()
-                .any(|destination| destination.id == "youtube")
-        );
-    }
-
-    #[test]
-    fn imports_new_and_existing_destinations_all_or_nothing() {
-        let mut state = Persisted::fresh();
-        let json = r#"[
-            {"id": "google", "name": "Google", "triggers": ["g"], "urlTemplate": "https://www.google.com/search?q={query}", "suggest": "google", "pinned": false},
-            {"name": "Arxiv", "triggers": ["arxiv"], "urlTemplate": "https://arxiv.org/a/{query}"}
-        ]"#;
-        let incoming: Vec<ImportedDestination> = serde_json::from_str(json).unwrap();
-        assert_eq!(state.import(incoming).unwrap(), 2);
-        let google = state
-            .destinations
-            .iter()
-            .find(|d| d.id == "google")
-            .unwrap();
-        assert_eq!(google.triggers, vec!["g"]);
-        assert!(!google.pinned && google.builtin);
-        assert!(
-            state
-                .destinations
-                .iter()
-                .any(|d| d.name == "Arxiv" && d.id.starts_with("custom-"))
-        );
-
-        let clash: Vec<ImportedDestination> = serde_json::from_str(
-            r#"[{"name": "Again", "triggers": ["arxiv"], "urlTemplate": "https://x.dev/{query}"}]"#,
-        )
-        .unwrap();
-        let before = state.destinations.len();
-        assert!(state.import(clash).is_err());
-        assert_eq!(state.destinations.len(), before);
     }
 }

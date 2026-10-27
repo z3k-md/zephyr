@@ -1,5 +1,5 @@
-//! Live system stats for the bar's footer and System Resources: CPU, memory, free space on
-//! the system disk and network throughput. A background thread reads them once a second
+//! Live system stats for the bar's footer and System Resources: CPU, GPU, memory, free space
+//! on the system disk and network throughput. A background thread reads them once a second
 //! (about a millisecond each: totals only, never the process list), so Resources always
 //! opens with the last minute. While the bar shows it reads twice a second and sends each
 //! reading to the footer.
@@ -25,6 +25,9 @@ pub struct Stats {
     /// Bytes per second since the last sample, across every interface.
     pub net_down: u64,
     pub net_up: u64,
+    /// None without a GPU that reports its load.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gpu: Option<crate::gpu::Gpu>,
     /// Dev builds: the app's own use, its webview helper processes included.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub app: Option<AppUsage>,
@@ -44,6 +47,7 @@ struct Sampler {
     system: System,
     disks: Disks,
     networks: Networks,
+    gpu: Option<crate::gpu::Reader>,
     last: Instant,
     /// The latest reading, which the footer and Resources show.
     latest: Option<Stats>,
@@ -63,6 +67,8 @@ pub struct Point {
     pub cpu: f32,
     /// Memory in use, 0–1.
     pub memory: f32,
+    /// The GPU's load, 0–100; 0 without one.
+    pub gpu: f32,
     pub down: u64,
     pub up: u64,
 }
@@ -121,14 +127,10 @@ pub fn start(app: AppHandle) {
             }
             last = Instant::now();
             let visible = BAR_VISIBLE.load(Ordering::SeqCst);
-            let reading = SAMPLER.lock().ok().map(|mut guard| {
-                let sampler = guard.get_or_insert_with(Sampler::new);
-                let mut stats = record(sampler);
-                if visible && cfg!(debug_assertions) {
-                    stats.app = Some(recent_app_usage(sampler));
-                }
-                stats
-            });
+            let reading = SAMPLER
+                .lock()
+                .ok()
+                .map(|mut guard| record(guard.get_or_insert_with(Sampler::new)));
             if visible && let Some(stats) = reading {
                 let _ = app.emit_to("main", "stats", stats);
             }
@@ -190,6 +192,7 @@ impl Sampler {
             system,
             disks: Disks::new_with_refreshed_list(),
             networks: Networks::new_with_refreshed_list(),
+            gpu: crate::gpu::Reader::new(),
             last: Instant::now(),
             latest: None,
             history: std::collections::VecDeque::new(),
@@ -247,6 +250,7 @@ fn record(sampler: &mut Sampler) -> Stats {
         disk_total,
         net_down: (down as f64 / elapsed) as u64,
         net_up: (up as f64 / elapsed) as u64,
+        gpu: sampler.gpu.as_mut().and_then(crate::gpu::Reader::read),
         app: None,
     };
     while sampler
@@ -273,6 +277,7 @@ fn record(sampler: &mut Sampler) -> Stats {
                 } else {
                     0.0
                 },
+                gpu: stats.gpu.as_ref().map_or(0.0, |gpu| gpu.usage),
                 down: stats.net_down,
                 up: stats.net_up,
             },
@@ -391,6 +396,7 @@ fn empty() -> Stats {
         disk_total: 0,
         net_down: 0,
         net_up: 0,
+        gpu: None,
         app: None,
     }
 }

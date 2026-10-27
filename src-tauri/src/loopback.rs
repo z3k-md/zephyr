@@ -1,5 +1,5 @@
 //! The one-off listener on 127.0.0.1 that a browser sign-in (OAuth with PKCE) comes back to,
-//! shared by Sign in with ChatGPT and sync's Google sign-in.
+//! for sync's Google sign-in.
 
 use std::time::{Duration, Instant};
 

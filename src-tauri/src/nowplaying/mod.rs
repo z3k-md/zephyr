@@ -143,6 +143,7 @@ fn reread_artwork_soon() {
 fn watch(app: &AppHandle, mut sessions: impl Sessions, inbox: &Receiver<Wake>) {
     let mut last_played: HashMap<String, u64> = HashMap::new();
     let mut playing_before: HashSet<String> = HashSet::new();
+    let mut started = Started::default();
     let mut artwork: Option<Artwork> = None;
     let mut shown: Option<NowPlaying> = None;
     let mut wake = Some(Wake::Changed);
@@ -151,7 +152,8 @@ fn watch(app: &AppHandle, mut sessions: impl Sessions, inbox: &Receiver<Wake>) {
             return;
         };
         let list = sessions.list();
-        let chosen = choose(&list);
+        started.update(&list, now_ms());
+        let chosen = choose(&list, &started);
         if let Wake::Control(control) = woke {
             if let Some(index) = chosen {
                 sessions.control(index, control);
@@ -167,8 +169,9 @@ fn watch(app: &AppHandle, mut sessions: impl Sessions, inbox: &Receiver<Wake>) {
             }
         }
         let list = sessions.list();
-        let chosen = choose(&list);
         let now = now_ms();
+        started.update(&list, now);
+        let chosen = choose(&list, &started);
         // An app playing at the last read played until now, even if it just paused: a long
         // song sends no events, and pausing it must not look like it stopped minutes ago.
         for app in playing_before.drain() {
@@ -232,16 +235,51 @@ fn watch(app: &AppHandle, mut sessions: impl Sessions, inbox: &Receiver<Wake>) {
     }
 }
 
+/// When each session started playing, by app and title: browser tabs share one app id, and a
+/// tab can keep saying it plays (a muted preview, a paused video that never told the system),
+/// so the one that most recently started is the one being listened to.
+#[derive(Default)]
+pub struct Started(HashMap<String, u64>);
+
+impl Started {
+    fn key(session: &Session) -> String {
+        format!("{}\n{}", session.source_app, session.title)
+    }
+
+    /// Notes sessions that started playing since the last read and forgets ones that stopped.
+    pub fn update(&mut self, sessions: &[Session], now: u64) {
+        let playing: HashSet<String> = sessions
+            .iter()
+            .filter(|session| session.playing)
+            .map(Self::key)
+            .collect();
+        self.0.retain(|key, _| playing.contains(key));
+        for key in playing {
+            self.0.entry(key).or_insert(now);
+        }
+    }
+
+    fn at(&self, session: &Session) -> u64 {
+        self.0.get(&Self::key(session)).copied().unwrap_or(0)
+    }
+}
+
 /// The session the bar follows: one that's playing over one that's paused; among those, the
-/// one the system's media keys control, then the first listed. Sessions with no title (an app
-/// that registered but hasn't said what it plays) don't count.
-pub fn choose(sessions: &[Session]) -> Option<usize> {
+/// one that started most recently, then the one the system's media keys control, then the
+/// first listed. Sessions with no title (an app that registered but hasn't said what it
+/// plays) don't count.
+pub fn choose(sessions: &[Session], started: &Started) -> Option<usize> {
     sessions
         .iter()
         .enumerate()
         .filter(|(_, session)| !session.title.trim().is_empty())
         .max_by_key(|(index, session)| {
-            (session.playing, session.current, std::cmp::Reverse(*index))
+            (
+                session.playing,
+                started.at(session),
+                session.current,
+                std::cmp::Reverse(*index),
+            )
         })
         .map(|(index, _)| index)
 }
@@ -332,7 +370,7 @@ mod tests {
             session("paused", false, true),
             session("playing", true, false),
         ];
-        assert_eq!(choose(&sessions), Some(1));
+        assert_eq!(choose(&sessions, &Started::default()), Some(1));
     }
 
     #[test]
@@ -342,23 +380,47 @@ mod tests {
             session("b", true, true),
             session("c", true, false),
         ];
-        assert_eq!(choose(&sessions), Some(1));
+        assert_eq!(choose(&sessions, &Started::default()), Some(1));
         let sessions = [session("a", true, false), session("b", true, false)];
-        assert_eq!(choose(&sessions), Some(0));
+        assert_eq!(choose(&sessions, &Started::default()), Some(0));
+    }
+
+    #[test]
+    fn of_two_playing_tabs_in_one_browser_the_one_that_started_last_wins() {
+        let tab = |title: &str| Session {
+            source_app: "Chrome".into(),
+            title: title.into(),
+            playing: true,
+            current: true,
+            ..Default::default()
+        };
+        let mut started = Started::default();
+        // The YouTube tab was already playing; YouTube Music starts after it.
+        started.update(&[tab("A video")], 1_000);
+        let both = [tab("A video"), tab("A song")];
+        started.update(&both, 5_000);
+        assert_eq!(choose(&both, &started), Some(1));
+        // A new song in the music tab is a new start too, so it keeps winning.
+        let next = [tab("A video"), tab("Next song")];
+        started.update(&next, 9_000);
+        assert_eq!(choose(&next, &started), Some(1));
     }
 
     #[test]
     fn with_nothing_playing_the_current_session_shows_paused() {
         let sessions = [session("a", false, false), session("b", false, true)];
-        assert_eq!(choose(&sessions), Some(1));
+        assert_eq!(choose(&sessions, &Started::default()), Some(1));
     }
 
     #[test]
     fn untitled_sessions_never_show() {
         let sessions = [session("", true, true), session("song", false, false)];
-        assert_eq!(choose(&sessions), Some(1));
-        assert_eq!(choose(&[session("  ", true, true)]), None);
-        assert_eq!(choose(&[]), None);
+        assert_eq!(choose(&sessions, &Started::default()), Some(1));
+        assert_eq!(
+            choose(&[session("  ", true, true)], &Started::default()),
+            None
+        );
+        assert_eq!(choose(&[], &Started::default()), None);
     }
 
     #[test]

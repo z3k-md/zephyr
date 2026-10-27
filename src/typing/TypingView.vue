@@ -4,6 +4,13 @@
   import type { TypingBest } from '../types';
   import { consistency, tally, wpm } from './stats';
   import { randomWords } from './words';
+  import Keys from '../components/Keys.vue';
+  import KeyHints from '../components/KeyHints.vue';
+
+  const TEST_HINTS = [
+    { keys: 'tab', label: 'restarts' },
+    { keys: 'esc', label: 'exits' },
+  ];
 
   const props = defineProps<{ bests: TypingBest[] }>();
   const emit = defineEmits<{ exit: [] }>();
@@ -343,7 +350,8 @@
         />
       </div>
       <p class="typing-hint">
-        {{ startedAt ? 'Tab restarts · Esc exits' : 'Start typing · Tab restarts · Esc exits' }}
+        <span v-if="!startedAt">Start typing</span>
+        <KeyHints :hints="TEST_HINTS" />
       </p>
     </template>
 
@@ -383,7 +391,12 @@
         </div>
       </dl>
       <p v-if="notice" class="notice">{{ notice }}</p>
-      <p class="typing-hint">Enter or Tab for another · Esc exits</p>
+      <p class="typing-hint">
+        <span class="key-hint">
+          <Keys keys="enter" small /> or <Keys keys="tab" small /> for another
+        </span>
+        <span class="key-hint"><Keys keys="esc" small /> exits</span>
+      </p>
     </section>
   </div>
 </template>

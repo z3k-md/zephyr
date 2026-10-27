@@ -3,15 +3,8 @@
   import { getVersion } from '@tauri-apps/api/app';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import {
-    aiDetectLocal,
-    aiHasKey,
-    aiModels,
-    aiPresets,
-    aiSetKey,
     checkForUpdates,
     rehearseUpdate,
-    claudeStatus,
-    saveClaudeSettings,
     clipCanPaste,
     clipClear,
     clipRequestPastePermission,
@@ -24,69 +17,42 @@
     saveOpenBehavior,
     saveResumeSeconds,
     saveTheme,
-    saveShowNowPlaying,
     saveBugCapture,
     saveShowStats,
-    saveAiChoice,
     openOnboarding,
     hideSettings,
     saveOnboardingEveryLaunch,
-    chatgptAccount,
-    chatgptSignIn,
-    chatgptCancelSignIn,
-    chatgptSignOut,
-    openUrl,
     permissionRequest,
+    pauseShortcuts,
     revealCaptures,
-    saveSteamGames,
-    bookmarkSources,
-    saveBookmarkSources,
     saveShellProgram,
-    saveShellTerminal,
-    clearShellHistory,
     shellInfo,
     saveNotesShortcut,
-    clearHistory,
     errorMessage,
-    exportDestinations,
     fileIndexStatus,
-    importDestinations,
     getSnapshot,
-    moveDestination,
     rebuildFileIndex,
-    removeDestination,
-    saveDestination,
-    saveAiSettings,
     saveFileFolders,
     saveSettings,
   } from '../api';
   import SyncSection from './SyncSection.vue';
   import PermissionsSection from './PermissionsSection.vue';
   import LaunchGroupsSection from './LaunchGroupsSection.vue';
-  import { askAiName, chosenAi, isAiLike } from '../aiChoice';
   import { THEMES } from '../themes';
   import { captureShortcut, formatShortcut, isMac, isModifierKey, SHORTCUT_HELP } from '../keys';
+  import Keys from '../components/Keys.vue';
   import ShortcutsSection from './ShortcutsSection.vue';
-  import InstantStartup from './InstantStartup.vue';
+  import BootChoice from './BootChoice.vue';
+  import WeatherPlaceField from './WeatherPlaceField.vue';
   import SelectMenu from '../components/SelectMenu.vue';
   import { GLYPHS } from '../bar/glyphs';
   import {
     isSnapshot,
-    type AiPreset,
-    type ChatgptAccount,
-    type AiSettings,
-    type ClaudeCliStatus,
-    type ClaudeProject,
-    type ClaudeSettings,
     type ClipboardSettings,
-    type Destination,
     type FileIndexStatus,
-    type LocalServer,
     type ShellInfo,
-    type BookmarkSource,
     type ShellProgram,
     type Snapshot,
-    type SuggestKind,
   } from '../types';
 
   const snapshot = ref<Snapshot | null>(null);
@@ -97,52 +63,21 @@
   const status = ref<string | null>(null);
   const formError = ref<string | null>(null);
   const listening = ref(false);
-  const editingId = ref<string | null>(null);
   const updateMessage = ref<string | null>(null);
   const busy = ref(false);
-
-  const draft = ref({
-    name: '',
-    triggersText: '',
-    urlTemplate: '',
-    suggest: 'none' as SuggestKind,
-    suggestUrl: '',
-    suggestPath: '',
-  });
-
-  /** The empty "Add a destination" form. */
-  function blankDestination() {
-    return {
-      name: '',
-      triggersText: '',
-      urlTemplate: 'https://example.com/search?q={query}',
-      suggest: 'none' as SuggestKind,
-      suggestUrl: '',
-      suggestPath: '',
-    };
-  }
-  const added = ref(blankDestination());
-
-  const SUGGESTERS: { id: SuggestKind; label: string }[] = [
-    { id: 'none', label: 'None' },
-    { id: 'google', label: 'Google' },
-    { id: 'youtube', label: 'YouTube' },
-    { id: 'wikipedia', label: 'Wikipedia' },
-    { id: 'pubmed', label: 'PubMed' },
-    { id: 'custom', label: 'Custom…' },
-  ];
-
-  const importText = ref('');
-  const importOpen = ref(false);
 
   const fileStatus = ref<FileIndexStatus | null>(null);
   const newRoot = ref('');
   const newExclude = ref('');
 
   const notesListening = ref(false);
-  const cli = ref<ClaudeCliStatus | null>(null);
-  const newProjectFolder = ref('');
   const clipListening = ref(false);
+  // While any recorder listens, Zephyr's own shortcuts are off, so pressing the current
+  // summon key records it instead of opening the bar.
+  watch(
+    () => listening.value || notesListening.value || clipListening.value,
+    (recording) => void pauseShortcuts(recording).catch(() => undefined)
+  );
   const clipNewApp = ref('');
   const clipCount = ref<number | null>(null);
   const clipPasteAllowed = ref<boolean | null>(null);
@@ -156,51 +91,8 @@
     { days: 0, label: 'Until the 2,000 item limit' },
   ];
 
-  const presets = ref<AiPreset[]>([]);
-  const aiDraft = ref<AiSettings>({ provider: 'auto', model: '', baseUrl: '', api: 'openai' });
-  const aiKey = ref('');
-  const aiKeySaved = ref(false);
-  const aiModelList = ref<string[]>([]);
-  const aiLocal = ref<LocalServer[] | null>(null);
-  const aiMessage = ref<string | null>(null);
-  // Sign in with ChatGPT: the account, a sign-in waiting on the browser, and the one-time
-  // note shown right after the first sign-in.
-  const chatgpt = ref<ChatgptAccount | null>(null);
-  const chatgptWaiting = ref(false);
-  const chatgptWelcome = ref(false);
-  const USAGE_URL = 'https://chatgpt.com/settings/usage';
-
   let unlistens: UnlistenFn[] = [];
   let statusTimer = 0;
-
-  const aiPreset = computed(() =>
-    presets.value.find((preset) => preset.id === aiDraft.value.provider)
-  );
-  const aiNeedsKey = computed(
-    () => aiDraft.value.provider === 'custom' || Boolean(aiPreset.value?.needsKey)
-  );
-  const aiProviderName = computed(() => aiPreset.value?.name ?? 'Server');
-  const aiShowsLocal = computed(
-    () => aiDraft.value.provider === 'auto' || Boolean(aiPreset.value?.local)
-  );
-
-  const localSummary = computed(() => {
-    const servers = aiLocal.value;
-    if (servers === null) return 'Looking for Ollama and LM Studio…';
-    if (servers.length === 0) {
-      return 'No local model server is running. Start Ollama or LM Studio, or pick a provider and add your key.';
-    }
-    return servers
-      .map((server) => `${server.name} is running with ${server.models.length} models`)
-      .join('. ');
-  });
-
-  const modelPlaceholder = computed(() => {
-    const preset = aiPreset.value;
-    if (preset?.defaultModel) return `Default: ${preset.defaultModel}`;
-    if (preset?.local) return 'Default: the first loaded model';
-    return 'Model id, or use Load models';
-  });
 
   // Saved roots, or the default (home) the index reports when none are saved.
   const fileRoots = computed(() => snapshot.value?.fileRoots ?? fileStatus.value?.roots ?? []);
@@ -213,27 +105,14 @@
     return current.scanning ? `Indexing… ${count} items so far` : `${count} items indexed`;
   });
 
-  const historyPreview = computed(() => snapshot.value?.history.slice(0, 8) ?? []);
-
   onMounted(async () => {
     await refresh();
     pageReady();
-    void loadAi();
-    void loadChatgpt();
     void loadClip();
-    void loadCli();
     void loadShell();
-    void loadBookmarkSources();
     unlistens.push(
       await listen<unknown>('state-changed', (event) => {
-        if (!isSnapshot(event.payload)) return;
-        const before = snapshot.value?.ai;
-        snapshot.value = event.payload;
-        // AI settings changed elsewhere (a ChatGPT sign-in during setup): the form follows,
-        // so its next save doesn't put the old provider back.
-        if (JSON.stringify(before) !== JSON.stringify(event.payload.ai)) {
-          aiDraft.value = { ...event.payload.ai };
-        }
+        if (isSnapshot(event.payload)) snapshot.value = event.payload;
       })
     );
     // The window is built ahead of time and only hidden on close, so opening it is just
@@ -246,10 +125,7 @@
           search.value = '';
           paneEl.value?.scrollTo({ top: 0 });
         }
-        window.setTimeout(() => {
-          void refresh();
-          void loadChatgpt();
-        }, 50);
+        window.setTimeout(() => void refresh(), 50);
       })
     );
     const section = new URLSearchParams(window.location.search).get('section');
@@ -266,25 +142,20 @@
     for (const unlisten of unlistens) unlisten();
   });
 
-  // Sidebar sections; one shows at a time.
+  // One page at a time: General is the home page, and the rest open from its tiles.
   const SECTIONS = [
     { id: 'general', label: 'General', icon: 'gear' },
-    { id: 'appearance', label: 'Appearance', icon: 'grid' },
-    { id: 'ai', label: 'AI', icon: 'sparkle' },
-    { id: 'claude', label: 'Claude', icon: 'terminal' },
-    { id: 'shell', label: 'Shell', icon: 'prompt' },
     { id: 'sync', label: 'Sync', icon: 'sync' },
     { id: 'clipboard', label: 'Clipboard', icon: 'clipboard' },
     { id: 'notes', label: 'Notes', icon: 'note' },
-    { id: 'destinations', label: 'Destinations', icon: 'link' },
-    { id: 'bookmarks', label: 'Bookmarks', icon: 'bookmark' },
-    { id: 'nowplaying', label: 'Now playing', icon: 'music' },
     { id: 'shortcuts', label: 'Shortcuts', icon: 'keyboard' },
     { id: 'launchgroups', label: 'Launch groups', icon: 'grid' },
     { id: 'files', label: 'Files', icon: 'folder' },
-    { id: 'history', label: 'History', icon: 'clock' },
     ...(isMac ? [{ id: 'permissions', label: 'Permissions', icon: 'shield' }] : []),
+    { id: 'dev', label: 'Dev', icon: 'code' },
+    { id: 'about', label: 'About', icon: 'info' },
   ];
+  const PAGES = SECTIONS.filter((section) => section.id !== 'general');
   const active = ref('general');
   const search = ref('');
   const searchEl = ref<HTMLInputElement | null>(null);
@@ -330,7 +201,7 @@
         found.push({ section: section.id, label: section.label, element: root });
       }
       const labels = root.querySelectorAll<HTMLElement>(
-        '.field > span:first-child, label.check, h3, .destination strong, button'
+        '.field > span:first-child, label.check, h3, button'
       );
       for (const element of labels) {
         const text = (element.textContent ?? '').replace(/\s+/g, ' ').trim();
@@ -350,8 +221,7 @@
     active.value = result.section;
     await nextTick();
     const target =
-      (result.element.closest('.field, .check, .destination, h3') as HTMLElement | null) ??
-      result.element;
+      (result.element.closest('.field, .check, h3') as HTMLElement | null) ?? result.element;
     flash(target);
   }
 
@@ -422,27 +292,8 @@
     }
   }
 
-  async function toggleSteamGames() {
-    if (snapshot.value) await save(saveSteamGames(!snapshot.value.steamGames));
-  }
-
-  async function toggleStartup() {
-    const current = snapshot.value;
-    if (!current) return;
-    await save(
-      saveSettings(current.summonShortcut, !current.launchAtStartup, current.defaultDestinationId)
-    );
-  }
-
-  async function changeDefault(event: Event) {
-    const current = snapshot.value;
-    if (!current) return;
-    const value = (event.target as HTMLSelectElement).value;
-    await save(saveSettings(current.summonShortcut, current.launchAtStartup, value));
-  }
-
   // Esc closes Settings, unless something open took it first: a dropdown, a shortcut
-  // being recorded, or search text (which Esc clears).
+  // being recorded, or search text (which Esc clears). A page goes back to General first.
   function onEscape(event: KeyboardEvent) {
     if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing) return;
     if (search.value) {
@@ -450,7 +301,8 @@
       return;
     }
     event.preventDefault();
-    void hideSettings();
+    if (active.value !== 'general') open('general');
+    else void hideSettings();
   }
 
   function onShortcutKey(event: KeyboardEvent) {
@@ -513,99 +365,8 @@
   async function commitShortcut(shortcut: string) {
     const current = snapshot.value;
     if (!current) return;
-    const saved = await save(
-      saveSettings(shortcut, current.launchAtStartup, current.defaultDestinationId)
-    );
+    const saved = await save(saveSettings(shortcut, current.launchAtStartup));
     if (saved) status.value = `Summon shortcut is ${formatShortcut(shortcut)}.`;
-  }
-
-  function startEdit(destination: Destination) {
-    editingId.value = destination.id;
-    draft.value = {
-      name: destination.name,
-      triggersText: destination.triggers.join(', '),
-      urlTemplate: destination.urlTemplate,
-      suggest: destination.suggest,
-      suggestUrl: destination.suggestUrl ?? '',
-      suggestPath: destination.suggestPath ?? '',
-    };
-    formError.value = null;
-  }
-
-  async function saveDraft(destination: Destination) {
-    const saved = await save(
-      saveDestination({
-        ...destination,
-        name: draft.value.name,
-        triggers: splitTriggers(draft.value.triggersText),
-        urlTemplate: draft.value.urlTemplate,
-        suggest: draft.value.suggest,
-        suggestUrl: draft.value.suggestUrl,
-        suggestPath: draft.value.suggestPath,
-      })
-    );
-    if (saved) editingId.value = null;
-  }
-
-  async function patch(destination: Destination, partial: Partial<Destination>) {
-    await save(saveDestination({ ...destination, ...partial }));
-  }
-
-  async function move(id: string, delta: number) {
-    await save(moveDestination(id, delta));
-  }
-
-  async function remove(id: string) {
-    await save(removeDestination(id));
-  }
-
-  async function addDestination() {
-    const saved = await save(
-      saveDestination({
-        id: `custom-${crypto.randomUUID()}`,
-        name: added.value.name,
-        triggers: splitTriggers(added.value.triggersText),
-        urlTemplate: added.value.urlTemplate,
-        suggest: added.value.suggest,
-        suggestUrl: added.value.suggestUrl,
-        suggestPath: added.value.suggestPath,
-        pinned: true,
-        builtin: false,
-        disabled: false,
-      })
-    );
-    if (!saved) return;
-    added.value = blankDestination();
-    status.value = 'Destination added.';
-  }
-
-  async function copyDestinations() {
-    try {
-      await navigator.clipboard.writeText(await exportDestinations());
-      status.value = 'Copied your destinations as JSON.';
-    } catch (error) {
-      formError.value = errorMessage(error);
-    }
-  }
-
-  async function runImport() {
-    const before = snapshot.value?.destinations.length ?? 0;
-    if (!(await save(importDestinations(importText.value)))) return;
-    const added = (snapshot.value?.destinations.length ?? 0) - before;
-    status.value = added > 0 ? `Imported. ${added} new destinations.` : 'Imported.';
-    importText.value = '';
-    importOpen.value = false;
-  }
-
-  function splitTriggers(value: string): string[] {
-    return value
-      .split(',')
-      .map((trigger) => trigger.trim())
-      .filter((trigger) => trigger.length > 0);
-  }
-
-  async function wipeHistory() {
-    if (await save(clearHistory())) status.value = 'History cleared.';
   }
 
   async function updates() {
@@ -702,74 +463,8 @@
     { seconds: 86400, label: 'Always' },
   ];
 
-  async function saveBehavior(partial: {
-    returnToMode?: boolean;
-    routeCmd?: string;
-    routeAlt?: string;
-  }) {
-    const current = snapshot.value;
-    if (!current) return;
-    await save(
-      saveOpenBehavior(
-        partial.returnToMode ?? current.returnToMode,
-        partial.routeCmd ?? current.routeCmd,
-        partial.routeAlt ?? current.routeAlt
-      )
-    );
-  }
-
-  const routeTargets = computed(() => {
-    const targets: { value: string; label: string }[] = [];
-    for (const destination of snapshot.value?.destinations ?? []) {
-      if (!destination.disabled) targets.push({ value: destination.id, label: destination.name });
-    }
-    for (const project of snapshot.value?.claude.projects ?? []) {
-      const name = project.alias || project.folder.split(/[\\/]/).pop();
-      targets.push({ value: `claude:${project.id}`, label: `Claude job in ${name}` });
-    }
-    return targets;
-  });
-
-  // Browser profiles bookmarks are read from; each can be left out.
-  const bookmarkProfiles = ref<BookmarkSource[] | null>(null);
-
-  async function loadBookmarkSources() {
-    try {
-      bookmarkProfiles.value = await bookmarkSources();
-    } catch {
-      bookmarkProfiles.value = [];
-    }
-  }
-
-  async function toggleBookmarkSource(id: string) {
-    if (!snapshot.value) return;
-    const disabled = snapshot.value.bookmarksDisabled ?? [];
-    const next = disabled.includes(id) ? disabled.filter((item) => item !== id) : [...disabled, id];
-    busy.value = true;
-    try {
-      apply(await saveBookmarkSources(next));
-      await loadBookmarkSources();
-    } catch (error) {
-      formError.value = errorMessage(error);
-    } finally {
-      busy.value = false;
-    }
-  }
-
   async function chooseTheme(id: string) {
     await save(saveTheme(id));
-  }
-
-  // The one AI the bar offers: the built-in one (named after its model) or a web AI.
-  const aiOptions = computed(() =>
-    (snapshot.value?.destinations ?? []).filter(
-      (destination) => !destination.disabled && isAiLike(destination)
-    )
-  );
-  const aiChosenId = computed(() => chosenAi(snapshot.value)?.id ?? '');
-
-  async function changeAiChoice(event: Event) {
-    await save(saveAiChoice((event.target as HTMLSelectElement).value));
   }
 
   async function toggleOnboardingEveryLaunch() {
@@ -795,10 +490,6 @@
     } catch (error) {
       formError.value = errorMessage(error);
     }
-  }
-
-  async function toggleNowPlaying() {
-    if (snapshot.value) await save(saveShowNowPlaying(!snapshot.value.showNowPlaying));
   }
 
   async function changeResume(event: Event) {
@@ -832,101 +523,10 @@
     }
   }
 
-  async function changeTerminal(event: Event) {
-    busy.value = true;
-    try {
-      const value = (event.target as HTMLSelectElement).value as 'auto' | 'console';
-      apply(await saveShellTerminal(value));
-      await loadShell();
-    } catch (error) {
-      formError.value = errorMessage(error);
-    } finally {
-      busy.value = false;
-    }
-  }
-
-  async function forgetCommands() {
-    await save(clearShellHistory());
-  }
-
-  async function loadCli() {
-    try {
-      cli.value = await claudeStatus();
-    } catch {
-      cli.value = null;
-    }
-  }
-
-  function saveClaude(next: ClaudeSettings) {
-    return save(saveClaudeSettings(next));
-  }
-
-  async function addProject() {
-    if (!snapshot.value || !newProjectFolder.value.trim()) return;
-    const claude = snapshot.value.claude;
-    const project: ClaudeProject = {
-      id: '',
-      folder: newProjectFolder.value.trim(),
-      alias: '',
-      profile: 'edit',
-      allow: [],
-      model: '',
-      effort: '',
-      note: '',
-    };
-    if (await saveClaude({ ...claude, projects: [...claude.projects, project] })) {
-      newProjectFolder.value = '';
-      status.value =
-        'Project added. Claude runs that folder’s own .claude hooks and .mcp.json servers without asking.';
-    }
-  }
-
-  async function chooseProjectFolder() {
-    const folder = await pickFolder().catch(() => null);
-    if (!folder) return;
-    newProjectFolder.value = folder;
-    await addProject();
-  }
-
   async function chooseRoot() {
     const folder = await pickFolder().catch(() => null);
     if (!folder || !snapshot.value) return;
     await saveFolders([...fileRoots.value, folder], snapshot.value.fileExcludes);
-  }
-
-  function updateProject(id: string, partial: Partial<ClaudeProject>) {
-    if (!snapshot.value) return;
-    const claude = snapshot.value.claude;
-    void saveClaude({
-      ...claude,
-      projects: claude.projects.map((project) =>
-        project.id === id ? { ...project, ...partial } : project
-      ),
-    });
-  }
-
-  function removeProject(id: string) {
-    if (!snapshot.value) return;
-    const claude = snapshot.value.claude;
-    void saveClaude({
-      ...claude,
-      projects: claude.projects.filter((project) => project.id !== id),
-    });
-  }
-
-  function saveClaudeLimits(partial: Partial<ClaudeSettings>) {
-    if (!snapshot.value) return;
-    void saveClaude({ ...snapshot.value.claude, ...partial });
-  }
-
-  /** A minutes field: an empty or out-of-range entry goes back to the saved value. */
-  function saveMinutes(key: 'timeoutMinutes' | 'approvalMinutes', event: Event) {
-    const input = event.target as HTMLInputElement;
-    if (input.value === '' || !input.validity.valid) {
-      input.value = String(snapshot.value?.claude[key] ?? '');
-      return;
-    }
-    saveClaudeLimits({ [key]: Math.round(input.valueAsNumber) });
   }
 
   async function saveNotesKey(shortcut: string) {
@@ -988,169 +588,31 @@
     await permissionRequest('accessibility').catch(() => undefined);
     open('permissions');
   }
-
-  async function loadAi() {
-    if (snapshot.value) aiDraft.value = { ...snapshot.value.ai };
-    try {
-      presets.value = await aiPresets();
-    } catch (error) {
-      formError.value = errorMessage(error);
-    }
-    void refreshKeyState();
-    void detectLocal();
-  }
-
-  async function detectLocal() {
-    aiLocal.value = null;
-    try {
-      aiLocal.value = await aiDetectLocal();
-    } catch {
-      aiLocal.value = [];
-    }
-  }
-
-  async function refreshKeyState() {
-    aiKeySaved.value = aiNeedsKey.value ? await aiHasKey(aiDraft.value.provider) : false;
-  }
-
-  async function saveAi() {
-    if (!(await save(saveAiSettings(aiDraft.value)))) return;
-    aiDraft.value = { ...(snapshot.value?.ai ?? aiDraft.value) };
-    aiMessage.value = 'Saved.';
-  }
-
-  async function loadChatgpt() {
-    chatgpt.value = await chatgptAccount().catch(() => null);
-  }
-
-  async function signInChatgpt() {
-    chatgptWaiting.value = true;
-    aiMessage.value = null;
-    try {
-      const first = chatgpt.value === null;
-      chatgpt.value = await chatgptSignIn();
-      aiDraft.value = { ...(snapshot.value?.ai ?? aiDraft.value) };
-      chatgptWelcome.value = first;
-    } catch (error) {
-      aiMessage.value = errorMessage(error);
-    } finally {
-      chatgptWaiting.value = false;
-    }
-  }
-
-  function cancelChatgpt() {
-    void chatgptCancelSignIn();
-    chatgptWaiting.value = false;
-  }
-
-  async function signOutChatgpt() {
-    try {
-      await chatgptSignOut();
-      aiMessage.value = 'Signed out of ChatGPT.';
-    } catch (error) {
-      aiMessage.value = errorMessage(error);
-    }
-    await loadChatgpt();
-  }
-
-  async function changeProvider(event: Event) {
-    const provider = (event.target as HTMLSelectElement).value;
-    aiDraft.value = { ...aiDraft.value, provider, model: '' };
-    aiModelList.value = [];
-    aiKey.value = '';
-    aiMessage.value = null;
-    // A custom server needs its URL before it can be saved.
-    if (provider !== 'custom' || aiDraft.value.baseUrl) await saveAi();
-    await refreshKeyState();
-  }
-
-  async function saveKey() {
-    busy.value = true;
-    try {
-      await aiSetKey(aiDraft.value.provider, aiKey.value);
-      aiKey.value = '';
-      aiKeySaved.value = true;
-      aiMessage.value = 'Key saved in your keychain.';
-    } catch (error) {
-      formError.value = errorMessage(error);
-    } finally {
-      busy.value = false;
-    }
-  }
-
-  async function removeKey() {
-    busy.value = true;
-    try {
-      await aiSetKey(aiDraft.value.provider, null);
-      aiKeySaved.value = false;
-      aiMessage.value = 'Key removed.';
-    } catch (error) {
-      formError.value = errorMessage(error);
-    } finally {
-      busy.value = false;
-    }
-  }
-
-  async function loadModels() {
-    aiMessage.value = 'Loading models…';
-    const provider = aiDraft.value.provider;
-    try {
-      const models = await aiModels(aiDraft.value);
-      // The provider changed while these loaded: they're the old one's.
-      if (aiDraft.value.provider !== provider) return;
-      aiModelList.value = models;
-      aiMessage.value = aiModelList.value.length
-        ? `${aiModelList.value.length} models. Pick one in the model box.`
-        : 'No models found.';
-    } catch (error) {
-      aiMessage.value = errorMessage(error);
-    }
-  }
-
-  function destinationName(id: string): string {
-    if (id === 'url') return 'Link';
-    return snapshot.value?.destinations.find((destination) => destination.id === id)?.name ?? id;
-  }
 </script>
 
 <template>
   <main ref="settingsEl" class="settings">
-    <aside class="settings-nav">
-      <input
-        ref="searchEl"
-        v-model="search"
-        class="settings-search"
-        type="search"
-        placeholder="Search settings"
-        spellcheck="false"
-        @keydown="onSearchKey"
-      />
-      <nav aria-label="Settings sections">
-        <button
-          v-for="section in SECTIONS"
-          :key="section.id"
-          type="button"
-          class="nav-item"
-          :class="{ active: !search && active === section.id }"
-          @click="open(section.id)"
-        >
-          <span class="nav-icon" aria-hidden="true">
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.7"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              v-html="GLYPHS[section.icon]"
-            />
-          </span>
-          {{ section.label }}
-        </button>
-      </nav>
-    </aside>
-
     <div ref="paneEl" class="settings-pane">
+      <div class="settings-top">
+        <button
+          v-if="!search && active !== 'general'"
+          type="button"
+          class="settings-back"
+          aria-label="Back to settings"
+          @click="open('general')"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true" v-html="GLYPHS.back" />
+        </button>
+        <input
+          ref="searchEl"
+          v-model="search"
+          class="settings-search"
+          type="search"
+          placeholder="Search settings"
+          spellcheck="false"
+          @keydown="onSearchKey"
+        />
+      </div>
       <p v-if="formError" class="notice">{{ formError }}</p>
       <p v-else-if="status" class="status">{{ status }}</p>
 
@@ -1173,7 +635,7 @@
       </section>
 
       <section v-if="snapshot" v-show="!search && active === 'general'" id="section-general">
-        <h2>General</h2>
+        <h2>Settings</h2>
         <div class="field" data-focus="summon">
           <span>Summon shortcut</span>
           <button
@@ -1183,79 +645,25 @@
             @click="listening = true"
             @blur="listening = false"
           >
-            {{ listening ? 'Press a shortcut' : formatShortcut(snapshot.summonShortcut) }}
+            <template v-if="listening">Press a shortcut</template>
+            <Keys v-else :keys="snapshot.summonShortcut" />
           </button>
         </div>
-        <label class="check" data-focus="startup">
-          <input
-            type="checkbox"
-            :checked="snapshot.launchAtStartup"
-            :disabled="busy"
-            @change="toggleStartup"
-          />
-          Launch at startup
-        </label>
-        <InstantStartup :snapshot="snapshot" @apply="apply" />
-        <label class="check">
-          <input
-            type="checkbox"
-            :checked="snapshot.steamGames"
-            :disabled="busy"
-            @change="toggleSteamGames"
-          />
-          Show installed Steam games with apps
-        </label>
-        <label class="field" data-focus="default">
-          <span>Default destination</span>
-          <select :value="snapshot.defaultDestinationId" :disabled="busy" @change="changeDefault">
-            <option
-              v-for="destination in snapshot.destinations.filter((item) => !item.disabled)"
-              :key="destination.id"
-              :value="destination.id"
-            >
-              {{ destination.name }}
-            </option>
-          </select>
-        </label>
+        <div class="field" data-focus="startup">
+          <span>Run at boot</span>
+          <BootChoice :snapshot="snapshot" @apply="apply" />
+        </div>
         <label class="field">
           <span>When Zephyr opens</span>
           <select
             :value="snapshot.returnToMode ? 'return' : 'search'"
             :disabled="busy"
             @change="
-              saveBehavior({
-                returnToMode: ($event.target as HTMLSelectElement).value === 'return',
-              })
+              save(saveOpenBehavior(($event.target as HTMLSelectElement).value === 'return'))
             "
           >
             <option value="return">Return to what I was doing</option>
             <option value="search">Always start at the search bar</option>
-          </select>
-        </label>
-        <label class="field">
-          <span>{{ isMac ? '⌘↵' : 'Ctrl+Enter' }} sends what you typed to</span>
-          <select
-            :value="snapshot.routeCmd"
-            :disabled="busy"
-            @change="saveBehavior({ routeCmd: ($event.target as HTMLSelectElement).value })"
-          >
-            <option value="">Ask AI (web search when AI is armed)</option>
-            <option v-for="target in routeTargets" :key="target.value" :value="target.value">
-              {{ target.label }}
-            </option>
-          </select>
-        </label>
-        <label class="field">
-          <span>{{ isMac ? '⌥↵' : 'Alt+Enter' }} sends what you typed to</span>
-          <select
-            :value="snapshot.routeAlt"
-            :disabled="busy"
-            @change="saveBehavior({ routeAlt: ($event.target as HTMLSelectElement).value })"
-          >
-            <option value="">A Claude job in the last project used</option>
-            <option v-for="target in routeTargets" :key="target.value" :value="target.value">
-              {{ target.label }}
-            </option>
           </select>
         </label>
         <label class="field">
@@ -1266,24 +674,6 @@
             </option>
           </select>
         </label>
-        <div class="field" data-focus="updates">
-          <span>Zephyr {{ appVersion || '…' }}{{ isDev ? ' (dev build)' : '' }}</span>
-          <button type="button" @click="updates">Check for updates</button>
-          <button v-if="isDev" type="button" @click="rehearse">Rehearse an update (dev)</button>
-          <span v-if="updateMessage" class="hint-text">{{ updateMessage }}</span>
-        </div>
-        <div class="field inline">
-          <button type="button" @click="openOnboarding">Run setup again</button>
-        </div>
-        <label v-if="isDev" class="check">
-          <input
-            type="checkbox"
-            :checked="snapshot.onboardingEveryLaunch"
-            :disabled="busy"
-            @change="toggleOnboardingEveryLaunch"
-          />
-          Show setup on every launch (dev)
-        </label>
         <label class="check">
           <input
             type="checkbox"
@@ -1293,6 +683,71 @@
           />
           Show CPU, memory, disk and network at the bottom of the bar
         </label>
+        <WeatherPlaceField :snapshot="snapshot" @apply="apply" />
+        <label v-if="shell?.available.length" class="field" data-focus="shell">
+          <span>Run commands with</span>
+          <select :value="shell.program" :disabled="busy" @change="changeShell">
+            <option
+              v-for="item in SHELLS.filter((entry) => shell?.available.includes(entry.id))"
+              :key="item.id"
+              :value="item.id"
+            >
+              {{ item.label }}
+            </option>
+          </select>
+        </label>
+        <div class="field" data-focus="theme">
+          <span>Theme</span>
+          <div class="themes compact" role="radiogroup" aria-label="Theme">
+            <button
+              v-for="theme in THEMES"
+              :key="theme.id"
+              type="button"
+              class="theme"
+              role="radio"
+              :aria-checked="snapshot.theme === theme.id"
+              :class="{ chosen: snapshot.theme === theme.id }"
+              :disabled="busy"
+              @click="chooseTheme(theme.id)"
+            >
+              <span class="theme-swatch" :style="{ background: theme.tint }" aria-hidden="true">
+                <span class="theme-row" />
+                <span class="theme-row selected" :style="{ background: `${theme.accent}26` }" />
+                <span class="theme-row" />
+                <span class="theme-dot" :style="{ background: theme.accent }" />
+              </span>
+              {{ theme.name }}
+            </button>
+          </div>
+        </div>
+        <div class="field inline">
+          <button type="button" @click="openOnboarding">Run setup again</button>
+        </div>
+        <nav class="settings-tiles" aria-label="More settings">
+          <button
+            v-for="page in PAGES"
+            :key="page.id"
+            type="button"
+            class="settings-tile"
+            @click="open(page.id)"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true" v-html="GLYPHS[page.icon]" />
+            <span>{{ page.label }}</span>
+          </button>
+        </nav>
+      </section>
+
+      <section v-if="snapshot" v-show="!search && active === 'about'" id="section-about">
+        <h2>About</h2>
+        <div class="field" data-focus="updates">
+          <span>Zephyr {{ appVersion || '…' }}{{ isDev ? ' (dev build)' : '' }}</span>
+          <button type="button" @click="updates">Check for updates</button>
+          <span v-if="updateMessage" class="hint-text">{{ updateMessage }}</span>
+        </div>
+      </section>
+
+      <section v-if="snapshot" v-show="!search && active === 'dev'" id="section-dev">
+        <h2>Dev</h2>
         <h3>Bug reports</h3>
         <label class="check">
           <input
@@ -1301,213 +756,28 @@
             :disabled="busy"
             @change="toggleBugCapture"
           />
-          {{ isMac ? '⌃⌥R' : 'Ctrl+Alt+R' }} records the bar, {{ isMac ? '⌃⌥S' : 'Ctrl+Alt+S' }}
-          takes a snapshot
+          {{ isMac ? '⌃R' : 'Ctrl+R' }} records and {{ isMac ? '⌃⇧S' : 'Ctrl+Shift+S' }} snapshots
+          the Zephyr window in front
         </label>
         <div class="field inline">
-          <span class="hint-text">Only Zephyr's bar is captured, never other apps.</span>
+          <span class="hint-text">Only Zephyr's windows are captured, never other apps.</span>
           <button type="button" @click="showCaptures">Show captures</button>
         </div>
-      </section>
-
-      <section v-if="snapshot" v-show="!search && active === 'appearance'" id="section-appearance">
-        <h2>Appearance</h2>
-        <p class="lede">
-          The color every Zephyr window is tinted with, over the blur of what's behind it.
-        </p>
-        <div class="themes" role="radiogroup" aria-label="Theme">
-          <button
-            v-for="theme in THEMES"
-            :key="theme.id"
-            type="button"
-            class="theme"
-            role="radio"
-            :aria-checked="snapshot.theme === theme.id"
-            :class="{ chosen: snapshot.theme === theme.id }"
-            :disabled="busy"
-            @click="chooseTheme(theme.id)"
-          >
-            <span class="theme-swatch" :style="{ background: theme.tint }" aria-hidden="true">
-              <span class="theme-row" />
-              <span class="theme-row selected" :style="{ background: `${theme.accent}26` }" />
-              <span class="theme-row" />
-              <span class="theme-dot" :style="{ background: theme.accent }" />
-            </span>
-            {{ theme.name }}
-          </button>
-        </div>
-      </section>
-
-      <section v-if="snapshot" v-show="!search && active === 'bookmarks'" id="section-bookmarks">
-        <h2>Bookmarks</h2>
-        <p class="lede">
-          Bookmarks from your browsers show in the bar, read-only. Type a bookmark's exact name
-          (like "music") and Enter opens it; other matches show below without taking Enter. Type
-          "bookmarks" in the bar to search only bookmarks.
-        </p>
-        <p v-if="!bookmarkProfiles" class="hint-text">Looking for browsers…</p>
-        <p v-else-if="!bookmarkProfiles.length" class="hint-text">
-          No Chrome, Edge, Brave, Vivaldi or Arc bookmarks were found.
-        </p>
-        <label v-for="profile in bookmarkProfiles ?? []" :key="profile.id" class="check">
-          <input
-            type="checkbox"
-            :checked="profile.enabled"
-            :disabled="busy"
-            @change="toggleBookmarkSource(profile.id)"
-          />
-          {{ profile.label }}
-          <span class="hint-text">{{ profile.count }} bookmarks</span>
-        </label>
-      </section>
-
-      <section v-if="snapshot" v-show="!search && active === 'nowplaying'" id="section-nowplaying">
-        <h2>Now playing</h2>
-        <p class="lede">
-          While music or a video plays, in any app or browser tab, the bar's footer shows it with a
-          play/pause button, and stays a couple of minutes after you pause. Click the title to
-          switch to what's playing. In the bar, Ctrl+Space plays or pauses, and with nothing typed,
-          Ctrl+Shift+→ and Ctrl+Shift+← skip ahead and back.
-        </p>
-        <label class="check">
-          <input
-            type="checkbox"
-            :checked="snapshot.showNowPlaying"
-            :disabled="busy"
-            @change="toggleNowPlaying"
-          />
-          Show now playing in the bar
-        </label>
-      </section>
-
-      <section v-if="snapshot" v-show="!search && active === 'ai'" id="section-ai">
-        <h2>AI</h2>
-        <label class="field">
-          <span>AI in the bar</span>
-          <select :value="aiChosenId" :disabled="busy" @change="changeAiChoice">
-            <option v-for="option in aiOptions" :key="option.id" :value="option.id">
-              {{
-                option.kind === 'ai'
-                  ? `${askAiName(snapshot)}, answered in Zephyr`
-                  : `${option.name}, opens in your browser`
-              }}
-            </option>
-          </select>
-        </label>
-        <p class="hint-text">
-          Search with, Tab and {{ isMac ? '⌘↵' : 'Ctrl+Enter' }} use this one; other AIs stay in
-          {{ isMac ? '⌘K' : 'Ctrl+K' }}. Zephyr's own uses the provider and model below.
-        </p>
-        <label class="field">
-          <span>Provider</span>
-          <select :value="aiDraft.provider" :disabled="busy" @change="changeProvider">
-            <option value="auto">Automatic: a local model if one is running</option>
-            <option value="chatgpt">ChatGPT, on your ChatGPT plan</option>
-            <option v-for="preset in presets" :key="preset.id" :value="preset.id">
-              {{ preset.name }}{{ preset.local ? ' (local)' : '' }}
-            </option>
-            <option value="custom">Custom server</option>
-          </select>
-        </label>
-        <div v-if="aiShowsLocal" class="field inline">
-          <span class="hint-text">{{ localSummary }}</span>
-          <button type="button" @click="detectLocal">Check again</button>
-        </div>
-        <template v-if="aiDraft.provider === 'custom'">
-          <label class="field">
-            <span>Base URL</span>
+        <template v-if="isDev">
+          <h3>Dev build</h3>
+          <label class="check">
             <input
-              v-model="aiDraft.baseUrl"
-              type="url"
-              placeholder="http://localhost:8080/v1"
-              @change="saveAi"
+              type="checkbox"
+              :checked="snapshot.onboardingEveryLaunch"
+              :disabled="busy"
+              @change="toggleOnboardingEveryLaunch"
             />
+            Show setup on every launch
           </label>
-          <label class="field">
-            <span>API format</span>
-            <select v-model="aiDraft.api" @change="saveAi">
-              <option value="openai">OpenAI-compatible</option>
-              <option value="anthropic">Anthropic</option>
-            </select>
-          </label>
-        </template>
-        <template v-if="aiDraft.provider === 'chatgpt'">
-          <div v-if="chatgptWelcome" class="chatgpt-welcome">
-            <strong>You're using your ChatGPT plan</strong>
-            <span class="hint-text">
-              Questions you ask Zephyr's AI count toward your ChatGPT plan. You can see and limit
-              that in ChatGPT's settings.
-            </span>
-            <button type="button" @click="chatgptWelcome = false">Got it</button>
+          <div class="field inline">
+            <button type="button" @click="rehearse">Rehearse an update</button>
           </div>
-          <template v-if="chatgpt && chatgpt.plan">
-            <p class="hint-text">
-              Signed in as {{ chatgpt.name || chatgpt.email
-              }}{{ chatgpt.name && chatgpt.email ? ` (${chatgpt.email})` : '' }}. Using your ChatGPT
-              plan; <a href="#" @click.prevent="openUrl(USAGE_URL)">manage usage</a>. These chats
-              don't appear in your ChatGPT history.
-            </p>
-            <div class="field inline">
-              <button type="button" :disabled="busy" @click="signOutChatgpt">Sign out</button>
-            </div>
-          </template>
-          <template v-else>
-            <p class="hint-text">
-              {{
-                chatgpt && !chatgpt.plan
-                  ? `Signed in as ${chatgpt.email}, but sharing your plan with Zephyr wasn't allowed. Continue again and allow it.`
-                  : 'Answer with your ChatGPT Plus or Pro plan instead of an API key. Free plans can’t be shared.'
-              }}
-            </p>
-            <div class="field inline">
-              <button
-                v-if="!chatgptWaiting"
-                type="button"
-                class="chatgpt-button"
-                @click="signInChatgpt"
-              >
-                Continue with ChatGPT
-              </button>
-              <template v-else>
-                <span class="hint-text">Finish signing in in your browser…</span>
-                <button type="button" @click="cancelChatgpt">Cancel</button>
-              </template>
-            </div>
-          </template>
         </template>
-        <template v-if="aiNeedsKey">
-          <h3>API key</h3>
-          <form class="field inline" data-focus="key" @submit.prevent="saveKey">
-            <input
-              v-model="aiKey"
-              type="password"
-              autocomplete="off"
-              :placeholder="aiKeySaved ? 'Saved in your keychain' : `${aiProviderName} API key`"
-            />
-            <button type="submit" :disabled="busy || !aiKey.trim()">Save key</button>
-            <button v-if="aiKeySaved" type="button" :disabled="busy" @click="removeKey">
-              Remove key
-            </button>
-          </form>
-        </template>
-        <template v-if="aiDraft.provider !== 'auto'">
-          <h3>Model</h3>
-          <form class="field inline" @submit.prevent="saveAi">
-            <input
-              v-model="aiDraft.model"
-              type="text"
-              list="ai-models"
-              spellcheck="false"
-              :placeholder="modelPlaceholder"
-            />
-            <datalist id="ai-models">
-              <option v-for="model in aiModelList" :key="model" :value="model" />
-            </datalist>
-            <button type="button" :disabled="busy" @click="loadModels">Load models</button>
-            <button type="submit" :disabled="busy">Save model</button>
-          </form>
-        </template>
-        <p v-if="aiMessage" class="hint-text">{{ aiMessage }}</p>
       </section>
 
       <section v-if="snapshot" v-show="!search && active === 'clipboard'" id="section-clipboard">
@@ -1530,13 +800,9 @@
             @click="clipListening = true"
             @blur="clipListening = false"
           >
-            {{
-              clipListening
-                ? 'Press a shortcut'
-                : snapshot.clipboard.shortcut
-                  ? formatShortcut(snapshot.clipboard.shortcut)
-                  : 'None'
-            }}
+            <template v-if="clipListening">Press a shortcut</template>
+            <template v-else-if="!snapshot.clipboard.shortcut">None</template>
+            <Keys v-else :keys="snapshot.clipboard.shortcut" />
           </button>
         </div>
         <label class="field">
@@ -1606,13 +872,9 @@
             @click="notesListening = true"
             @blur="notesListening = false"
           >
-            {{
-              notesListening
-                ? 'Press a shortcut, or Backspace for none'
-                : snapshot.notesShortcut
-                  ? formatShortcut(snapshot.notesShortcut)
-                  : 'None'
-            }}
+            <template v-if="notesListening">Press a shortcut, or Backspace for none</template>
+            <template v-else-if="!snapshot.notesShortcut">None</template>
+            <Keys v-else :keys="snapshot.notesShortcut" />
           </button>
         </div>
         <div class="field inline">
@@ -1639,390 +901,6 @@
         v-show="!search && active === 'permissions'"
         :active="!search && active === 'permissions'"
       />
-
-      <section v-if="snapshot" v-show="!search && active === 'claude'" id="section-claude">
-        <h2>Claude</h2>
-        <div class="field inline">
-          <span class="hint-text">
-            <template v-if="!cli">Checking for the claude command…</template>
-            <template v-else-if="!cli.path">
-              claude command not found. Set its path below.
-            </template>
-            <template v-else>
-              {{ cli.version ?? 'claude' }} ·
-              {{
-                cli.loggedIn
-                  ? `signed in (${cli.authMethod ?? 'account'})`
-                  : 'not signed in: run "claude auth login" in a terminal'
-              }}
-            </template>
-          </span>
-          <button type="button" @click="loadCli">Check again</button>
-        </div>
-        <label class="field">
-          <span>claude command path</span>
-          <input
-            :value="snapshot.claude.binary"
-            type="text"
-            spellcheck="false"
-            :placeholder="cli?.path ?? '~/.local/bin/claude'"
-            @change="
-              saveClaudeLimits({ binary: ($event.target as HTMLInputElement).value });
-              loadCli();
-            "
-          />
-        </label>
-
-        <h3>Projects</h3>
-        <article
-          v-for="(project, index) in snapshot.claude.projects"
-          :key="project.id"
-          class="destination"
-        >
-          <div class="destination-row">
-            <div>
-              <strong>{{ project.alias || project.folder.split('/').pop() }}</strong>
-              <span class="hint-text">{{ project.folder }}</span>
-              <span v-if="index < 8" class="badge">Ctrl+{{ index + 1 }}</span>
-            </div>
-            <div class="row-actions">
-              <button type="button" :disabled="busy" @click="removeProject(project.id)">
-                Remove
-              </button>
-            </div>
-          </div>
-          <div class="editor">
-            <label class="field">
-              <span>Alias</span>
-              <input
-                :value="project.alias"
-                type="text"
-                placeholder="e.g. zephyr"
-                @change="
-                  updateProject(project.id, { alias: ($event.target as HTMLInputElement).value })
-                "
-              />
-            </label>
-            <label class="field">
-              <span>Permissions</span>
-              <select
-                :value="project.profile"
-                @change="
-                  updateProject(project.id, {
-                    profile: ($event.target as HTMLSelectElement).value as ClaudeProject['profile'],
-                  })
-                "
-              >
-                <option value="edit">Edit files here; other commands ask</option>
-                <option value="auto">Auto: Claude Code decides</option>
-                <option value="plan">Plan only</option>
-              </select>
-            </label>
-            <label class="field">
-              <span>Note for every task</span>
-              <textarea
-                class="import-box"
-                rows="2"
-                :value="project.note"
-                placeholder="e.g. Run the tests before finishing. Use tabs."
-                @change="
-                  updateProject(project.id, { note: ($event.target as HTMLTextAreaElement).value })
-                "
-              />
-            </label>
-            <template v-if="project.allow.length">
-              <span class="hint-text">Always allowed here</span>
-              <ul class="folders">
-                <li v-for="rule in project.allow" :key="rule">
-                  <span class="path">{{ rule }}</span>
-                  <button
-                    type="button"
-                    :disabled="busy"
-                    @click="
-                      updateProject(project.id, {
-                        allow: project.allow.filter((item) => item !== rule),
-                      })
-                    "
-                  >
-                    Remove
-                  </button>
-                </li>
-              </ul>
-            </template>
-          </div>
-        </article>
-        <form class="field inline" @submit.prevent="addProject">
-          <input
-            v-model="newProjectFolder"
-            type="text"
-            placeholder="Project folder, e.g. ~/code/zephyr"
-          />
-          <button type="submit" :disabled="busy || !newProjectFolder.trim()">Add project</button>
-          <button type="button" :disabled="busy" @click="chooseProjectFolder">
-            Choose folder…
-          </button>
-        </form>
-        <p class="lede">
-          Commit and push always ask. Reset, force-push and rm -rf are always blocked.
-        </p>
-
-        <h3>Limits</h3>
-        <label class="field">
-          <span>Task time limit (minutes)</span>
-          <input
-            :value="snapshot.claude.timeoutMinutes"
-            type="number"
-            min="1"
-            max="600"
-            @change="saveMinutes('timeoutMinutes', $event)"
-          />
-        </label>
-        <label class="field">
-          <span>Permission timeout (minutes)</span>
-          <input
-            :value="snapshot.claude.approvalMinutes"
-            type="number"
-            min="1"
-            max="120"
-            @change="saveMinutes('approvalMinutes', $event)"
-          />
-        </label>
-        <label class="check">
-          <input
-            type="checkbox"
-            :checked="snapshot.claude.notifications"
-            :disabled="busy"
-            @change="saveClaudeLimits({ notifications: !snapshot.claude.notifications })"
-          />
-          Notifications
-        </label>
-      </section>
-
-      <section v-if="snapshot" v-show="!search && active === 'shell'" id="section-shell">
-        <h2>Shell</h2>
-        <p class="lede">
-          Type &gt; in the bar, or pick Shell, to run a command there. Ctrl+Enter opens it in a
-          terminal instead, for commands that ask for input.
-        </p>
-        <label v-if="shell?.hasWindowsTerminal" class="field">
-          <span>Ctrl+Enter opens commands in</span>
-          <select :value="snapshot.shell.terminal" :disabled="busy" @change="changeTerminal">
-            <option value="auto">Windows Terminal (a new tab)</option>
-            <option value="console">A console window</option>
-          </select>
-        </label>
-        <label v-if="shell?.available.length" class="field">
-          <span>Run commands with</span>
-          <select :value="snapshot.shell.program" :disabled="busy" @change="changeShell">
-            <option value="auto">Automatic (Git Bash if installed, otherwise PowerShell)</option>
-            <option
-              v-for="item in SHELLS.filter((entry) => shell?.available.includes(entry.id))"
-              :key="item.id"
-              :value="item.id"
-            >
-              {{ item.label }}
-            </option>
-          </select>
-        </label>
-        <p class="hint-text">
-          <template v-if="shell?.using">Commands run in {{ shell.using }}.</template>
-          <template v-else>No shell was found.</template>
-        </p>
-        <div class="field inline">
-          <span class="hint-text">{{ snapshot.shell.history.length }} recent commands saved</span>
-          <button
-            type="button"
-            :disabled="busy || !snapshot.shell.history.length"
-            @click="forgetCommands"
-          >
-            Forget recent commands
-          </button>
-        </div>
-      </section>
-
-      <section
-        v-if="snapshot"
-        v-show="!search && active === 'destinations'"
-        id="section-destinations"
-      >
-        <h2>Destinations</h2>
-        <p class="lede">
-          Pinned destinations get Ctrl+1–8. Templates take <code>{query}</code>,
-          <code>{clipboard}</code>, <code>{date}</code> and <code>{argument}</code>.
-        </p>
-        <article
-          v-for="(destination, index) in snapshot.destinations"
-          :key="destination.id"
-          class="destination"
-        >
-          <div class="destination-row">
-            <div>
-              <strong>{{ destination.name }}</strong>
-              <span v-if="destination.builtin" class="badge">Built-in</span>
-            </div>
-            <div class="row-actions">
-              <button
-                type="button"
-                :disabled="busy || index === 0"
-                @click="move(destination.id, -1)"
-              >
-                Up
-              </button>
-              <button
-                type="button"
-                :disabled="busy || index === snapshot.destinations.length - 1"
-                @click="move(destination.id, 1)"
-              >
-                Down
-              </button>
-              <button
-                type="button"
-                :disabled="busy"
-                @click="patch(destination, { pinned: !destination.pinned })"
-              >
-                {{ destination.pinned ? 'Unpin' : 'Pin' }}
-              </button>
-              <button
-                type="button"
-                :disabled="busy"
-                @click="patch(destination, { disabled: !destination.disabled })"
-              >
-                {{ destination.disabled ? 'Turn on' : 'Turn off' }}
-              </button>
-              <button type="button" @click="startEdit(destination)">Edit</button>
-              <button
-                v-if="!destination.builtin"
-                type="button"
-                :disabled="busy"
-                @click="remove(destination.id)"
-              >
-                Delete
-              </button>
-            </div>
-          </div>
-
-          <form
-            v-if="editingId === destination.id"
-            class="editor"
-            @submit.prevent="saveDraft(destination)"
-          >
-            <label class="field">
-              <span>Name</span>
-              <input v-model="draft.name" type="text" maxlength="40" required />
-            </label>
-            <label class="field">
-              <span>Triggers</span>
-              <input v-model="draft.triggersText" type="text" placeholder="wiki, w" required />
-            </label>
-            <label v-if="destination.kind !== 'ai'" class="field">
-              <span>Template</span>
-              <input v-model="draft.urlTemplate" type="text" spellcheck="false" required />
-            </label>
-            <label v-if="destination.kind !== 'ai'" class="field">
-              <span>Suggestions</span>
-              <select v-model="draft.suggest">
-                <option v-for="item in SUGGESTERS" :key="item.id" :value="item.id">
-                  {{ item.label }}
-                </option>
-              </select>
-            </label>
-            <template v-if="draft.suggest === 'custom'">
-              <label class="field">
-                <span>Suggestion URL</span>
-                <input
-                  v-model="draft.suggestUrl"
-                  type="text"
-                  spellcheck="false"
-                  placeholder="https://example.com/complete?q={query}"
-                  required
-                />
-              </label>
-              <label class="field">
-                <span>JSON path</span>
-                <input
-                  v-model="draft.suggestPath"
-                  type="text"
-                  spellcheck="false"
-                  placeholder="1, or items.*.title"
-                />
-              </label>
-            </template>
-            <div class="row-actions">
-              <button class="primary" type="submit" :disabled="busy">Save</button>
-              <button type="button" @click="editingId = null">Cancel</button>
-            </div>
-          </form>
-        </article>
-
-        <form class="editor add" @submit.prevent="addDestination">
-          <h3>Add a destination</h3>
-          <label class="field">
-            <span>Name</span>
-            <input v-model="added.name" type="text" maxlength="40" required />
-          </label>
-          <label class="field">
-            <span>Triggers</span>
-            <input v-model="added.triggersText" type="text" placeholder="arxiv" required />
-          </label>
-          <label class="field">
-            <span>Template</span>
-            <input v-model="added.urlTemplate" type="text" spellcheck="false" required />
-          </label>
-          <label class="field">
-            <span>Suggestions</span>
-            <select v-model="added.suggest">
-              <option v-for="item in SUGGESTERS" :key="item.id" :value="item.id">
-                {{ item.label }}
-              </option>
-            </select>
-          </label>
-          <template v-if="added.suggest === 'custom'">
-            <label class="field">
-              <span>Suggestion URL</span>
-              <input
-                v-model="added.suggestUrl"
-                type="text"
-                spellcheck="false"
-                placeholder="https://example.com/complete?q={query}"
-                required
-              />
-            </label>
-            <label class="field">
-              <span>JSON path</span>
-              <input
-                v-model="added.suggestPath"
-                type="text"
-                spellcheck="false"
-                placeholder="1, or items.*.title"
-              />
-            </label>
-          </template>
-          <button class="primary" type="submit" :disabled="busy">Add destination</button>
-        </form>
-
-        <div class="field inline">
-          <button type="button" @click="copyDestinations">Copy all as JSON</button>
-          <button type="button" @click="importOpen = !importOpen">Import JSON…</button>
-        </div>
-        <form v-if="importOpen" class="editor" @submit.prevent="runImport">
-          <label class="field">
-            <span>Paste exported destinations</span>
-            <textarea
-              v-model="importText"
-              class="import-box"
-              rows="6"
-              spellcheck="false"
-              placeholder='[{"name": "Arxiv", "triggers": ["arxiv"], "urlTemplate": "https://arxiv.org/a/{query}"}]'
-            />
-          </label>
-          <div class="row-actions">
-            <button class="primary" type="submit" :disabled="busy || !importText.trim()">
-              Import
-            </button>
-            <button type="button" @click="importOpen = false">Cancel</button>
-          </div>
-        </form>
-      </section>
 
       <section v-if="snapshot" v-show="!search && active === 'files'" id="section-files">
         <h2>Files</h2>
@@ -2067,26 +945,6 @@
             Rebuild index
           </button>
         </div>
-      </section>
-
-      <section v-if="snapshot" v-show="!search && active === 'history'" id="section-history">
-        <h2>History</h2>
-        <ul v-if="historyPreview.length" class="history">
-          <li v-for="entry in historyPreview" :key="`${entry.destinationId}-${entry.query}`">
-            <span>{{ entry.query }}</span>
-            <span class="hint-text"
-              >{{ destinationName(entry.destinationId) }} · {{ entry.uses }}</span
-            >
-          </li>
-        </ul>
-        <p v-else class="lede">No searches yet.</p>
-        <button
-          type="button"
-          :disabled="busy || snapshot.history.length === 0"
-          @click="wipeHistory"
-        >
-          Clear history
-        </button>
       </section>
     </div>
     <SelectMenu :root="settingsEl" />

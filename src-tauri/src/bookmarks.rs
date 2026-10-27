@@ -4,11 +4,10 @@
 //! they change, and bookmarks are deduplicated by URL.
 
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 
-use serde::Serialize;
 use serde_json::Value;
 
 use crate::apps::{self, Strength};
@@ -29,49 +28,23 @@ pub struct Bookmark {
     pub source: String,
 }
 
-/// A browser profile bookmarks were found in, for Settings.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Source {
-    /// `chrome/Default`.
-    pub id: String,
-    /// "Chrome · Zach".
-    pub label: String,
-    pub count: usize,
-    pub enabled: bool,
-}
-
 struct Profile {
+    /// `chrome/Default`.
     id: String,
-    label: String,
     files: Vec<PathBuf>,
 }
 
+/// Every profile's bookmarks, always: there's nothing to turn off.
 #[derive(Default)]
 struct Index {
     checked: Option<Instant>,
     stamps: Vec<(PathBuf, Option<SystemTime>)>,
-    disabled: Vec<String>,
     bookmarks: Vec<Bookmark>,
-    sources: Vec<Source>,
 }
 
 fn index() -> &'static Mutex<Index> {
     static INDEX: OnceLock<Mutex<Index>> = OnceLock::new();
     INDEX.get_or_init(Default::default)
-}
-
-/// Which profiles to leave out (Settings > Bookmarks), by source id.
-pub fn configure(disabled: &[String]) {
-    if let Ok(mut index) = index().lock() {
-        // The files haven't changed, so forget their stamps to make the next refresh rebuild
-        // the list without (or with) these profiles.
-        if index.disabled != disabled {
-            index.stamps.clear();
-        }
-        index.disabled = disabled.to_vec();
-        index.checked = None;
-    }
 }
 
 /// The browsers that keep Chromium-style profiles, and where.
@@ -117,14 +90,13 @@ fn browser_roots() -> Vec<(&'static str, &'static str, PathBuf)> {
     roots
 }
 
-/// Every profile with a bookmarks file, named the way the browser names it.
+/// Every profile with a bookmarks file.
 fn profiles() -> Vec<Profile> {
     let mut found = Vec::new();
-    for (browser, browser_name, root) in browser_roots() {
+    for (browser, _, root) in browser_roots() {
         let Ok(entries) = std::fs::read_dir(&root) else {
             continue;
         };
-        let names = profile_names(&root);
         let mut dirs: Vec<PathBuf> = entries
             .flatten()
             .map(|entry| entry.path())
@@ -144,40 +116,13 @@ fn profiles() -> Vec<Profile> {
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            let person = names
-                .iter()
-                .find(|(key, _)| *key == folder)
-                .map(|(_, name)| name.clone())
-                .unwrap_or_else(|| folder.clone());
             found.push(Profile {
                 id: format!("{browser}/{folder}"),
-                label: format!("{browser_name} · {person}"),
                 files,
             });
         }
     }
     found
-}
-
-/// Profile folder → display name, from the browser's `Local State`.
-fn profile_names(root: &Path) -> Vec<(String, String)> {
-    let Ok(text) = std::fs::read_to_string(root.join("Local State")) else {
-        return Vec::new();
-    };
-    let Ok(state) = serde_json::from_str::<Value>(&text) else {
-        return Vec::new();
-    };
-    state["profile"]["info_cache"]
-        .as_object()
-        .map(|cache| {
-            cache
-                .iter()
-                .filter_map(|(folder, info)| {
-                    Some((folder.clone(), info["name"].as_str()?.to_string()))
-                })
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 /// The bookmarks in one Chromium `Bookmarks` file.
@@ -254,48 +199,25 @@ fn refresh(index: &mut Index) {
             )
         })
         .collect();
-    if stamps == index.stamps && !index.sources.is_empty() {
-        for source in &mut index.sources {
-            source.enabled = !index.disabled.contains(&source.id);
-        }
+    if stamps == index.stamps {
         return;
     }
     index.stamps = stamps;
     let mut bookmarks = Vec::new();
-    let mut sources = Vec::new();
     let mut seen = HashSet::new();
     for profile in profiles {
-        let mut count = 0;
-        let enabled = !index.disabled.contains(&profile.id);
         for file in &profile.files {
             let Ok(text) = std::fs::read_to_string(file) else {
                 continue;
             };
             for bookmark in parse(&text, &profile.id) {
-                count += 1;
-                if enabled && seen.insert(bookmark.url.clone()) {
+                if seen.insert(bookmark.url.clone()) {
                     bookmarks.push(bookmark);
                 }
             }
         }
-        sources.push(Source {
-            id: profile.id,
-            label: profile.label,
-            count,
-            enabled,
-        });
     }
     index.bookmarks = bookmarks;
-    index.sources = sources;
-}
-
-pub fn sources() -> Vec<Source> {
-    let Ok(mut index) = index().lock() else {
-        return Vec::new();
-    };
-    index.checked = None;
-    refresh(&mut index);
-    index.sources.clone()
 }
 
 /// The bookmark titled exactly `query` (any case), which Enter may open like an app.
@@ -430,7 +352,7 @@ mod machine {
                 .filter_map(|file| std::fs::read_to_string(file).ok())
                 .map(|text| parse(&text, &profile.id).len())
                 .sum();
-            println!("{} ({}): {count}", profile.label, profile.id);
+            println!("{}: {count}", profile.id);
         }
     }
 }

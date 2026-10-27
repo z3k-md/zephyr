@@ -1,9 +1,7 @@
 //! `zephyr://` links, for scripts, shortcuts and other apps.
 //!
 //! - `zephyr://open?q=text` shows the bar with `text` typed in.
-//! - `zephyr://dispatch?d=pubmed&q=text` sends `text` to a destination (by id or trigger);
-//!   without `d` it does what Enter would.
-//! - `zephyr://ask?q=question` asks AI.
+//! - `zephyr://search?q=text` does what Enter would with `text`.
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
@@ -13,7 +11,6 @@ use url::Url;
 #[serde(rename_all = "camelCase")]
 pub struct BarInput {
     pub query: String,
-    pub destination: Option<String>,
     pub run: bool,
 }
 
@@ -40,20 +37,10 @@ pub fn parse(url: &Url) -> Option<BarInput> {
         })
         .unwrap_or_else(|| "open".into());
     match action.as_str() {
-        "open" | "show" => Some(BarInput {
-            query,
-            destination: None,
-            run: false,
-        }),
-        "dispatch" | "search" => Some(BarInput {
+        "open" | "show" => Some(BarInput { query, run: false }),
+        "search" | "dispatch" => Some(BarInput {
             run: !query.is_empty(),
             query,
-            destination: param("d"),
-        }),
-        "ask" => Some(BarInput {
-            run: !query.is_empty(),
-            query,
-            destination: Some("ai".into()),
         }),
         _ => None,
     }
@@ -84,21 +71,15 @@ mod tests {
             input("zephyr://open?q=hello%20there"),
             Some(BarInput {
                 query: "hello there".into(),
-                destination: None,
                 run: false
             })
         );
         assert_eq!(
-            input("zephyr://dispatch?d=pubmed&q=crispr"),
+            input("zephyr://search?q=crispr"),
             Some(BarInput {
                 query: "crispr".into(),
-                destination: Some("pubmed".into()),
                 run: true
             })
-        );
-        assert_eq!(
-            input("zephyr://ask?q=why%3F").map(|input| input.destination),
-            Some(Some("ai".into()))
         );
         assert_eq!(input("zephyr://").map(|input| input.run), Some(false));
         assert_eq!(input("zephyr://delete?q=x"), None);

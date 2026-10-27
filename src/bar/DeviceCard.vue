@@ -1,7 +1,7 @@
 <script setup lang="ts">
   import type { SyncPending } from '../types';
   import { PLATFORM_NAMES } from '../format';
-  import { MOD_KEY as mod } from '../keys';
+  import Keys from '../components/Keys.vue';
 
   defineProps<{ device: SyncPending }>();
   defineEmits<{ answer: ['allow' | 'deny'] }>();
@@ -20,10 +20,10 @@
     <p class="approval-words">Check it shows: {{ device.words }}</p>
     <div class="approval-actions">
       <button type="button" class="primary" @mousedown.prevent @click="$emit('answer', 'allow')">
-        Allow <kbd>{{ mod }}Y</kbd>
+        Allow <Keys keys="mod+y" small />
       </button>
       <button type="button" @mousedown.prevent @click="$emit('answer', 'deny')">
-        Deny <kbd>{{ mod }}N</kbd>
+        Deny <Keys keys="mod+n" small />
       </button>
     </div>
   </section>

@@ -6,12 +6,22 @@ pub const HISTORY_LIMIT: usize = 200;
 #[serde(rename_all = "camelCase")]
 pub struct HistoryEntry {
     pub query: String,
+    /// `google` for a search, `url` for a link. Named for when searches went to several
+    /// sites, and kept so older builds sharing the settings file still read it.
     pub destination_id: String,
     pub uses: u32,
     pub last_used: i64,
 }
 
-pub fn record(history: &mut Vec<HistoryEntry>, query: &str, destination_id: &str, now: i64) {
+impl HistoryEntry {
+    pub fn is_link(&self) -> bool {
+        self.destination_id == "url"
+    }
+}
+
+/// Remembers a search, or a link when `link` is set.
+pub fn record(history: &mut Vec<HistoryEntry>, query: &str, link: bool, now: i64) {
+    let destination_id = if link { "url" } else { "google" };
     let query = query.trim();
     if query.is_empty() {
         return;
@@ -69,8 +79,8 @@ mod tests {
     #[test]
     fn repeats_increment_the_same_entry() {
         let mut history = Vec::new();
-        record(&mut history, "Crispr", "pubmed", 10);
-        record(&mut history, "crispr", "pubmed", 20);
+        record(&mut history, "Crispr", false, 10);
+        record(&mut history, "crispr", false, 20);
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].uses, 2);
         assert_eq!(history[0].query, "crispr");
@@ -80,9 +90,9 @@ mod tests {
     #[test]
     fn recent_use_beats_an_older_repeat() {
         let mut history = Vec::new();
-        record(&mut history, "old", "google", 0);
-        record(&mut history, "old", "google", 0);
-        record(&mut history, "new", "google", 10_000);
+        record(&mut history, "old", false, 0);
+        record(&mut history, "old", false, 0);
+        record(&mut history, "new", false, 10_000);
         let ranked = matching(&history, "", 10_000, 2);
         assert_eq!(ranked[0].query, "new");
     }
@@ -90,8 +100,8 @@ mod tests {
     #[test]
     fn prefix_filter_is_case_insensitive() {
         let mut history = Vec::new();
-        record(&mut history, "CRISPR review", "pubmed", 1);
-        record(&mut history, "kinase", "pubmed", 1);
+        record(&mut history, "CRISPR review", false, 1);
+        record(&mut history, "kinase", false, 1);
         let ranked = matching(&history, "cri", 1, 8);
         assert_eq!(ranked.len(), 1);
         assert_eq!(ranked[0].query, "CRISPR review");

@@ -26,7 +26,15 @@
   import { renderMarkdown } from './markdown';
   import SelectMenu from '../components/SelectMenu.vue';
   import { MOD_KEY as mod } from '../keys';
+  import Keys from '../components/Keys.vue';
+  import KeyHints from '../components/KeyHints.vue';
   import { useWindowListener } from '../windowEvents';
+
+  const FOOTER_HINTS = [
+    { keys: 'mod+p', label: 'notes' },
+    { keys: 'mod+n', label: 'new' },
+    { keys: 'mod', label: 'click opens links' },
+  ];
 
   const FONTS = [
     { label: 'System', value: '' },
@@ -75,7 +83,7 @@
       handleClickOn: (_view, _pos, _node, _nodePos, event) => {
         const link = (event.target as HTMLElement).closest('a[href]') as HTMLAnchorElement | null;
         if (link && (event.metaKey || event.ctrlKey)) {
-          void dispatch(link.href, 'url', false).catch(() => undefined);
+          void dispatch(link.href, false).catch(() => undefined);
           return true;
         }
         return false;
@@ -123,7 +131,7 @@
     if (!html()) await closeWindow();
   }
 
-  // Bug captures (Ctrl+Alt+S and Ctrl+Alt+R): when one starts, the log
+  // Bug captures (Ctrl+Shift+S and Ctrl+R): when one starts, the log
   // gets what this window is showing, so a snapshot of Notes explains itself.
   let unlistenCapture: UnlistenFn | null = null;
   void listen<boolean>('capture-state', (event) => {
@@ -477,7 +485,10 @@
           <time>{{ ago(note.updated) }}</time>
         </li>
         <li v-if="!notes.length" class="notes-empty" @click="createFromSearch">
-          {{ search.trim() ? `Enter to create “${search.trim()}”` : 'No notes yet' }}
+          <template v-if="search.trim()">
+            <Keys keys="enter" small /> to create “{{ search.trim() }}”
+          </template>
+          <template v-else>No notes yet</template>
         </li>
       </ul>
     </section>
@@ -606,7 +617,7 @@
 
     <footer class="notes-footer">
       <span>{{ status ?? `${words} words` }}</span>
-      <span>{{ mod }}P notes · {{ mod }}N new · {{ mod }}-click opens links</span>
+      <KeyHints :hints="FOOTER_HINTS" />
     </footer>
   </main>
 </template>

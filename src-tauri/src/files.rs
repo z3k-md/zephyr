@@ -10,7 +10,7 @@ use notify::{RecursiveMode, Watcher};
 
 use crate::apps::{self, LaunchEntry, Strength};
 
-/// Bang words that scope the bar to files instead of naming a destination.
+/// Bang words that scope the bar to files.
 pub const SCOPE_TRIGGERS: &[&str] = &["f", "file", "files"];
 
 pub fn is_scope(trigger: &str) -> bool {

@@ -184,7 +184,8 @@ pub fn preview(input: &str, now: DateTime<Local>) -> Option<Preview> {
     }
 
     if cancel {
-        if !tail.is_empty() {
+        // Restart to BIOS is never scheduled, so there's nothing of it to cancel.
+        if !tail.is_empty() || *action == Action::Firmware {
             return None;
         }
         return Some(Preview {
@@ -202,6 +203,10 @@ pub fn preview(input: &str, now: DateTime<Local>) -> Option<Preview> {
     } else {
         Some(when(tail, now)?)
     };
+    // Restart to BIOS is only ever wanted now.
+    if *action == Action::Firmware && at.is_some() {
+        return None;
+    }
     let label = match at {
         None => action.label().to_string(),
         Some(at) => format!("{} {}", action.label(), describe(at, now)),
@@ -345,9 +350,10 @@ fn span(seconds: i64) -> String {
     }
 }
 
-/// The system commands for an action now, or `delay` seconds from now on Windows where the
-/// OS keeps the timer itself (it then survives the app quitting). Empty means it runs in-app.
-pub fn commands_for(action: Action, delay: Option<i64>) -> Vec<Vec<String>> {
+/// The system commands that run an action now. A scheduled one runs them when it's due,
+/// from Zephyr's own timer: Windows' `shutdown /t N` would force apps closed without letting
+/// them save (any `/t` above 0 implies `/f`).
+pub fn commands_for(action: Action) -> Vec<Vec<String>> {
     let owned = |parts: &[&str]| {
         parts
             .iter()
@@ -355,27 +361,19 @@ pub fn commands_for(action: Action, delay: Option<i64>) -> Vec<Vec<String>> {
             .collect::<Vec<_>>()
     };
     if cfg!(windows) {
-        let after = delay.unwrap_or(0).clamp(0, MAX_DELAY).to_string();
         match action {
-            Action::Shutdown => vec![owned(&["shutdown", "/s", "/t", &after])],
-            Action::Restart => vec![owned(&["shutdown", "/r", "/t", &after])],
-            // /fw needs an administrator, so Windows shows its UAC prompt; the restart (and
-            // its timer) start once it's allowed.
-            Action::Firmware => vec![owned(&[ELEVATED, "shutdown", "/r", "/fw", "/t", &after])],
-            // These have no OS timer; a scheduled one is run by the app when it's due.
-            Action::SignOut if delay.is_none() => vec![owned(&["shutdown", "/l"])],
+            Action::Shutdown => vec![owned(&["shutdown", "/s", "/t", "0"])],
+            Action::Restart => vec![owned(&["shutdown", "/r", "/t", "0"])],
+            // /fw needs an administrator, so Windows shows its UAC prompt; the restart starts
+            // once it's allowed.
+            Action::Firmware => vec![owned(&[ELEVATED, "shutdown", "/r", "/fw", "/t", "0"])],
+            Action::SignOut => vec![owned(&["shutdown", "/l"])],
             // Slept in-process: rundll32 passes its own arguments to SetSuspendState, so a PC
             // with hibernation on hibernated instead (see `sleep_now`).
-            Action::Sleep if delay.is_none() => vec![owned(&[SLEEP_IN_PROCESS])],
-            Action::Lock if delay.is_none() => {
-                vec![owned(&["rundll32.exe", "user32.dll,LockWorkStation"])]
-            }
-            _ => Vec::new(),
+            Action::Sleep => vec![owned(&[SLEEP_IN_PROCESS])],
+            Action::Lock => vec![owned(&["rundll32.exe", "user32.dll,LockWorkStation"])],
         }
     } else {
-        if delay.is_some() {
-            return Vec::new();
-        }
         let event = |name: &str| {
             owned(&[
                 "osascript",
@@ -551,12 +549,12 @@ pub fn run(app: &AppHandle, action: Action, at: Option<i64>) -> Result<(), Strin
         None | Some(0) => {
             cancel(app);
             log::info!("power: {} now", action.label());
-            execute(&commands_for(action, None))
+            execute(&commands_for(action))
         }
+        Some(_) if action == Action::Firmware => Err("Restart to BIOS only runs right away".into()),
         Some(delay) => {
             // One schedule at a time; a new one replaces the old.
             cancel(app);
-            execute(&commands_for(action, Some(delay)))?;
             let at = now + delay;
             save(app, Some(Schedule { action, at }));
             arm(app, Schedule { action, at });
@@ -575,24 +573,12 @@ pub fn cancel(app: &AppHandle) {
         .ok()
         .and_then(|snapshot| snapshot.power);
     if let Some(schedule) = pending {
-        if cfg!(windows) && matches!(schedule.action, Action::Shutdown | Action::Restart) {
-            // Nothing pending is fine: the OS just says so.
-            let _ = execute(&[vec!["shutdown".into(), "/a".into()]]);
-        }
-        // A restart to the BIOS was started as an administrator, so stopping it may need
-        // one too.
-        if cfg!(windows)
-            && schedule.action == Action::Firmware
-            && execute(&[vec!["shutdown".into(), "/a".into()]]).is_err()
-        {
-            let _ = execute(&[vec![ELEVATED.into(), "shutdown".into(), "/a".into()]]);
-        }
         save(app, None);
         log::info!("power: cancelled the scheduled {}", schedule.action.label());
     }
 }
 
-/// Warns a few minutes ahead, then runs what the OS doesn't time itself.
+/// Warns a few minutes ahead, then runs the action.
 fn arm(app: &AppHandle, schedule: Schedule) {
     let generation = TIMER.load(Ordering::SeqCst);
     let app = app.clone();
@@ -620,11 +606,11 @@ fn arm(app: &AppHandle, schedule: Schedule) {
         if !wait_until(schedule.at) {
             return;
         }
-        let os_timed = !commands_for(schedule.action, Some(1)).is_empty();
-        if !os_timed && let Err(err) = execute(&commands_for(schedule.action, None)) {
+        // Cleared first, so a shutdown that goes through doesn't leave it for the next start.
+        save(&app, None);
+        if let Err(err) = execute(&commands_for(schedule.action)) {
             log::error!("couldn't {}: {err}", schedule.action.label().to_lowercase());
         }
-        save(&app, None);
     });
 }
 
@@ -638,18 +624,15 @@ pub fn resume(app: &AppHandle) {
     let Some(schedule) = pending else {
         return;
     };
-    let now = Local::now().timestamp();
-    if schedule.at <= now {
+    // Earlier versions scheduled restarts to the BIOS too, and set Windows' own timer for
+    // shutdowns and restarts; a BIOS one is dropped, and an OS timer is cleared (nothing
+    // pending is fine) since Zephyr's timer runs it now.
+    if cfg!(windows) && matches!(schedule.action, Action::Shutdown | Action::Restart) {
+        let _ = execute(&[vec!["shutdown".into(), "/a".into()]]);
+    }
+    if schedule.at <= Local::now().timestamp() || schedule.action == Action::Firmware {
         save(app, None);
         return;
-    }
-    // A Windows timer is gone if the PC restarted; setting it again is harmless otherwise.
-    let commands = commands_for(schedule.action, Some(schedule.at - now));
-    if !commands.is_empty() {
-        let _ = execute(&[vec!["shutdown".into(), "/a".into()]]);
-        if let Err(err) = execute(&commands) {
-            log::error!("couldn't restore the power schedule: {err}");
-        }
     }
     arm(app, schedule);
 }
@@ -697,13 +680,17 @@ mod tests {
     #[test]
     fn restart_to_bios_runs_shutdown_as_an_administrator() {
         assert_eq!(
-            commands_for(Action::Firmware, None),
+            commands_for(Action::Firmware),
             [[ELEVATED, "shutdown", "/r", "/fw", "/t", "0"]]
         );
-        assert_eq!(
-            commands_for(Action::Firmware, Some(900)),
-            [[ELEVATED, "shutdown", "/r", "/fw", "/t", "900"]]
-        );
+    }
+
+    #[test]
+    fn restart_to_bios_is_only_offered_for_now() {
+        let now = at(20, 0);
+        assert!(preview("bios in 5m", now).is_none());
+        assert!(preview("restart to bios at 11pm", now).is_none());
+        assert!(preview("cancel bios", now).is_none());
     }
 
     #[test]
@@ -791,27 +778,22 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn windows_commands_use_the_os_timer_for_shutdown_and_restart() {
+    fn windows_shutdowns_run_now_so_apps_can_save() {
+        // `/t 0`: any longer and Windows force-closes apps without asking them to save.
         assert_eq!(
-            commands_for(Action::Shutdown, Some(1800)),
-            vec![vec!["shutdown", "/s", "/t", "1800"]]
+            commands_for(Action::Shutdown),
+            vec![vec!["shutdown", "/s", "/t", "0"]]
         );
         assert_eq!(
-            commands_for(Action::Restart, None),
+            commands_for(Action::Restart),
             vec![vec!["shutdown", "/r", "/t", "0"]]
         );
-        assert_eq!(
-            commands_for(Action::SignOut, None),
-            vec![vec!["shutdown", "/l"]]
-        );
+        assert_eq!(commands_for(Action::SignOut), vec![vec!["shutdown", "/l"]]);
         // Sleep is in-process, so hibernation being on can't turn it into a hibernate.
         assert_eq!(
-            commands_for(Action::Sleep, None),
+            commands_for(Action::Sleep),
             [[SLEEP_IN_PROCESS.to_string()]]
         );
-        // Sleep and lock on a timer are run in-app.
-        assert!(commands_for(Action::Sleep, Some(60)).is_empty());
-        assert!(commands_for(Action::Lock, Some(60)).is_empty());
     }
 
     #[cfg(target_os = "macos")]
@@ -819,9 +801,6 @@ mod tests {
     fn the_permission_free_lock_is_there() {
         // Only looks the function up; calling it would lock this Mac.
         assert!(sac_lock().is_some());
-        assert_eq!(
-            commands_for(Action::Lock, None),
-            [[LOCK_IN_PROCESS.to_string()]]
-        );
+        assert_eq!(commands_for(Action::Lock), [[LOCK_IN_PROCESS.to_string()]]);
     }
 }

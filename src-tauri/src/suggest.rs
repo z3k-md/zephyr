@@ -7,11 +7,10 @@ use serde_json::Value;
 use crate::answer;
 use crate::apps::{self, App, Catalog};
 use crate::bookmarks::{self, Bookmark};
-use crate::destination::{self, Destination};
 use crate::files::{self, Hit};
 use crate::history::{self, HistoryEntry};
 use crate::notes;
-use crate::query::{self, Parsed};
+use crate::query;
 use crate::settings::{self, Setting, Target};
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -19,7 +18,8 @@ use crate::settings::{self, Setting, Target};
 pub struct Suggestion {
     pub label: String,
     pub query: String,
-    pub destination_id: String,
+    /// For a search row: `web` for a Google search of `query`, `url` to open it as a link.
+    pub target: String,
     pub kind: String,
     pub hint: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -31,12 +31,12 @@ pub struct Suggestion {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note_id: Option<String>,
     /// The list section the row belongs to: apps, answer, recent, web, files, settings,
-    /// notes or destinations.
+    /// notes or bookmarks.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub section: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub subtitle: String,
-    /// `app:<id>`, `dest:<id>` or `glyph:<name>`.
+    /// `app:<id>`, `site:<url>` or `glyph:<name>`.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub icon: String,
     /// An open app's windows, front to back; its row switches to the first.
@@ -59,45 +59,29 @@ pub struct SuggestResponse {
     pub notice: Option<String>,
     /// Row Enter acts on before the user moves the selection.
     pub preselect: Option<usize>,
-    /// Where free text goes for an unscoped query: the bang's destination, `url`, or the
-    /// armed destination.
+    /// Where free text goes for an unscoped query: `web` for a Google search, or `url`.
     pub target: Option<String>,
     /// The typed text without any bang.
     pub text: String,
-    /// Destinations to offer under "Search with", best first.
-    pub search_with: Vec<String>,
 }
 
 /// Local results (apps, history) come back without waiting on the network unless
 /// `include_remote` is set; remote suggestions only ever append, so row indices stay put.
 pub async fn gather(
     input: &str,
-    armed_id: &str,
-    destinations: &[Destination],
     history: &[HistoryEntry],
     catalog: Catalog<'_>,
     include_remote: bool,
 ) -> SuggestResponse {
     let now = catalog.now;
     let parsed = query::parse_input(input);
-    let scoped = parsed.bang.as_deref().is_some_and(apps::is_scope);
-    let settings_scoped = parsed.bang.as_deref().is_some_and(settings::is_scope);
-    let files_scoped = parsed.bang.as_deref().is_some_and(files::is_scope);
-    let notes_scoped = parsed.bang.as_deref().is_some_and(notes::is_scope);
-    let bookmarks_scoped = parsed.bang.as_deref().is_some_and(bookmarks::is_scope);
-    let typing = parsed.bang.as_deref() == Some("type");
-    if parsed.only_bang
-        && !scoped
-        && !settings_scoped
-        && !files_scoped
-        && !notes_scoped
-        && !bookmarks_scoped
-        && !typing
-    {
-        return palette(destinations, parsed.bang.as_deref().unwrap_or(""));
-    }
+    let scoped = parsed.scope.as_deref().is_some_and(apps::is_scope);
+    let settings_scoped = parsed.scope.as_deref().is_some_and(settings::is_scope);
+    let files_scoped = parsed.scope.as_deref().is_some_and(files::is_scope);
+    let notes_scoped = parsed.scope.as_deref().is_some_and(notes::is_scope);
+    let bookmarks_scoped = parsed.scope.as_deref().is_some_and(bookmarks::is_scope);
     if input.trim().is_empty() {
-        return recent(history, destinations, &catalog);
+        return recent(history, &catalog);
     }
     if scoped {
         let items: Vec<Suggestion> = if parsed.query.is_empty() {
@@ -167,7 +151,7 @@ pub async fn gather(
             ..notes_response(&parsed.query)
         };
     }
-    if parsed.bang.as_deref() == Some("type") {
+    if parsed.scope.as_deref() == Some("type") {
         return SuggestResponse {
             mode: "search".into(),
             notice: Some("Press Enter to start a typing test".into()),
@@ -199,22 +183,11 @@ pub async fn gather(
             ..Default::default()
         };
     }
-    if let Some(trigger) = &parsed.bang
-        && destination::exact_trigger(destinations, trigger).is_none()
-    {
-        return SuggestResponse {
-            mode: "search".into(),
-            items: history_items(history, &parsed.query, destinations, now, 8),
-            notice: Some(format!("No destination !{trigger}")),
-            text: parsed.query.clone(),
-            ..Default::default()
-        };
-    }
-
-    // A bang or a URL names where the text goes, so apps stay out of the way.
-    let offer_apps = parsed.bang.is_none() && !query::looks_like_url(&parsed.query);
+    // A URL names where the text goes, so apps stay out of the way.
+    let is_url = query::looks_like_url(&parsed.query);
+    let offer_apps = !is_url;
     if offer_apps && crate::ip::is_query(&parsed.query) {
-        return ip_answers(&parsed.query, armed_id, destinations, include_remote).await;
+        return ip_answers(&parsed.query, include_remote).await;
     }
     // A bare "settings": the system's settings app, the app's own Settings, then the usual pages.
     if offer_apps && settings::is_bare(&parsed.query) {
@@ -240,9 +213,8 @@ pub async fn gather(
             preselect: (!items.is_empty()).then_some(0),
             items,
             notice: None,
-            target: destination::enabled(destinations, armed_id).map(|found| found.id.clone()),
+            target: Some("web".into()),
             text: parsed.query.clone(),
-            search_with: searchable(destinations),
         };
     }
     // "wifi settings", "settings dark": the pages lead and Enter opens the best; the web
@@ -370,37 +342,27 @@ pub async fn gather(
     // An app match keeps the apps together at the top; otherwise recent searches lead.
     if preferred.is_some() {
         items.extend(other_apps);
-        items.extend(history_items(history, &parsed.query, destinations, now, 4));
+        items.extend(history_items(history, &parsed.query, now, 4));
     } else {
-        items.extend(history_items(history, &parsed.query, destinations, now, 4));
+        items.extend(history_items(history, &parsed.query, now, 4));
         items.extend(other_apps);
     }
     items.extend(other_bookmarks);
     items.truncate(8 - incidental.len());
     items.extend(incidental);
 
-    let is_url = parsed.bang.is_none() && query::looks_like_url(&parsed.query);
-    let destination = resolve_destination(&parsed, armed_id, destinations);
     // Suggestions only help when free text is going to a search: not under an app match,
     // an inline answer, or a link.
     if include_remote
-        && let Some(destination) = destination
         && !parsed.query.is_empty()
         && preferred.is_none()
         && answer.is_none()
         && !is_url
     {
-        let remote = fetch_remote(destination, &parsed.query).await;
-        merge_remote(&mut items, remote, destination);
+        let remote = fetch_remote(&parsed.query).await;
+        merge_remote(&mut items, remote);
     }
     items.truncate(8);
-    let target = if parsed.bang.is_some() {
-        destination.map(|destination| destination.id.clone())
-    } else if is_url {
-        Some("url".to_string())
-    } else {
-        destination::enabled(destinations, armed_id).map(|destination| destination.id.clone())
-    };
     SuggestResponse {
         mode: "search".into(),
         items,
@@ -410,21 +372,15 @@ pub async fn gather(
             || exact_bookmark.is_some()
             || has_intent)
             .then_some(0),
-        target,
+        target: Some(if is_url { "url" } else { "web" }.into()),
         text: parsed.query.clone(),
-        search_with: searchable(destinations),
     }
 }
 
 /// "ip", "my ip": the local address the internet is reached through, preselected so Enter
 /// copies it, then the public address (asked only on the pass that may use the network), then
 /// the computer's other addresses.
-async fn ip_answers(
-    text: &str,
-    armed_id: &str,
-    destinations: &[Destination],
-    include_remote: bool,
-) -> SuggestResponse {
+async fn ip_answers(text: &str, include_remote: bool) -> SuggestResponse {
     // A globe for the public address; the local ones show their link (Wi-Fi, Ethernet).
     let row = |value: String, detail: String, icon: &str| Suggestion {
         label: value.clone(),
@@ -463,23 +419,9 @@ async fn ip_answers(
         preselect: (!items.is_empty()).then_some(0),
         items,
         notice: None,
-        target: destination::enabled(destinations, armed_id).map(|found| found.id.clone()),
+        target: Some("web".into()),
         text: text.to_string(),
-        search_with: searchable(destinations),
     }
-}
-
-/// Enabled destinations that take the typed text, in settings order. Fixed links (no
-/// `{query}`) would drop the text, so they aren't offered.
-fn searchable(destinations: &[Destination]) -> Vec<String> {
-    destinations
-        .iter()
-        .filter(|destination| !destination.disabled)
-        .filter(|destination| {
-            destination.is_ai() || crate::template::uses_input(&destination.url_template)
-        })
-        .map(|destination| destination.id.clone())
-        .collect()
 }
 
 /// `!note` lists recent notes; with text it finds notes and offers to start one with it.
@@ -617,43 +559,10 @@ fn starters(all: &[Setting], limit: usize) -> Vec<&Setting> {
     own.into_iter().chain(system).take(limit).collect()
 }
 
-fn palette(destinations: &[Destination], prefix: &str) -> SuggestResponse {
-    let mut matches = destination::filter_destinations(destinations, prefix);
-    let notice = (matches.len() > 12).then(|| "Keep typing to narrow destinations".to_string());
-    matches.truncate(12);
-    let items = matches
-        .into_iter()
-        .map(|destination| Suggestion {
-            label: destination.name.clone(),
-            destination_id: destination.id.clone(),
-            kind: "destination".into(),
-            section: "destinations".into(),
-            icon: format!("dest:{}", destination.id),
-            hint: destination
-                .triggers
-                .iter()
-                .map(|trigger| format!("!{trigger}"))
-                .collect::<Vec<_>>()
-                .join(" "),
-            ..Default::default()
-        })
-        .collect();
-    SuggestResponse {
-        mode: "destinations".into(),
-        items,
-        notice,
-        ..Default::default()
-    }
-}
-
 /// The empty bar: the last three apps opened from the bar and the last two searches, newest
 /// first, with whichever kind you used last on top. The bar adds its commands below, and
 /// that is all that fits without scrolling.
-fn recent(
-    history: &[HistoryEntry],
-    destinations: &[Destination],
-    catalog: &Catalog<'_>,
-) -> SuggestResponse {
+fn recent(history: &[HistoryEntry], catalog: &Catalog<'_>) -> SuggestResponse {
     let mut launches: Vec<&apps::LaunchEntry> = catalog.launches.iter().collect();
     launches.sort_by_key(|entry| std::cmp::Reverse(entry.last_used));
     let mut opened: Vec<&App> = launches
@@ -678,7 +587,7 @@ fn recent(
     let searches: Vec<Suggestion> = searched
         .into_iter()
         .take(2)
-        .map(|entry| history_item(entry.clone(), destinations))
+        .map(|entry| history_item(entry.clone()))
         .collect();
 
     let last_launch = launches.first().map(|entry| entry.last_used);
@@ -725,32 +634,24 @@ fn starter_apps(installed: &[App]) -> Vec<&App> {
         .collect()
 }
 
-fn history_items(
-    history: &[HistoryEntry],
-    query: &str,
-    destinations: &[Destination],
-    now: i64,
-    limit: usize,
-) -> Vec<Suggestion> {
+fn history_items(history: &[HistoryEntry], query: &str, now: i64, limit: usize) -> Vec<Suggestion> {
     history::matching(history, query, now, limit)
         .into_iter()
-        .map(|entry| history_item(entry, destinations))
+        .map(history_item)
         .collect()
 }
 
-fn history_item(entry: HistoryEntry, destinations: &[Destination]) -> Suggestion {
+fn history_item(entry: HistoryEntry) -> Suggestion {
+    let link = entry.is_link();
     Suggestion {
         label: entry.query.clone(),
         query: entry.query,
+        target: if link { "url" } else { "web" }.into(),
         kind: "history".into(),
-        hint: destination_name(destinations, &entry.destination_id),
+        hint: if link { "Link" } else { "Google" }.into(),
         section: "recent".into(),
-        icon: if entry.destination_id == "url" {
-            "glyph:link".into()
-        } else {
-            format!("dest:{}", entry.destination_id)
-        },
-        destination_id: entry.destination_id,
+        // Google's G as a silhouette in the row's color.
+        icon: if link { "glyph:link" } else { "glyph:google" }.into(),
         ..Default::default()
     }
 }
@@ -764,7 +665,7 @@ fn apps_lead(last_launch: Option<i64>, last_search: Option<i64>) -> bool {
     }
 }
 
-fn merge_remote(items: &mut Vec<Suggestion>, remote: Vec<String>, destination: &Destination) {
+fn merge_remote(items: &mut Vec<Suggestion>, remote: Vec<String>) {
     let mut seen: HashSet<String> = items.iter().map(|item| item.query.to_lowercase()).collect();
     for label in remote {
         if !seen.insert(label.to_lowercase()) {
@@ -773,7 +674,7 @@ fn merge_remote(items: &mut Vec<Suggestion>, remote: Vec<String>, destination: &
         items.push(Suggestion {
             query: label.clone(),
             label,
-            destination_id: destination.id.clone(),
+            target: "web".into(),
             kind: "remote".into(),
             section: "web".into(),
             icon: "glyph:search".into(),
@@ -782,39 +683,14 @@ fn merge_remote(items: &mut Vec<Suggestion>, remote: Vec<String>, destination: &
     }
 }
 
-fn resolve_destination<'a>(
-    parsed: &Parsed,
-    armed_id: &str,
-    destinations: &'a [Destination],
-) -> Option<&'a Destination> {
-    if let Some(trigger) = &parsed.bang {
-        return destination::exact_trigger(destinations, trigger);
-    }
-    destination::enabled(destinations, armed_id)
+/// Opens the connection to Google's suggestion service ahead of the first keystroke; the
+/// first real fetch otherwise pays for DNS and TLS (1.25 s in a capture, vs ~60 ms after).
+pub async fn warm() {
+    let _ = fetch_remote("").await;
 }
 
-fn destination_name(destinations: &[Destination], id: &str) -> String {
-    if id == "url" {
-        return "Link".into();
-    }
-    destinations
-        .iter()
-        .find(|destination| destination.id == id)
-        .map(|destination| destination.name.clone())
-        .unwrap_or_else(|| id.to_string())
-}
-
-/// Opens the connection to a destination's suggestion service ahead of the first keystroke;
-/// the first real fetch otherwise pays for DNS and TLS (1.25 s in a capture, vs ~60 ms after).
-pub async fn warm(destination: &Destination) {
-    let _ = fetch_remote(destination, "").await;
-}
-
-async fn fetch_remote(destination: &Destination, query: &str) -> Vec<String> {
-    let Some((template, path)) = destination.suggest_source() else {
-        return Vec::new();
-    };
-    let url = template.replace("{query}", &urlencoding::encode(query));
+async fn fetch_remote(query: &str) -> Vec<String> {
+    let url = crate::web::suggest_url(query);
     let Some(client) = http_client() else {
         return Vec::new();
     };
@@ -839,37 +715,7 @@ async fn fetch_remote(destination: &Destination, query: &str) -> Vec<String> {
     let Ok(value) = serde_json::from_str::<Value>(&body) else {
         return Vec::new();
     };
-    string_list(Some(&Value::Array(select(&value, path))), query)
-}
-
-/// Follows a dotted JSON path. A number indexes an array, `*` fans out over one, and an
-/// empty path is the whole document; whatever is reached is flattened into strings.
-fn select(value: &Value, path: &str) -> Vec<Value> {
-    let mut current = vec![value.clone()];
-    for step in path.split('.').filter(|step| !step.is_empty()) {
-        current = current
-            .iter()
-            .flat_map(|value| match (step, value) {
-                ("*", Value::Array(items)) => items.clone(),
-                ("*", Value::Object(map)) => map.values().cloned().collect(),
-                (_, Value::Array(items)) => step
-                    .parse::<usize>()
-                    .ok()
-                    .and_then(|index| items.get(index).cloned())
-                    .into_iter()
-                    .collect(),
-                (_, Value::Object(map)) => map.get(step).cloned().into_iter().collect(),
-                _ => Vec::new(),
-            })
-            .collect();
-    }
-    current
-        .into_iter()
-        .flat_map(|value| match value {
-            Value::Array(items) => items,
-            other => vec![other],
-        })
-        .collect()
+    string_list(value.get(1), query)
 }
 
 fn http_client() -> Option<&'static reqwest::Client> {
@@ -963,21 +809,13 @@ mod tests {
             setting_opens: &[],
             now: 0,
         };
-        tauri::async_runtime::block_on(gather(
-            input,
-            "google",
-            &crate::destination::builtins(),
-            &[],
-            catalog,
-            false,
-        ))
+        tauri::async_runtime::block_on(gather(input, &[], catalog, false))
     }
 
     fn local_full(
         input: &str,
         apps: &[App],
         history: &[HistoryEntry],
-        armed: &str,
         include_remote: bool,
     ) -> SuggestResponse {
         static NO_FILES: std::sync::LazyLock<crate::files::FileIndex> =
@@ -992,20 +830,13 @@ mod tests {
             setting_opens: &[],
             now: 1_000_000,
         };
-        tauri::async_runtime::block_on(gather(
-            input,
-            armed,
-            &crate::destination::builtins(),
-            history,
-            catalog,
-            include_remote,
-        ))
+        tauri::async_runtime::block_on(gather(input, history, catalog, include_remote))
     }
 
-    fn searched(query: &str, destination: &str) -> HistoryEntry {
+    fn searched(query: &str, destination_id: &str) -> HistoryEntry {
         HistoryEntry {
             query: query.into(),
-            destination_id: destination.into(),
+            destination_id: destination_id.into(),
             uses: 1,
             last_used: 1_000_000,
         }
@@ -1041,12 +872,12 @@ mod tests {
             response.items.into_iter().map(|item| item.label).collect()
         };
         assert_eq!(
-            labels(recent(&[], &[], &catalog(&[]))),
+            labels(recent(&[], &catalog(&[]))),
             ["Google Chrome", "Steam", "Notepad"]
         );
         // What was opened comes first; common apps only fill the rest.
         assert_eq!(
-            labels(recent(&[], &[], &catalog(&opened))),
+            labels(recent(&[], &catalog(&opened))),
             ["Zoom", "Google Chrome", "Steam"]
         );
     }
@@ -1098,35 +929,26 @@ mod tests {
 
         let history = [at("old", 5), at("newest", 50), at("middle", 35)];
         assert_eq!(
-            labels(recent(&history, &[], &catalog(&launches))),
+            labels(recent(&history, &catalog(&launches))),
             ["newest", "middle", "Beta", "Gamma", "Alpha"]
         );
         let history = [at("before", 15)];
         assert_eq!(
-            labels(recent(&history, &[], &catalog(&launches))),
+            labels(recent(&history, &catalog(&launches))),
             ["Beta", "Gamma", "Alpha", "before"]
         );
-        assert_eq!(labels(recent(&history, &[], &catalog(&[]))), ["before"]);
+        assert_eq!(labels(recent(&history, &catalog(&[]))), ["before"]);
     }
 
     #[test]
     fn says_where_free_text_goes() {
         assert_eq!(
-            local_full("cats !w", &[], &[], "google", false)
-                .target
-                .as_deref(),
-            Some("wikipedia")
-        );
-        assert_eq!(
-            local_full("example.com", &[], &[], "google", false)
-                .target
-                .as_deref(),
+            local_full("example.com", &[], &[], false).target.as_deref(),
             Some("url")
         );
-        let plain = local_full("cats", &[], &[], "pubmed", false);
-        assert_eq!(plain.target.as_deref(), Some("pubmed"));
-        assert_eq!(plain.text, "cats");
-        assert!(plain.search_with.contains(&"google".to_string()));
+        let plain = local_full("cats !w", &[], &[], false);
+        assert_eq!(plain.target.as_deref(), Some("web"));
+        assert_eq!(plain.text, "cats !w");
     }
 
     #[test]
@@ -1142,7 +964,7 @@ mod tests {
             },
         ];
         let history = [searched("vs code shortcuts", "google")];
-        let response = local_full("vs", &apps, &history, "google", false);
+        let response = local_full("vs", &apps, &history, false);
         let kinds: Vec<&str> = response
             .items
             .iter()
@@ -1159,24 +981,35 @@ mod tests {
 
     #[test]
     fn links_never_fetch_suggestions() {
-        let response = local_full("example.com", &[], &[], "google", true);
+        let response = local_full("example.com", &[], &[], true);
         assert!(response.items.iter().all(|item| item.kind != "remote"));
     }
 
     #[test]
     fn rows_carry_their_section() {
-        let history = [searched("crispr review", "pubmed")];
-        let response = local_full("crispr", &[], &history, "google", false);
+        let history = [searched("crispr review", "google")];
+        let response = local_full("crispr", &[], &history, false);
         let row = response
             .items
             .iter()
             .find(|item| item.kind == "history")
             .unwrap();
         assert_eq!(
-            (row.section.as_str(), row.icon.as_str()),
-            ("recent", "dest:pubmed")
+            (row.section.as_str(), row.icon.as_str(), row.target.as_str()),
+            ("recent", "glyph:google", "web")
         );
-        let answer = local_full("12 * 7", &[], &[], "google", false);
+        let history = [searched("crispr.org", "url")];
+        let response = local_full("crispr", &[], &history, false);
+        let row = response
+            .items
+            .iter()
+            .find(|item| item.kind == "history")
+            .unwrap();
+        assert_eq!(
+            (row.icon.as_str(), row.target.as_str()),
+            ("glyph:link", "url")
+        );
+        let answer = local_full("12 * 7", &[], &[], false);
         assert_eq!(answer.items[0].section, "answer");
         assert_eq!(answer.items[0].subtitle, "12 * 7");
     }
@@ -1200,8 +1033,6 @@ mod tests {
         let response = local("dark mode", &[]);
         assert_eq!(response.items[0].setting_id.as_deref(), Some("win.colors"));
         assert_eq!(response.preselect, None);
-
-        assert!(local("display !g", &[]).items.is_empty());
     }
 
     #[test]
@@ -1249,30 +1080,10 @@ mod tests {
         assert_eq!(none.notice.as_deref(), Some("No setting matches wallpaper"));
     }
 
-    fn pick(body: &str, path: &str, query: &str) -> Vec<String> {
-        let value: Value = serde_json::from_str(body).unwrap();
-        string_list(Some(&Value::Array(select(&value, path))), query)
-    }
-
     #[test]
-    fn parses_live_suggestion_shapes() {
-        let google = r#"["crispr",["crispr","crispr cas9"],[],{}]"#;
-        assert_eq!(pick(google, "1", "crispr"), vec!["crispr cas9"]);
-
-        let wiki = r#"["crispr",["CRISPR","CRISPR gene editing"],[""],[""]]"#;
-        assert_eq!(pick(wiki, "1", "crispr"), vec!["CRISPR gene editing"]);
-
-        let pubmed = r#"{"code":0,"suggestions":["crispr","crispr cas9"]}"#;
-        assert_eq!(pick(pubmed, "suggestions", "crispr"), vec!["crispr cas9"]);
-    }
-
-    #[test]
-    fn follows_custom_json_paths() {
-        let body = r#"{"items":[{"title":"rust book"},{"title":"rust by example"},{"id":3}]}"#;
-        assert_eq!(
-            pick(body, "items.*.title", "rust"),
-            vec!["rust book", "rust by example"]
-        );
-        assert!(pick(body, "nope.*", "rust").is_empty());
+    fn parses_google_suggestions() {
+        let google: Value =
+            serde_json::from_str(r#"["crispr",["crispr","crispr cas9"],[],{}]"#).unwrap();
+        assert_eq!(string_list(google.get(1), "crispr"), vec!["crispr cas9"]);
     }
 }

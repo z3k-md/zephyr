@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use tauri::AppHandle;
@@ -25,27 +25,13 @@ pub fn canonical_shortcut(input: &str) -> Result<String, String> {
 
 static CLIPBOARD_ID: AtomicU32 = AtomicU32::new(0);
 static NOTES_ID: AtomicU32 = AtomicU32::new(0);
-static CAPTURE_ID: AtomicU32 = AtomicU32::new(0);
-static SNAPSHOT_ID: AtomicU32 = AtomicU32::new(0);
-
-pub fn is_capture(shortcut: &Shortcut) -> bool {
-    let id = CAPTURE_ID.load(Ordering::SeqCst);
-    id != 0 && shortcut.id() == id
-}
-
-pub fn is_snapshot(shortcut: &Shortcut) -> bool {
-    let id = SNAPSHOT_ID.load(Ordering::SeqCst);
-    id != 0 && shortcut.id() == id
-}
-
-/// Optional shortcuts besides the summon one.
+/// Optional shortcuts besides the summon one. Bug captures aren't among them: Ctrl+Shift+S
+/// and Ctrl+R work only inside Zephyr's windows (main.ts), so other apps keep them.
 #[derive(Default, Clone, Copy)]
 pub struct Extras<'a> {
     pub clipboard: Option<&'a str>,
     pub notes: Option<&'a str>,
-    /// Ctrl+Alt+R and Ctrl+Alt+S for bug captures.
-    pub capture: bool,
-    /// Hotkeys the user gave commands, apps, destinations and bookmarks.
+    /// Hotkeys the user gave commands, apps and bookmarks.
     pub bindings: &'a [crate::state::Binding],
 }
 
@@ -84,36 +70,36 @@ pub fn same(a: &str, b: &str) -> bool {
     matches!((parse(a), parse(b)), (Ok(a), Ok(b)) if a.id() == b.id())
 }
 
+/// Lets go of every shortcut while Settings records a new one, so pressing a combo Zephyr
+/// already uses (the summon key itself) is recorded instead of acted on. `register` takes
+/// them back.
+pub fn pause(app: &AppHandle) {
+    RECORDING.store(true, Ordering::SeqCst);
+    let _ = app.global_shortcut().unregister_all();
+}
+
+static RECORDING: AtomicBool = AtomicBool::new(false);
+
+/// Whether a shortcut is being recorded (between `pause` and the next `register`).
+pub fn recording() -> bool {
+    RECORDING.load(Ordering::SeqCst)
+}
+
 /// Replaces the registered shortcuts with the summon shortcut and the optional ones. An
 /// optional shortcut that can't be registered is logged, not fatal.
 pub fn register(app: &AppHandle, shortcut: &str, extras: Extras<'_>) -> Result<(), String> {
+    RECORDING.store(false, Ordering::SeqCst);
     let parsed = parse(shortcut)?;
     let shortcuts = app.global_shortcut();
     let _ = shortcuts.unregister_all();
     CLIPBOARD_ID.store(0, Ordering::SeqCst);
     NOTES_ID.store(0, Ordering::SeqCst);
-    CAPTURE_ID.store(0, Ordering::SeqCst);
-    SNAPSHOT_ID.store(0, Ordering::SeqCst);
     // A summon key another app holds shouldn't take the other shortcuts down with it:
     // register the rest, then report it.
     let summon = shortcuts
         .register(parsed)
         .map_err(|err| format!("Couldn't register {shortcut}: {err}"));
-    // Bug captures, unless turned off in Settings.
-    let (capture, snapshot) = if extras.capture {
-        (
-            Some(crate::capture::SHORTCUT),
-            Some(crate::capture::SNAPSHOT_SHORTCUT),
-        )
-    } else {
-        (None, None)
-    };
-    for (wanted, slot) in [
-        (extras.clipboard, &CLIPBOARD_ID),
-        (extras.notes, &NOTES_ID),
-        (capture, &CAPTURE_ID),
-        (snapshot, &SNAPSHOT_ID),
-    ] {
+    for (wanted, slot) in [(extras.clipboard, &CLIPBOARD_ID), (extras.notes, &NOTES_ID)] {
         let Some(wanted) = wanted.filter(|value| !value.is_empty()) else {
             continue;
         };

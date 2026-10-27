@@ -1,19 +1,11 @@
-//! Hotkeys and aliases the user gives commands, apps, destinations and bookmarks. A hotkey
+//! Hotkeys and aliases the user gives commands, apps and bookmarks. A hotkey
 //! runs its target from anywhere; an alias typed in the bar goes straight to it. There are
 //! none until the user sets one, so the bar behaves as before.
 
 use crate::state::Binding;
 
 /// What a binding can point at.
-const KINDS: &[&str] = &[
-    "view:",
-    "scope:",
-    "app:",
-    "dest:",
-    "bookmark:",
-    "group:",
-    "setting:",
-];
+const KINDS: &[&str] = &["view:", "scope:", "app:", "bookmark:", "group:", "setting:"];
 
 /// Checks a binding against the others and the shortcuts already in use, and returns
 /// the list with it in place (or removed, when it has neither a hotkey nor an alias).
@@ -106,35 +98,35 @@ mod tests {
 
     #[test]
     fn adds_replaces_and_removes() {
-        let added = upsert(&[], binding("view:ai", "ctrl+alt+a", ""), TAKEN).unwrap();
+        let added = upsert(&[], binding("view:clip", "ctrl+alt+a", ""), TAKEN).unwrap();
         assert_eq!(added.len(), 1);
-        let replaced = upsert(&added, binding("view:ai", "", "ai"), TAKEN).unwrap();
+        let replaced = upsert(&added, binding("view:clip", "", "c"), TAKEN).unwrap();
         assert_eq!(
             (replaced[0].hotkey.as_str(), replaced[0].alias.as_str()),
-            ("", "ai")
+            ("", "c")
         );
-        let removed = upsert(&replaced, binding("view:ai", "", ""), TAKEN).unwrap();
+        let removed = upsert(&replaced, binding("view:clip", "", ""), TAKEN).unwrap();
         assert!(removed.is_empty());
     }
 
     #[test]
     fn refuses_shortcuts_already_in_use() {
-        let error = upsert(&[], binding("view:ai", "Alt+Space", ""), TAKEN).unwrap_err();
+        let error = upsert(&[], binding("view:clip", "Alt+Space", ""), TAKEN).unwrap_err();
         assert!(error.contains("the bar"), "{error}");
-        assert!(upsert(&[], binding("view:ai", "ctrl+alt+r", ""), TAKEN).is_err());
+        assert!(upsert(&[], binding("view:clip", "ctrl+alt+r", ""), TAKEN).is_err());
         let existing = [binding("app:spotify", "ctrl+alt+m", "")];
-        let error = upsert(&existing, binding("view:ai", "ctrl+alt+m", ""), TAKEN).unwrap_err();
+        let error = upsert(&existing, binding("view:clip", "ctrl+alt+m", ""), TAKEN).unwrap_err();
         assert!(error.contains("app:spotify"), "{error}");
-        assert!(upsert(&[], binding("view:ai", "not a key", ""), TAKEN).is_err());
+        assert!(upsert(&[], binding("view:clip", "not a key", ""), TAKEN).is_err());
     }
 
     #[test]
     fn aliases_are_one_unique_word() {
-        assert!(upsert(&[], binding("dest:g", "", "two words"), TAKEN).is_err());
-        assert!(upsert(&[], binding("dest:g", "", "!g"), TAKEN).is_err());
-        let existing = [binding("dest:g", "", "g")];
-        assert!(upsert(&existing, binding("dest:w", "", "G"), TAKEN).is_err());
-        let saved = upsert(&existing, binding("dest:w", "", " W "), TAKEN).unwrap();
+        assert!(upsert(&[], binding("app:g", "", "two words"), TAKEN).is_err());
+        assert!(upsert(&[], binding("app:g", "", "!g"), TAKEN).is_err());
+        let existing = [binding("app:g", "", "g")];
+        assert!(upsert(&existing, binding("app:w", "", "G"), TAKEN).is_err());
+        let saved = upsert(&existing, binding("app:w", "", " W "), TAKEN).unwrap();
         assert_eq!(saved[1].alias, "w");
         assert!(upsert(&[], binding("nothing:x", "", "x"), TAKEN).is_err());
     }

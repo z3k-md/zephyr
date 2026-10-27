@@ -1,15 +1,22 @@
 <script setup lang="ts">
-  import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue';
+  import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-  import { bindingFailures, errorMessage, saveBinding, takePendingBinding } from '../api';
+  import {
+    bindingFailures,
+    errorMessage,
+    pauseShortcuts,
+    saveBinding,
+    takePendingBinding,
+  } from '../api';
   import { commandTargets } from '../bar/rows';
   import { captureShortcut, formatShortcut, isModifierKey } from '../keys';
+  import Keys from '../components/Keys.vue';
   import { useWindowListener } from '../windowEvents';
   import type { Binding, Snapshot } from '../types';
 
-  // Settings › Shortcuts: a global hotkey and/or a typed alias for any command, app,
-  // destination or bookmark. Apps, destinations and bookmarks are added from the bar (Ctrl+K,
-  // Set hotkey or alias…); commands can be added here too.
+  // Settings › Shortcuts: a global hotkey and/or a typed alias for any command, app, bookmark
+  // or settings page. Apps, bookmarks and pages are added from the bar (Ctrl+K, Set hotkey or
+  // alias…); commands can be added here too.
   const props = defineProps<{ snapshot: Snapshot }>();
   const emit = defineEmits<{ apply: [snapshot: Snapshot] }>();
 
@@ -24,6 +31,11 @@
   /** One the bar asked about that isn't saved yet. */
   const draft = ref<Binding | null>(null);
   const listening = ref<string | null>(null);
+  // Zephyr's own shortcuts are off while one is recorded, so a combo it uses records too.
+  watch(
+    () => listening.value !== null,
+    (recording) => void pauseShortcuts(recording).catch(() => undefined)
+  );
   const error = ref<{ target: string; message: string } | null>(null);
   const failures = ref<string[]>([]);
   const adding = ref('');
@@ -44,7 +56,6 @@
 
   function kindOf(target: string): string {
     if (target.startsWith('app:')) return 'App';
-    if (target.startsWith('dest:')) return 'Destination';
     if (target.startsWith('bookmark:')) return 'Bookmark';
     return 'Command';
   }
@@ -131,10 +142,10 @@
   <section id="section-shortcuts">
     <h2>Shortcuts</h2>
     <p class="lede">
-      Give a command, app, destination or bookmark a hotkey that works from anywhere, or an alias
-      you type in the bar. An alias then a space goes straight into that destination or command; a
-      direct alias (for a symbol like <code>=</code>) fires as soon as it's typed. To add an app,
-      destination or bookmark, select it in the bar, press Ctrl+K and choose Set hotkey or alias.
+      Give a command, app or bookmark a hotkey that works from anywhere, or an alias you type in the
+      bar. A command's alias then a space goes straight into that command; a direct alias (for a
+      symbol like <code>=</code>) fires as soon as it's typed. To add an app or bookmark, select it
+      in the bar, press Ctrl+K and choose Set hotkey or alias.
     </p>
 
     <label class="field">
@@ -169,14 +180,11 @@
               class="recorder"
               :class="{ listening: listening === binding.target }"
               @click="listening = binding.target"
+              @blur="listening === binding.target && (listening = null)"
             >
-              {{
-                listening === binding.target
-                  ? 'Press a shortcut'
-                  : binding.hotkey
-                    ? formatShortcut(binding.hotkey)
-                    : 'None'
-              }}
+              <template v-if="listening === binding.target">Press a shortcut</template>
+              <template v-else-if="!binding.hotkey">None</template>
+              <Keys v-else :keys="binding.hotkey" />
             </button>
             <button
               v-if="binding.hotkey"

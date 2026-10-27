@@ -2,9 +2,13 @@
   import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
   import RowIcon from './RowIcon.vue';
   import { GLYPHS } from './glyphs';
+  import { vTip } from '../tip';
   import { vFit } from '../fit';
   import { bytes } from '../format';
-  import { isMac, isModifierKey, MOD_KEY as mod } from '../keys';
+  import { gpuTitle } from './footerStats';
+  import { isMac, isModifierKey } from '../keys';
+  import Keys from '../components/Keys.vue';
+  import KeyHints from '../components/KeyHints.vue';
   import {
     errorMessage,
     resourcesClosed,
@@ -16,10 +20,10 @@
   } from '../api';
   import type { ResourcePoint, ResourceRow, ResourceSnapshot, ResourceSort } from '../types';
 
-  // System Resources: the machine's CPU, memory and network over the last minute, and the
+  // System Resources: the machine's CPU, memory, GPU and network over the last minute, and the
   // apps using them, live. Rows are apps (helpers counted in) or command-line programs; Enter
   // switches to one, ⌘⌫ quits it, ⌥⌘⌫ force quits it, each after an inline confirm.
-  const emit = defineEmits<{ exit: []; ask: [question: string]; search: [text: string] }>();
+  const emit = defineEmits<{ exit: []; search: [text: string] }>();
 
   interface Action {
     label: string;
@@ -40,7 +44,21 @@
   /** After a key or the pointer moves the selection, the order holds this long. */
   const HOLD_MS = 2000;
 
-  const alt = isMac ? '⌥' : 'Alt+';
+  const LIST_HINTS = [
+    { keys: 'enter', label: 'switch' },
+    { keys: 'mod+backspace', label: 'quit' },
+    { keys: 'mod+alt+backspace', label: 'force' },
+    { keys: 'tab', label: 'sort' },
+    { keys: 'mod+k', label: 'actions' },
+  ];
+  const MENU_HINTS = [
+    { keys: 'enter', label: 'run' },
+    { keys: 'esc', label: 'back' },
+  ];
+  const CONFIRM_HINTS = [
+    { keys: 'enter', label: 'yes' },
+    { keys: 'esc', label: 'no' },
+  ];
   const finder = isMac ? 'Finder' : 'Explorer';
 
   const inputEl = ref<HTMLInputElement | null>(null);
@@ -225,27 +243,18 @@
     const row = current.value;
     if (!row) return [];
     const list: Action[] = [
-      { label: `Switch to ${row.name}`, keys: '↵', run: () => switchTo(row) },
+      { label: `Switch to ${row.name}`, keys: 'enter', run: () => switchTo(row) },
     ];
     list.push(
       row.relaunch
-        ? { label: `Relaunch ${row.name}`, keys: `${mod}⌫`, run: () => quit(row, false) }
-        : { label: `Quit ${row.name}`, keys: `${mod}⌫`, run: () => quit(row, false) }
+        ? { label: `Relaunch ${row.name}`, keys: 'mod+backspace', run: () => quit(row, false) }
+        : { label: `Quit ${row.name}`, keys: 'mod+backspace', run: () => quit(row, false) }
     );
     if (!row.protected) {
-      list.push({ label: 'Force Quit', keys: `${alt}${mod}⌫`, run: () => quit(row, true) });
+      list.push({ label: 'Force Quit', keys: 'mod+alt+backspace', run: () => quit(row, true) });
     }
     if (row.path) list.push({ label: `Show in ${finder}`, run: () => reveal() });
     list.push({ label: `Search the web for ${row.name}`, run: () => emit('search', row.name) });
-    list.push({
-      label: `Ask AI what ${row.name} is`,
-      run: () =>
-        emit(
-          'ask',
-          `What is "${row.name}" on my ${isMac ? 'Mac' : 'PC'}, and is it safe to quit?` +
-            (row.path ? ` Its path is ${row.path}.` : '')
-        ),
-    });
     list.push({
       label: row.pids.length > 1 ? 'Copy process IDs' : 'Copy process ID',
       run: () => copy(row.pids.join(' '), row.pids.length > 1 ? 'process IDs' : 'process ID'),
@@ -405,6 +414,20 @@
         value: `${bytes(totals.memoryUsed)} of ${bytes(totals.memoryTotal, 0)}`,
         spark: spark(history, (p) => p.memory, 1),
       },
+      gpu: totals.gpu
+        ? {
+            value: totals.gpu.memoryUsed
+              ? `${percent(totals.gpu.usage)} · ${bytes(totals.gpu.memoryUsed)}`
+              : percent(totals.gpu.usage),
+            title: gpuTitle(
+              totals.gpu.name,
+              totals.gpu.usage,
+              totals.gpu.memoryUsed,
+              totals.gpu.memoryTotal
+            ),
+            spark: spark(history, (p) => p.gpu, 100),
+          }
+        : null,
       network: {
         value: `↓ ${bytes(totals.netDown)}/s · ↑ ${bytes(totals.netUp)}/s`,
         spark: spark(history, traffic, Math.max(...history.map(traffic), 64 * 1024)),
@@ -438,13 +461,13 @@
       <span
         class="res-live"
         :class="{ on: live }"
-        :title="live ? `Live, every ${rate / 1000} s` : 'Paused'"
+        v-tip="live ? `Live, every ${rate / 1000} s` : 'Paused'"
         aria-hidden="true"
       />
       <button
         type="button"
         class="chip"
-        title="Sort (Tab)"
+        v-tip="'Sort (Tab)'"
         @mousedown.prevent
         @click="cycleSort(false)"
       >
@@ -497,6 +520,22 @@
           <path class="line" :d="tiles.memory.spark.line" />
         </svg>
       </button>
+      <div v-if="tiles.gpu" class="res-tile" v-tip="tiles.gpu.title">
+        <span class="res-tile-head">
+          <svg viewBox="0 0 24 24" aria-hidden="true" v-html="GLYPHS.gpu" />
+          GPU
+        </span>
+        <span class="res-tile-value">{{ tiles.gpu.value }}</span>
+        <svg
+          class="res-spark gpu"
+          viewBox="0 0 120 28"
+          preserveAspectRatio="none"
+          aria-hidden="true"
+        >
+          <path class="area" :d="tiles.gpu.spark.area" />
+          <path class="line" :d="tiles.gpu.spark.line" />
+        </svg>
+      </div>
       <div class="res-tile">
         <span class="res-tile-head">
           <svg viewBox="0 0 24 24" aria-hidden="true" v-html="GLYPHS.updown" />
@@ -536,7 +575,7 @@
         @mousemove="actionIndex = index"
       >
         <span class="label">{{ action.label }}</span>
-        <span v-if="action.keys" class="hint">{{ action.keys }}</span>
+        <Keys v-if="action.keys" :keys="action.keys" />
       </li>
     </ul>
 
@@ -574,7 +613,7 @@
             confirming: confirming?.key === row.key,
             locked: row.locked,
           }"
-          :title="
+          v-tip="
             row.locked
               ? `${row.name} runs as ${row.user || 'another user'}; its use needs administrator rights to read`
               : undefined
@@ -591,7 +630,7 @@
                 <span
                   v-if="row.pids.length > 1"
                   class="res-count"
-                  :title="`${row.pids.length} processes`"
+                  v-tip="`${row.pids.length} processes`"
                   >{{ row.pids.length }}</span
                 >
               </span>
@@ -604,7 +643,7 @@
                 ? `Relaunch ${row.name}?`
                 : `${confirming.force ? 'Force quit' : 'Quit'} ${row.name}?`
             }}
-            <kbd class="kbd">↵</kbd> yes · <kbd class="kbd">Esc</kbd> no
+            <KeyHints :hints="CONFIRM_HINTS" />
           </span>
           <template v-else>
             <span class="res-cpu">
@@ -626,13 +665,8 @@
     </template>
 
     <footer class="footer">
-      <span>
-        <template v-if="actionsOpen">↵ run · Esc back</template>
-        <template v-else>
-          ↵ switch · {{ mod }}⌫ quit · {{ alt }}{{ mod }}⌫ force · Tab sort · {{ mod }}K actions
-        </template>
-      </span>
-      <span v-if="data" :title="`${data.processes} processes`">
+      <KeyHints :hints="actionsOpen ? MENU_HINTS : LIST_HINTS" />
+      <span v-if="data" v-tip="`${data.processes} processes`">
         {{ data.totals.diskTotal ? `${bytes(data.totals.diskFree)} free · ` : '' }}up
         {{ uptime(data.uptime) }}
       </span>

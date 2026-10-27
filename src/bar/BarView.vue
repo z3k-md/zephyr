@@ -2,9 +2,6 @@
   import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import {
-    claudeAnswer,
-    claudeApprovals,
-    claudeJobs,
     dispatch,
     errorMessage,
     getSnapshot,
@@ -18,14 +15,12 @@
     appQuit,
     openFile,
     openSetting,
-    claudeSubmit,
     syncApprove,
     syncPending,
     syncRevoke,
     openNotes,
     openSettings,
     setActiveMode,
-    resolveUrl,
     revealFile,
     setBarHeight,
     suggest,
@@ -43,18 +38,20 @@
     powerRun,
     powerCancel,
     openUrl,
+    weatherAt,
   } from '../api';
   import ClipboardView from './ClipboardView.vue';
   import ResourcesView from './ResourcesView.vue';
   import TypingView from '../typing/TypingView.vue';
-  import AiView from '../ai/AiView.vue';
-  import ApprovalCard from '../claude/ApprovalCard.vue';
   import DeviceCard from './DeviceCard.vue';
   import ResultList from './ResultList.vue';
+  import HomeStatus from './HomeStatus.vue';
+  import WeatherCard from './WeatherCard.vue';
+  import { placeName, useWeather } from './weather';
+  import Keys from '../components/Keys.vue';
   import { vFit } from '../fit';
-  import { bytes } from '../format';
+  import { vTip } from '../tip';
   import { isMac } from '../keys';
-  import { askAiName, chosenAi, displayName, isOtherAi } from '../aiChoice';
   import NowPlayingStrip from './NowPlayingStrip.vue';
   import { dragOut } from './dragOut';
   import { GLYPHS } from './glyphs';
@@ -62,20 +59,18 @@
   import { useNowPlaying } from './nowPlaying';
   import { useFooterStats } from './footerStats';
   import { bindingForAlias, bindingTarget, buildRows, groups, rowKey, type RowCtx } from './rows';
-  import ClaudeView from '../claude/ClaudeView.vue';
   import ShellView from '../shell/ShellView.vue';
   import {
     isSnapshot,
     type Binding,
-    type ClaudeApproval,
-    type ClaudeJob,
     type SyncPending,
-    type Destination,
     type Snapshot,
     type Suggestion,
     type SystemStats,
     type SuggestResponse,
     type PowerPreview,
+    type MediaControl,
+    type Forecast,
   } from '../types';
 
   const root = ref<HTMLElement | null>(null);
@@ -106,24 +101,21 @@
   function typedText(): string {
     return scope.value ? `!${scope.value.bang} ${query.value}` : query.value;
   }
-  const armedId = ref('google');
   // The last suggest reply and the text it was for; the rows are built from it, so command
   // rows and job counts stay current without asking again.
   const lastResponse = ref<SuggestResponse | null>(null);
   const lastQuery = ref('');
-  const mode = ref<'search' | 'destinations' | 'recent'>('recent');
+  const mode = ref<'search' | 'recent'>('recent');
   const notice = ref<string | null>(null);
   const selected = ref(-1);
   const loadError = ref<string | null>(null);
 
-  // Views that take over the bar. Workspaces (Claude, Ask AI, typing and Shell) stick: every
-  // open lands back in them until Esc leaves. Esc to the main bar only parks a workspace; a
-  // second Esc there clears it. Clipboard is a picker: it sticks until something is picked.
-  type View = 'root' | 'claude' | 'clip' | 'typing' | 'ai' | 'shell' | 'resources';
-  const WORKSPACES = ['claude', 'ai', 'typing', 'shell'];
+  // Views that take over the bar. Workspaces (typing and Shell) stick: every open lands back
+  // in them until Esc leaves. Esc to the main bar only parks a workspace; a second Esc there
+  // clears it. Clipboard is a picker: it sticks until something is picked.
+  type View = 'root' | 'clip' | 'typing' | 'shell' | 'resources';
+  const WORKSPACES = ['typing', 'shell'];
   const MODE_NAMES: Record<string, string> = {
-    claude: 'Claude jobs',
-    ai: 'Ask AI',
     typing: 'typing test',
     shell: 'Shell',
   };
@@ -133,8 +125,6 @@
   const visited = reactive<Record<string, boolean>>({});
   const clipMode = computed(() => view.value === 'clip');
   const typingMode = computed(() => view.value === 'typing');
-  const claudeMode = computed(() => view.value === 'claude');
-  const aiMode = computed(() => view.value === 'ai');
   const shellMode = computed(() => view.value === 'shell');
   // Shell commands, from > or !sh; a command never runs on unscoped Enter.
   const shellQuery = ref('');
@@ -144,12 +134,6 @@
   const resourcesView = ref<InstanceType<typeof ResourcesView> | null>(null);
   const clipView = ref<InstanceType<typeof ClipboardView> | null>(null);
   const typingView = ref<InstanceType<typeof TypingView> | null>(null);
-  const aiView = ref<InstanceType<typeof AiView> | null>(null);
-  // Background Claude jobs, from !claude; pending permission requests show above everything.
-  const claudeQuery = ref('');
-  const claudeView = ref<InstanceType<typeof ClaudeView> | null>(null);
-  const approvals = ref<ClaudeApproval[]>([]);
-  const jobs = ref<ClaudeJob[]>([]);
   // Other computers asking to join sync; checked when the bar opens and every minute.
   const devicesWaiting = ref<SyncPending[]>([]);
   let devicePoll = 0;
@@ -159,7 +143,8 @@
 
   interface Action {
     label: string;
-    hint?: string;
+    /** Its key, as a spec for the Keys component ("shift+enter"). */
+    keys?: string;
     run: () => unknown;
   }
 
@@ -175,35 +160,10 @@
   let unlistens: UnlistenFn[] = [];
   let observer: ResizeObserver | null = null;
 
-  const strip = computed(() =>
-    (snapshot.value?.destinations ?? [])
-      .filter(
-        (destination) =>
-          destination.pinned && !destination.disabled && !isOtherAi(snapshot.value, destination)
-      )
-      .slice(0, 8)
-  );
-
-  const destinationNames = computed(() =>
-    Object.fromEntries(
-      (snapshot.value?.destinations ?? []).map((item) => [
-        item.id,
-        displayName(snapshot.value, item),
-      ])
-    )
-  );
-
-  const armed = computed(() =>
-    snapshot.value?.destinations.find((destination) => destination.id === armedId.value)
-  );
-
   const rowCtx = computed<RowCtx>(() => ({
     snapshot: snapshot.value,
-    armedId: armedId.value,
-    jobs: jobs.value,
     parked: parked.value,
     parkedName: MODE_NAMES[parked.value] ?? '',
-    strip: strip.value.map((destination) => destination.id),
     typed: scope.value ? '' : lastQuery.value,
   }));
 
@@ -260,8 +220,9 @@
         kind: 'powerPending',
         label: `${POWER_NAMES[pending.action] ?? 'Scheduled'} ${untilText(pending.at)}`,
         query: '',
-        destinationId: '',
+        target: '',
         hint: 'Enter cancels',
+        keyHints: [{ keys: 'enter', label: 'cancels' }],
         section: 'power',
         icon: POWER_ICONS[pending.action] ?? 'glyph:power',
       });
@@ -273,7 +234,7 @@
         kind: 'power',
         label: preview.label,
         query: '',
-        destinationId: '',
+        target: '',
         hint:
           confirmArm.value === key
             ? 'Enter again to confirm'
@@ -282,6 +243,8 @@
               : preview.at
                 ? 'Schedule'
                 : 'Run',
+        keyHints:
+          confirmArm.value === key ? [{ keys: 'enter', label: 'again to confirm' }] : undefined,
         section: 'power',
         icon: POWER_ICONS[preview.action] ?? 'glyph:power',
         power: preview,
@@ -299,7 +262,7 @@
             kind: 'power',
             label: `${POWER_LABELS[preview.action]} in ${words}`,
             query: '',
-            destinationId: '',
+            target: '',
             hint: 'Schedule',
             section: 'power',
             icon: 'glyph:clock',
@@ -333,7 +296,7 @@
         label: 'Run in shell',
         hint: '> or !sh',
         query: '',
-        destinationId: 'shell',
+        target: 'shell',
         kind: 'view',
         section: 'shell',
         icon: 'glyph:prompt',
@@ -342,7 +305,7 @@
     return result;
   });
   const items = computed(() => built.value.rows);
-  const sections = computed(() => groups(items.value, rowCtx.value));
+  const sections = computed(() => groups(items.value));
 
   const selectedItem = computed(() =>
     selected.value >= 0 ? items.value[selected.value] : undefined
@@ -353,7 +316,7 @@
   const caretAtEnd = ref(true);
   const ghost = computed(() => {
     const typed = query.value;
-    if (!typed.trim() || !caretAtEnd.value || mode.value === 'destinations') return '';
+    if (!typed.trim() || !caretAtEnd.value) return '';
     if (scope.value || typed.startsWith('!') || typed.startsWith('>')) return '';
     const lower = typed.toLowerCase();
     const target = selectedItem.value;
@@ -364,7 +327,7 @@
       candidates = [target.query];
     } else {
       const history = [...(snapshot.value?.history ?? [])]
-        .filter((entry) => entry.destinationId === armedId.value)
+        .filter((entry) => entry.destinationId === 'google')
         .sort((a, b) => b.uses - a.uses || b.lastUsed - a.lastUsed)
         .map((entry) => entry.query);
       const remote = items.value
@@ -443,7 +406,7 @@
     window.addEventListener('mouseup', drop, true);
   }
 
-  // Bug captures (Ctrl+Alt+R and Ctrl+Alt+S, unless turned off in Settings): while one runs,
+  // Bug captures (Ctrl+R and Ctrl+Shift+S, unless turned off in Settings): while one runs,
   // the bar logs what it does.
   const capturing = ref(false);
   function trace(kind: string, data: unknown) {
@@ -463,7 +426,6 @@
         completion: ghost.value,
         mode: mode.value,
         view: view.value,
-        armed: armed.value?.name ?? null,
         selected: selected.value,
         notice: notice.value,
         rows: items.value.map((item) => ({
@@ -497,7 +459,7 @@
         const privateWindow = item.privateWindow;
         list.push({
           label: `Open ${privateWindow} window`,
-          hint: '⇧↵',
+          keys: 'shift+enter',
           run: () => launch(appId, false, true),
         });
       }
@@ -509,7 +471,7 @@
       if (item.privateWindow) {
         list.push({
           label: `Open ${item.privateWindow} window`,
-          hint: '⇧↵',
+          keys: 'shift+enter',
           run: () => launch(appId, false, true),
         });
       }
@@ -534,27 +496,12 @@
     } else if (item?.kind === 'setting' && item.settingId) {
       const settingId = item.settingId;
       list.push({ label: `Open ${item.label}`, run: () => openPage(settingId) });
-    } else if (item?.kind === 'destination') {
-      const destinationId = item.destinationId;
-      list.push({ label: `Use ${item.label}`, run: () => armById(destinationId) });
-      list.push({ label: 'Edit destinations', run: () => openPage('zephyr.destinations') });
     } else {
       const text = item ? item.query : query.value.trim();
-      const target = item ? item.destinationId : armedId.value;
       if (!text) return list;
-      for (const destination of sendTargets(target)) {
-        list.push({
-          label:
-            destination.id === target
-              ? `Search ${destination.name}`
-              : `Send to ${destination.name}`,
-          run: () => run(text, destination.id, false),
-        });
-      }
-      const current = snapshot.value?.destinations.find((destination) => destination.id === target);
-      if (current && current.kind !== 'ai') {
-        list.push({ label: 'Copy link', run: () => copyLink(text, target) });
-      }
+      const link = (item ? item.target : lastResponse.value?.target) === 'url';
+      list.push({ label: link ? 'Open link' : 'Search Google', run: () => run(text, false) });
+      list.push({ label: 'Copy link', run: () => copyText(link ? text : googleUrl(text)) });
       list.push({ label: 'Copy text', run: () => copyText(text) });
     }
     return list;
@@ -573,7 +520,7 @@
     ];
   });
 
-  // CPU, memory, disk and network as meters in a slim footer, from readings the app sends
+  // CPU, GPU, memory and disk as meters in a slim footer, from readings the app sends
   // twice a second while the bar shows (Settings › General can turn it off).
   const footerStats = useFooterStats();
   const meters = footerStats.footer;
@@ -587,14 +534,11 @@
 
   // What's playing, as a small chip at the end of the search bar.
   const media = useNowPlaying();
-  const playingNow = computed(() =>
-    snapshot.value?.showNowPlaying === false ? null : media.shown.value
-  );
+  const playingNow = computed(() => media.shown.value);
 
   onMounted(async () => {
     try {
       snapshot.value = await getSnapshot();
-      armedId.value = snapshot.value.defaultDestinationId;
       const remembered = snapshot.value.activeMode;
       if (snapshot.value.returnToMode && MODE_NAMES[remembered]) {
         parked.value = remembered;
@@ -608,9 +552,7 @@
       await listen('bar-shown', () => {
         media.tick();
         // Opens the connection to the suggestion service before the first keystroke.
-        void warmSuggestions(armedId.value).catch(() => undefined);
-        void loadApprovals();
-        void loadJobs();
+        void warmSuggestions().catch(() => undefined);
         void loadDevices();
         if (snapshot.value && !snapshot.value.returnToMode) {
           parked.value = '';
@@ -654,41 +596,20 @@
       })
     );
     unlistens.push(await listen<SystemStats>('stats', (event) => takeStats(event.payload)));
-    // A zephyr:// link: text to type in, and optionally where to send it right away.
+    // A zephyr:// link: text to type in, and whether to do what Enter would with it.
     unlistens.push(
-      await listen<{ query: string; destination: string | null; run: boolean }>(
-        'bar-input',
-        (event) => {
-          const { query: text, destination, run: send } = event.payload;
-          // A link from a web page must never stage a shell command for the user to run.
-          if (SHELL_PREFIX.test(text)) {
-            notice.value = "Links can't open the shell";
-            return;
-          }
-          const target = snapshot.value?.destinations.find(
-            (item) =>
-              !item.disabled &&
-              (item.id === destination || item.triggers.includes(destination ?? ''))
-          );
-          if (target) armedId.value = target.id;
-          query.value = text;
-          if (send && text) {
-            void run(text, target?.id ?? armedId.value, !target);
-          } else if (destination && !target) {
-            notice.value = `No destination ${destination}`;
-          }
-          void focusInput();
+      await listen<{ query: string; run: boolean }>('bar-input', (event) => {
+        const { query: text, run: send } = event.payload;
+        // A link from a web page must never stage a shell command for the user to run.
+        if (SHELL_PREFIX.test(text)) {
+          notice.value = "Links can't open the shell";
+          return;
         }
-      )
-    );
-    unlistens.push(
-      await listen('claude-changed', () => {
-        void loadApprovals();
-        void loadJobs();
+        query.value = text;
+        if (send && text) void run(text, true);
+        void focusInput();
       })
     );
-    void loadApprovals();
-    void loadJobs();
     void loadDevices();
     devicePoll = window.setInterval(() => void loadDevices(), 60000);
     unlistens.push(await listen('clipboard-shown', () => openClip('')));
@@ -708,13 +629,6 @@
       await listen<unknown>('state-changed', (event) => {
         if (!isSnapshot(event.payload)) return;
         snapshot.value = event.payload;
-        if (
-          !snapshot.value.destinations.some(
-            (destination) => destination.id === armedId.value && !destination.disabled
-          )
-        ) {
-          armedId.value = snapshot.value.defaultDestinationId;
-        }
       })
     );
 
@@ -723,7 +637,6 @@
     window.addEventListener('keyup', trackModifiers, true);
     window.addEventListener('keyup', onKeyUp, true);
     window.addEventListener('blur', () => {
-      held.value = '';
       movable.value = false;
       closeOnEscapeUp = false;
       // Alt+Tab away: the Alt reached the bar, its release didn't.
@@ -776,8 +689,8 @@
     if (view.value === 'root') {
       scheduleSuggest();
       void focusInput();
-    } else if (view.value === 'ai') {
-      void aiView.value?.focus();
+    } else if (view.value === 'shell') {
+      void shellView.value?.focus();
     }
   });
 
@@ -799,16 +712,11 @@
     }
   }
 
-  /** Enters a view carrying text; a view kept from earlier takes the new text too. */
-  function enterWith(next: 'claude' | 'shell', text: string) {
-    if (next === 'claude') {
-      claudeQuery.value = text;
-      if (claudeView.value && text) claudeView.value.text = text;
-    } else {
-      shellQuery.value = text;
-      if (shellView.value && text) shellView.value.text = text;
-    }
-    enter(next);
+  /** Enters the shell carrying text; a shell kept from earlier takes the new text too. */
+  function enterShell(text: string) {
+    shellQuery.value = text;
+    if (shellView.value && text) shellView.value.text = text;
+    enter('shell');
   }
 
   /** Esc or Backspace out of a view: back to the main bar, with a workspace left parked. */
@@ -816,30 +724,20 @@
     view.value = 'root';
   }
 
-  /** System Resources' "Search the web": the default web destination, from the main bar. */
+  /** System Resources' "Search the web": a Google search, from the main bar. */
   function searchFromResources(name: string) {
     leave();
-    const destination = webDefault();
-    if (destination) void run(name, destination, false);
+    void run(name, false);
   }
 
-  /** System Resources' "Ask AI": the AI chosen in Settings › AI, built in or on the web. */
-  function askFromResources(question: string) {
-    const ai = chosenAi(snapshot.value);
-    if (ai && ai.kind !== 'ai') {
-      leave();
-      void run(question, ai.id, false);
-    } else {
-      void enterAi(question);
-    }
-  }
-
-  /** Set by Esc's press at the root; its release closes the bar. */
+  /** Set by Esc's press at the root; its release closes the bar. Only that same press may:
+   *  every other Esc press clears it, so the one that backs out of a view never also closes. */
   let closeOnEscapeUp = false;
 
   function onKeyUp(event: KeyboardEvent) {
     if (event.key !== 'Escape' || !closeOnEscapeUp) return;
     closeOnEscapeUp = false;
+    if (view.value !== 'root') return;
     event.preventDefault();
     closeFromRoot();
   }
@@ -853,17 +751,10 @@
     void hideBar();
   }
 
-  async function enterAi(question: string, fresh = true) {
-    enter('ai');
-    await nextTick();
-    await nextTick();
-    void aiView.value?.ask(question, fresh);
-  }
-
   // A pasted line that reads like a command gets a "Run in shell" row; Enter still goes to
-  // the armed destination unless that row is picked.
+  // the web unless that row is picked.
   const COMMAND_START =
-    /^(?:git|gh|ls|ll|cd|cat|echo|grep|rg|find|curl|wget|npm|npx|bun|bunx|pnpm|yarn|node|deno|python3?|py|pip3?|uv|cargo|rustup|go|make|docker|kubectl|ssh|scp|rsync|brew|winget|choco|scoop|sudo|chmod|chown|mkdir|rm|mv|cp|touch|tail|head|ps|kill|df|du|code|claude|wsl|pwsh|powershell|tar|unzip|ping|nslookup|ipconfig|ifconfig|[A-Z][a-z]+-[A-Z]\w+)$/;
+    /^(?:git|gh|ls|ll|cd|cat|echo|grep|rg|find|curl|wget|npm|npx|bun|bunx|pnpm|yarn|node|deno|python3?|py|pip3?|uv|cargo|rustup|go|make|docker|kubectl|ssh|scp|rsync|brew|winget|choco|scoop|sudo|chmod|chown|mkdir|rm|mv|cp|touch|tail|head|ps|kill|df|du|code|wsl|pwsh|powershell|tar|unzip|ping|nslookup|ipconfig|ifconfig|[A-Z][a-z]+-[A-Z]\w+)$/;
 
   function looksLikeCommand(text: string): boolean {
     const line = text.trim().replace(/^\$\s+/, '');
@@ -873,22 +764,14 @@
     return rest.length > 0 && (COMMAND_START.test(first) || /\s(?:\||&&)\s/.test(line));
   }
 
-  async function loadJobs() {
-    try {
-      jobs.value = await claudeJobs();
-    } catch {
-      jobs.value = [];
-    }
-  }
-
   function openView(id: string) {
     const typed = query.value;
     query.value = '';
     const back = id === 'back';
     if (back) id = parked.value;
     if (id === 'shell') {
-      enterWith('shell', back ? '' : typed.trim().replace(/^\$\s+/, ''));
-    } else if (id === 'claude' || id === 'ai' || id === 'typing') {
+      enterShell(back ? '' : typed.trim().replace(/^\$\s+/, ''));
+    } else if (id === 'typing') {
       enter(id);
     } else if (id === 'clip') {
       openClip('');
@@ -934,34 +817,6 @@
     }
   }
 
-  async function loadApprovals() {
-    try {
-      approvals.value = await claudeApprovals();
-    } catch {
-      approvals.value = [];
-    }
-  }
-
-  /** Answers the oldest permission request; text typed in the bar becomes a deny reason. */
-  async function answerApproval(decision: 'allow' | 'always' | 'deny') {
-    const approval = approvals.value[0];
-    if (!approval || answering) return;
-    answering = true;
-    const typed = view.value === 'claude' ? (claudeView.value?.text ?? '') : query.value;
-    try {
-      await claudeAnswer(approval.id, decision, decision === 'deny' ? typed : undefined);
-      if (decision === 'deny' && typed) {
-        if (view.value === 'claude' && claudeView.value) claudeView.value.text = '';
-        else query.value = '';
-      }
-      await loadApprovals();
-    } catch (error) {
-      notice.value = errorMessage(error);
-    } finally {
-      answering = false;
-    }
-  }
-
   watch(query, () => {
     if (!scope.value && view.value === 'root' && runAlias()) return;
     const scoped = /^!([a-z]+)\s+(.*)$/is.exec(query.value);
@@ -980,13 +835,7 @@
     if (shell && (query.value.trimStart().startsWith('>') || /\s$/.test(shell[0]))) {
       const text = query.value.slice(shell[0].length);
       query.value = '';
-      enterWith('shell', text);
-      return;
-    }
-    const claude = /^!claude(?:\s+(.*))?$/i.exec(query.value);
-    if (claude) {
-      query.value = '';
-      enterWith('claude', claude[1] ?? '');
+      enterShell(text);
       return;
     }
     const clip = /^!clip(?:\s+(.*))?$/i.exec(query.value);
@@ -1014,20 +863,13 @@
     scheduleSuggest();
   });
 
-  watch(armedId, (id) => {
-    selected.value = -1;
-    userMoved = false;
-    scheduleSuggest();
-    void warmSuggestions(id).catch(() => undefined);
-  });
-
   /** Clears the main bar's text and selection; views and the parked workspace are untouched. */
   function resetForSummon() {
     query.value = '';
     scope.value = null;
     selected.value = -1;
+    pausedHere.value = false;
     notice.value = null;
-    armedId.value = snapshot.value?.defaultDestinationId ?? armedId.value;
   }
 
   async function focusInput() {
@@ -1058,29 +900,25 @@
     }, 120);
   }
 
-  /** Web suggestions by destination and text, so going back to a text shows them at once. */
+  /** Web suggestions by text, so going back to a text shows them at once. */
   const remembered = new Map<string, Suggestion[]>();
 
   /** The web rows to keep up until this text's own arrive: only ones that still match. */
-  function stillMatching(typed: string, destinationId: string): Suggestion[] {
+  function stillMatching(typed: string): Suggestion[] {
     const prefix = typed.trim().toLowerCase();
     if (!prefix) return [];
     return (lastResponse.value?.items ?? []).filter(
-      (item) =>
-        item.kind === 'remote' &&
-        item.destinationId === destinationId &&
-        item.query.toLowerCase().startsWith(prefix)
+      (item) => item.kind === 'remote' && item.query.toLowerCase().startsWith(prefix)
     );
   }
 
   async function loadSuggestions(current: number, includeRemote: boolean) {
     try {
       const typed = typedText();
-      const destinationId = armedId.value;
       const asked = performance.now();
       trace('fetch', { text: typed, remote: includeRemote, generation: current });
       const [answer, power] = await Promise.all([
-        suggest(typed, destinationId, includeRemote),
+        suggest(typed, includeRemote),
         includeRemote ? Promise.resolve(powerRow.value) : powerPreview(typed).catch(() => null),
       ]);
       let response = answer;
@@ -1097,7 +935,7 @@
       if (includeRemote) remoteApplied = true;
       // Until this text's web suggestions arrive, keep the ones seen for it before
       // (backspacing), or the current ones that still match, so the list doesn't collapse.
-      const key = `${destinationId}\n${typed.trim().toLowerCase()}`;
+      const key = typed.trim().toLowerCase();
       if (includeRemote) {
         remembered.set(
           key,
@@ -1105,7 +943,7 @@
         );
         if (remembered.size > 200) remembered.delete(remembered.keys().next().value ?? '');
       } else {
-        const carried = remembered.get(key) ?? stillMatching(typed, destinationId);
+        const carried = remembered.get(key) ?? stillMatching(typed);
         if (carried.length) response = { ...response, items: [...response.items, ...carried] };
       }
       // Keep the row the user moved to selected when late results reshuffle the list.
@@ -1154,9 +992,10 @@
     });
     // WebKit ends a composition before the key that commits it, which then reads 229.
     if (event.isComposing || event.keyCode === 229) return;
-    // A computer asking to join sync, when no Claude request is ahead of it.
+    // A fresh Esc press closes the bar on release only if the root takes it, below.
+    if (event.key === 'Escape' && !event.repeat) closeOnEscapeUp = false;
+    // A computer asking to join sync: never plain Enter, only these keys.
     if (
-      !approvals.value.length &&
       devicesWaiting.value.length &&
       (event.metaKey || event.ctrlKey) &&
       !event.altKey &&
@@ -1164,22 +1003,9 @@
     ) {
       if (event.code === 'KeyY' || event.code === 'KeyN') {
         event.preventDefault();
+        // A held key answers once; the next request needs its own press.
         if (event.repeat) return;
         void answerDevice(event.code === 'KeyY' ? 'allow' : 'deny');
-        return;
-      }
-    }
-    // A pending Claude permission request: never plain Enter, only these keys.
-    if (approvals.value.length && (event.metaKey || event.ctrlKey) && !event.altKey) {
-      // A held key answers once; the next request needs its own press.
-      if (event.code === 'KeyY') {
-        event.preventDefault();
-        if (!event.repeat) void answerApproval(event.shiftKey ? 'always' : 'allow');
-        return;
-      }
-      if (event.code === 'KeyN' && !event.shiftKey) {
-        event.preventDefault();
-        if (!event.repeat) void answerApproval('deny');
         return;
       }
     }
@@ -1202,10 +1028,6 @@
         return;
       }
     }
-    if (view.value === 'claude') {
-      claudeView.value?.onKey(event);
-      return;
-    }
     if (view.value === 'clip') {
       clipView.value?.onKey(event);
       return;
@@ -1222,14 +1044,10 @@
       shellView.value?.onKey(event);
       return;
     }
-    if (view.value === 'ai') {
-      aiView.value?.onKey(event);
-      return;
-    }
     if (event.key === 'Enter' && /^!(?:sh|shell)$/i.test(query.value.trim())) {
       event.preventDefault();
       query.value = '';
-      enterWith('shell', '');
+      enterShell('');
       return;
     }
     // !type then Enter opens the typing test too.
@@ -1241,6 +1059,12 @@
     }
 
     const modifier = event.ctrlKey || event.metaKey;
+    // Ctrl+S (⌘S on a Mac) opens Settings.
+    if (moveKeyOnly(event) && event.code === 'KeyS') {
+      event.preventDefault();
+      if (!event.repeat) void openSettings();
+      return;
+    }
     if (modifier && !event.altKey && !event.shiftKey && event.code === 'KeyK') {
       event.preventDefault();
       if (actionsOpen.value) {
@@ -1337,9 +1161,9 @@
       return;
     }
 
+    // Tab would only move focus out of the search box.
     if (event.key === 'Tab') {
       event.preventDefault();
-      cycleArmed(event.shiftKey);
       return;
     }
 
@@ -1354,25 +1178,22 @@
       return;
     }
 
-    if (
-      event.ctrlKey &&
-      !event.altKey &&
-      !event.metaKey &&
-      !event.shiftKey &&
-      event.code.startsWith('Digit')
-    ) {
-      const index = Number(event.code.slice(5)) - 1;
-      if (index >= 0 && index < strip.value.length) {
-        event.preventDefault();
-        if (event.repeat) return;
-        void sendTo(strip.value[index]);
-      }
-      return;
-    }
-
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();
       moveSelection(event.key === 'ArrowDown' ? 1 : -1);
+      return;
+    }
+
+    // Ctrl+Enter on the weather card opens a full forecast; Enter stays on the search.
+    if (
+      cardForecast.value &&
+      modifier &&
+      !event.altKey &&
+      !event.shiftKey &&
+      event.key === 'Enter'
+    ) {
+      event.preventDefault();
+      if (!event.repeat) openForecast();
       return;
     }
 
@@ -1405,123 +1226,77 @@
         if (!modifier && !event.altKey) void googleAiMode();
         return;
       }
-      if (modifier || event.altKey) {
-        void route(event.altKey ? 'alt' : 'cmd');
-        return;
-      }
       void accept();
     }
   }
 
+  // The weather card: "weather", "forecast", or either with a city ("weather in tokyo").
+  // Here comes from the Today line's forecast; a city is looked up as it's typed.
+  const forecast = useWeather();
+  const weatherCity = computed(() => {
+    if (scope.value || view.value !== 'root') return null;
+    const asked = /^(?:weather|forecast)(?:\s+(?:in\s+|for\s+)?(.*))?$/i.exec(query.value.trim());
+    return asked ? (asked[1] ?? '').trim() : null;
+  });
+  const typedForecast = ref<{ city: string; forecast: Forecast | null } | null>(null);
+  let weatherTimer = 0;
+  watch(weatherCity, (city) => {
+    window.clearTimeout(weatherTimer);
+    if (!city || typedForecast.value?.city === city) return;
+    weatherTimer = window.setTimeout(async () => {
+      const found = await weatherAt(city).catch(() => null);
+      if (weatherCity.value === city) typedForecast.value = { city, forecast: found };
+    }, 350);
+  });
+  const cardForecast = computed(() => {
+    const city = weatherCity.value;
+    if (city === null || actionsOpen.value) return null;
+    if (!city) return forecast.value;
+    return typedForecast.value?.city === city ? typedForecast.value.forecast : null;
+  });
+
+  function openForecast() {
+    const shown = cardForecast.value;
+    if (!shown) return;
+    void openUrl(googleUrl(`weather ${placeName(shown)}`))
+      .then(clearAfterOpen)
+      .catch((error) => (notice.value = errorMessage(error)));
+  }
+
+  /** The footer's weather: the weather card. */
+  function showWeather() {
+    if (!forecast.value) return;
+    query.value = 'weather';
+    void focusInput();
+  }
+
+  function googleUrl(text: string): string {
+    return `https://www.google.com/search?q=${encodeURIComponent(text)}`;
+  }
+
   /**
-   * Shift+Enter on a search going to Google opens it in Google's AI Mode (udm=50) instead
-   * of the usual results. Anything else ignores it.
+   * Shift+Enter on a search opens it in Google's AI Mode (udm=50) instead of the usual
+   * results. Anything else ignores it.
    */
   async function googleAiMode() {
     const item = selectedItem.value;
-    const searchRow =
-      item && ['query', 'history', 'remote', 'searchWith'].includes(item.kind) ? item : null;
-    const text = (searchRow ? searchRow.query : typedText()).trim();
-    const destinationId = searchRow ? searchRow.destinationId : armedId.value;
-    if (!text || destinationId !== 'google' || (item && !searchRow)) return;
+    const searchRow = item && ['query', 'history', 'remote'].includes(item.kind) ? item : null;
+    const text = (searchRow ? searchRow.query : query.value).trim();
+    const target = searchRow ? searchRow.target : lastResponse.value?.target;
+    if (!text || target !== 'web' || (item && !searchRow)) return;
     try {
-      const url = new URL(await resolveUrl(text, 'google'));
-      url.searchParams.set('udm', '50');
-      await openUrl(url.toString());
+      await openUrl(`${googleUrl(text)}&udm=50`);
       clearAfterOpen();
     } catch (error) {
       notice.value = errorMessage(error);
     }
   }
 
-  // Enter routes: ⌘↵ (Ctrl+Enter) and ⌥↵ (Alt+Enter) send the typed text somewhere else
-  // without arming anything. Settings > General can point either at any destination or
-  // Claude project.
-  interface Route {
-    kind: 'ai' | 'web' | 'claude';
-    id: string;
-    label: string;
-  }
-
-  function webDefault(): string {
-    const destinations = snapshot.value?.destinations ?? [];
-    const preferred = destinations.find(
-      (item) => item.id === snapshot.value?.defaultDestinationId && item.kind !== 'ai'
-    );
-    return (
-      (preferred ?? destinations.find((item) => !item.disabled && item.kind !== 'ai'))?.id ??
-      'google'
-    );
-  }
-
-  function routeFor(which: 'cmd' | 'alt'): Route {
-    const configured =
-      (which === 'cmd' ? snapshot.value?.routeCmd : snapshot.value?.routeAlt) ?? '';
-    const destinations = snapshot.value?.destinations ?? [];
-    const projects = snapshot.value?.claude.projects ?? [];
-    const claudeRoute = (projectId: string): Route => {
-      const project =
-        projects.find((item) => item.id === projectId) ??
-        projects.find((item) => item.id === snapshot.value?.claude.lastProject) ??
-        projects[0];
-      const name = project ? project.alias || project.folder.split(/[\\/]/).pop() : 'Claude';
-      return { kind: 'claude', id: project?.id ?? '', label: `Claude job in ${name}` };
-    };
-    if (configured.startsWith('claude')) return claudeRoute(configured.slice(7));
-    const chosen = destinations.find((item) => item.id === configured && !item.disabled);
-    if (chosen) {
-      return chosen.kind === 'ai'
-        ? { kind: 'ai', id: chosen.id, label: askAiName(snapshot.value) }
-        : { kind: 'web', id: chosen.id, label: chosen.name };
-    }
-    if (which === 'alt') return claudeRoute('');
-    // The other primary action: the chosen AI when a search is armed, and the reverse.
-    const ai = chosenAi(snapshot.value);
-    if (armed.value && ai && armed.value.id === ai.id) {
-      const id = webDefault();
-      return {
-        kind: 'web',
-        id,
-        label: destinations.find((item) => item.id === id)?.name ?? 'search',
-      };
-    }
-    if (ai && ai.kind !== 'ai') return { kind: 'web', id: ai.id, label: ai.name };
-    return { kind: 'ai', id: 'ai', label: askAiName(snapshot.value) };
-  }
-
-  async function route(which: 'cmd' | 'alt') {
-    // A row with its own alternate action keeps it for ⌘↵.
-    const item = selectedItem.value;
-    if (which === 'cmd' && item?.kind === 'app' && item.appId) {
-      await launch(item.appId);
-      return;
-    }
-    const text = query.value.trim();
-    if (!text) return;
-    const target = routeFor(which);
-    if (target.kind === 'ai') {
-      query.value = '';
-      await enterAi(text);
-    } else if (target.kind === 'claude') {
-      try {
-        await claudeSubmit(text, target.id || undefined);
-        query.value = '';
-      } catch (error) {
-        notice.value = errorMessage(error);
-      }
-    } else {
-      await run(text, target.id, false);
-    }
-  }
-
-  // Holding ⌘ or ⌥ previews where Enter would go.
-  const held = ref<'' | 'cmd' | 'alt'>('');
   // ⌘ alone on a Mac (Ctrl elsewhere) means "drag to move": the cursor and the search bar
   // say so while it's held.
   const movable = ref(false);
   let gridReady = false;
   function trackModifiers(event: KeyboardEvent | MouseEvent) {
-    held.value = event.altKey ? 'alt' : event.metaKey || event.ctrlKey ? 'cmd' : '';
     movable.value = moveKeyOnly(event);
     // The grid's window is made the first time Ctrl is held, so the drag never waits on it.
     if (movable.value && !gridReady) {
@@ -1533,7 +1308,7 @@
 
   // Alt+1..9 (⌘1..9 on a Mac) runs the Nth row. Holding the key a moment, or tapping Alt
   // alone on Windows, numbers the rows; any other key hides the numbers again.
-  const RUN_KEY = isMac ? '⌘' : 'Alt+';
+  const RUN_KEY = isMac ? 'cmd' : 'alt';
   const showNumbers = ref(false);
   let numbersTimer = 0;
   let altAlone = false;
@@ -1577,22 +1352,9 @@
     void action.run();
   }
 
-  function sendTargets(firstId: string): Destination[] {
-    const all = (snapshot.value?.destinations ?? []).filter((destination) => !destination.disabled);
-    const first = all.filter((destination) => destination.id === firstId);
-    return [...first, ...all.filter((destination) => destination.id !== firstId)].slice(0, 9);
-  }
-
-  function armById(destinationId: string) {
-    armedId.value = destinationId;
-    query.value = '';
-    inputEl.value?.focus();
-  }
-
   /**
    * Aliases the user set (Settings > Shortcuts). A direct one fires as soon as it's typed;
-   * any other, typed and then a space, goes into its destination or command with whatever
-   * follows. An app's or bookmark's alias waits for Enter (its row tops the list instead).
+   * a command's, typed and then a space, goes into that command with whatever follows. An app's or bookmark's alias waits for Enter (its row tops the list instead).
    * Returns whether it took the text.
    */
   function runAlias(): boolean {
@@ -1608,7 +1370,7 @@
     if (!spaced) return false;
     const binding = bindingForAlias(ctx, spaced[1]);
     if (!binding || binding.direct) return false;
-    if (!/^(dest|view|scope):/.test(binding.target)) return false;
+    if (!/^(view|scope):/.test(binding.target)) return false;
     void runBinding(binding, spaced[2]);
     return true;
   }
@@ -1616,11 +1378,7 @@
   async function runBinding(binding: Binding, rest: string) {
     const [kind, ...parts] = binding.target.split(':');
     const value = parts.join(':');
-    if (kind === 'dest') {
-      armedId.value = value;
-      query.value = rest;
-      inputEl.value?.focus();
-    } else if (kind === 'view' || kind === 'scope') {
+    if (kind === 'view' || kind === 'scope') {
       const id = kind === 'scope' ? binding.target : value;
       query.value = rest;
       openView(id);
@@ -1633,14 +1391,6 @@
       await openPage(value);
     } else if (kind === 'group') {
       await launchGroup(value).catch((error) => (notice.value = errorMessage(error)));
-    }
-  }
-
-  async function copyLink(text: string, destinationId: string) {
-    try {
-      await copyText(await resolveUrl(text, destinationId));
-    } catch (error) {
-      notice.value = errorMessage(error);
     }
   }
 
@@ -1662,18 +1412,6 @@
     } catch {
       notice.value = "Couldn't copy it";
     }
-  }
-
-  function cycleArmed(backward: boolean) {
-    const destinations = strip.value;
-    if (destinations.length === 0) return;
-    const index = destinations.findIndex((destination) => destination.id === armedId.value);
-    const next = backward
-      ? index <= 0
-        ? destinations.length - 1
-        : index - 1
-      : (index + 1) % destinations.length;
-    armedId.value = destinations[next].id;
   }
 
   function hover(index: number) {
@@ -1698,23 +1436,7 @@
     selected.value = (Math.min(selected.value, count - 1) + delta + count) % count;
   }
 
-  async function sendTo(destination: Destination) {
-    if (!query.value.trim()) {
-      armedId.value = destination.id;
-      return;
-    }
-    await run(query.value, destination.id, false);
-  }
-
   async function accept() {
-    if (mode.value === 'destinations') {
-      const item = items.value[selected.value >= 0 ? selected.value : 0];
-      if (!item) return;
-      armedId.value = item.destinationId;
-      query.value = '';
-      return;
-    }
-
     const item = selected.value >= 0 ? items.value[selected.value] : undefined;
     if (item) {
       if (item.kind === 'answer') {
@@ -1744,14 +1466,13 @@
         return;
       }
       if (item.kind === 'view') {
-        openView(item.destinationId);
+        openView(item.target);
         return;
       }
       if (item.kind === 'query') {
         // Below a settings page, the web row is a plain search: picking it also teaches
         // Enter to search this text from now on.
-        const first = items.value[0]?.kind === 'query';
-        await run(typedText(), first ? armedId.value : item.destinationId, first);
+        await run(typedText(), items.value[0]?.kind === 'query');
         return;
       }
       if (item.kind === 'app' && item.appId) {
@@ -1770,16 +1491,11 @@
         await openPath(item.path);
         return;
       }
-      if (item.kind === 'destination') {
-        armedId.value = item.destinationId;
-        query.value = '';
-        return;
-      }
-      await run(item.query, item.destinationId, false);
+      await run(item.query, false);
       return;
     }
 
-    await run(typedText(), armedId.value, true);
+    await run(typedText(), true);
   }
 
   // Lists never scroll: only the rows that fit are shown (see v-fit), and arrows stay
@@ -1805,6 +1521,29 @@
     top: `${previewBounds.value.top}px`,
     bottom: `${previewBounds.value.bottom}px`,
   }));
+
+  // The empty bar: the list at full width, and what's playing and the weather in the footer
+  // beside the meters. The first key typed (or a scope) puts the footer back to the meters
+  // and the track strip, in the same frame.
+  const home = computed(
+    () =>
+      view.value === 'root' &&
+      !query.value &&
+      !scope.value &&
+      !actionsOpen.value &&
+      !previewShown.value &&
+      !loadError.value
+  );
+  /** What's playing, in the empty bar's footer: only while something plays, and still there
+   *  when paused from here until the bar next opens, so its play button can be pressed. */
+  const pausedHere = ref(false);
+  const homeTrack = computed(() =>
+    media.track.value?.playing || (pausedHere.value && media.track.value) ? media.track.value : null
+  );
+  function pressMedia(control: MediaControl) {
+    if (control === 'toggle' && media.track.value?.playing) pausedHere.value = true;
+    media.press(control);
+  }
 
   function measurePreview() {
     const bar = root.value;
@@ -1935,33 +1674,12 @@
     }
   }
 
-  async function run(text: string, destinationId: string, interpret: boolean) {
+  /** Does what Enter would with `text`; `interpret` off searches it as it is. */
+  async function run(text: string, interpret: boolean) {
     try {
-      const outcome = await dispatch(text, destinationId, interpret);
-      if (
-        outcome.kind === 'opened' ||
-        outcome.kind === 'launched' ||
-        outcome.kind === 'settingOpened' ||
-        outcome.kind === 'fileOpened'
-      ) {
+      const outcome = await dispatch(text, interpret);
+      if (outcome.kind !== 'empty') {
         clearAfterOpen();
-        return;
-      }
-      if (outcome.kind === 'ask') {
-        query.value = '';
-        scope.value = null;
-        void enterAi(outcome.query);
-        return;
-      }
-      if (outcome.kind === 'armed') {
-        armedId.value = outcome.destinationId;
-        query.value = '';
-        scope.value = null;
-        notice.value = null;
-        return;
-      }
-      if (outcome.kind === 'unknownBang') {
-        notice.value = `No destination !${outcome.trigger}`;
         return;
       }
       notice.value = null;
@@ -1984,27 +1702,9 @@
     <span
       v-if="capturing"
       class="capture-dot"
-      :title="`Recording · ${isMac ? '⌃⌥R' : 'Ctrl+Alt+R'} stops`"
+      v-tip="`Recording · ${isMac ? '⌃R' : 'Ctrl+R'} stops`"
     />
-    <ApprovalCard
-      v-if="approvals.length"
-      :approval="approvals[0]"
-      :queued="approvals.length"
-      @answer="answerApproval"
-    />
-    <DeviceCard
-      v-if="!approvals.length && devicesWaiting.length"
-      :device="devicesWaiting[0]"
-      @answer="answerDevice"
-    />
-    <ClaudeView
-      v-if="visited.claude"
-      v-show="claudeMode"
-      ref="claudeView"
-      :initial-query="claudeQuery"
-      :settings="snapshot?.claude ?? null"
-      @exit="leave"
-    />
+    <DeviceCard v-if="devicesWaiting.length" :device="devicesWaiting[0]" @answer="answerDevice" />
     <ShellView
       v-if="visited.shell"
       v-show="shellMode"
@@ -2013,7 +1713,6 @@
       :settings="snapshot?.shell ?? null"
       @exit="leave"
     />
-    <AiView v-if="visited.ai" v-show="aiMode" ref="aiView" @exit="leave" />
     <TypingView
       v-if="visited.typing"
       v-show="typingMode"
@@ -2025,7 +1724,6 @@
       v-if="view === 'resources'"
       ref="resourcesView"
       @exit="leave"
-      @ask="askFromResources"
       @search="searchFromResources"
     />
     <ClipboardView
@@ -2068,19 +1766,7 @@
             @select="trackCaret"
           />
         </div>
-        <!-- Only when Tab or Ctrl+1–8 sent the text somewhere other than the default; the
-             top row already says where it goes. -->
-        <button
-          v-if="armed && armed.id !== snapshot?.defaultDestinationId"
-          class="chip active armed-pill"
-          type="button"
-          title="Tab cycles · Ctrl+1–8 picks"
-          @mousedown.prevent
-          @click="cycleArmed(false)"
-        >
-          {{ armed.name }}
-        </button>
-        <!-- With Ctrl held the bar can be dragged; otherwise what's playing, if anything. -->
+        <!-- With Ctrl held the bar can be dragged. -->
         <span v-if="movable" class="move-hint">
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M12 3v18M3 12h18M12 3 9.5 5.5M12 3l2.5 2.5M12 21l-2.5-2.5M12 21l2.5-2.5" />
@@ -2088,19 +1774,10 @@
           </svg>
           Drag to move
         </span>
-        <NowPlayingStrip
-          v-else-if="playingNow"
-          compact
-          :track="playingNow"
-          @toggle="media.press('toggle')"
-          @next="media.press('next')"
-          @previous="media.press('previous')"
-          @focus="media.focus()"
-        />
         <button
           type="button"
           class="bar-settings"
-          title="Zephyr settings"
+          v-tip="`Zephyr settings (${isMac ? '⌘S' : 'Ctrl+S'})`"
           aria-label="Zephyr settings"
           @mousedown.prevent
           @click="openSettings"
@@ -2111,40 +1788,42 @@
 
       <p v-if="loadError || notice" class="notice">{{ loadError || notice }}</p>
 
-      <ul
-        v-if="actionsOpen"
-        class="results actions"
-        role="listbox"
-        aria-label="Actions"
-        v-fit="(count: number) => (actionsShown = count)"
-      >
-        <li
-          v-for="(action, index) in actions"
-          :key="action.label"
-          role="option"
-          :aria-selected="index === actionIndex"
-          class="item"
-          :class="{ selected: index === actionIndex }"
-          @mousedown.prevent
-          @click="runAction(action)"
-          @mousemove="actionIndex = index"
+      <div class="bar-body">
+        <WeatherCard v-if="cardForecast" :forecast="cardForecast" @open="openForecast" />
+        <ul
+          v-if="actionsOpen"
+          class="results actions"
+          role="listbox"
+          aria-label="Actions"
+          v-fit="(count: number) => (actionsShown = count)"
         >
-          <span class="label">{{ action.label }}</span>
-          <span v-if="action.hint" class="hint">{{ action.hint }}</span>
-        </li>
-      </ul>
+          <li
+            v-for="(action, index) in actions"
+            :key="action.label"
+            role="option"
+            :aria-selected="index === actionIndex"
+            class="item"
+            :class="{ selected: index === actionIndex }"
+            @mousedown.prevent
+            @click="runAction(action)"
+            @mousemove="actionIndex = index"
+          >
+            <span class="label">{{ action.label }}</span>
+            <Keys v-if="action.keys" :keys="action.keys" />
+          </li>
+        </ul>
 
-      <ResultList
-        v-else-if="items.length"
-        :groups="sections"
-        :selected="selected"
-        :names="destinationNames"
-        :numbered="showNumbers ? RUN_KEY : ''"
-        @choose="chooseAt"
-        @hover="hover"
-        @drag="dragRow"
-        @fit="visibleCount = $event"
-      />
+        <ResultList
+          v-else-if="items.length"
+          :groups="sections"
+          :selected="selected"
+          :numbered="showNumbers ? RUN_KEY : ''"
+          @choose="chooseAt"
+          @hover="hover"
+          @drag="dragRow"
+          @fit="visibleCount = $event"
+        />
+      </div>
 
       <!-- After the list's v-if chain, which it must not join. -->
       <FilePreviewPane
@@ -2155,62 +1834,78 @@
         :style="previewStyle"
       />
 
+      <!-- On the empty bar: what's playing and the weather, then the meters at the right.
+           While typing: the meters, then the track strip at the right. A click on the meters
+           opens System Resources. -->
       <footer
-        v-if="statsShown && meters"
+        v-if="(statsShown && meters) || playingNow || (home && (homeTrack || forecast))"
         ref="statsEl"
         class="stats"
+        :class="{ home }"
         aria-label="System"
-        title="Open System Resources"
         @mousedown.prevent
-        @click="openView('resources')"
       >
-        <span class="stat" :title="`CPU: ${meters.cpu}`">
-          <svg viewBox="0 0 24 24" aria-hidden="true" v-html="GLYPHS.cpu" />
-          <span class="meter" aria-hidden="true">
-            <span
-              class="meter-fill"
-              :class="{ hot: meters.cpuHot }"
-              :style="{ transform: `scaleX(${meters.cpuScale})` }"
-            />
-          </span>
-          <span class="stat-value">{{ meters.cpu }}</span>
-        </span>
-        <span class="stat" :title="meters.memoryTitle">
-          <svg viewBox="0 0 24 24" aria-hidden="true" v-html="GLYPHS.memory" />
-          <span class="meter" aria-hidden="true">
-            <span class="meter-fill" :style="{ transform: `scaleX(${meters.memoryScale})` }" />
-          </span>
-          <span class="stat-value">{{ meters.memory }}</span>
-        </span>
-        <span v-if="meters.diskLow" class="stat stat-low" :title="meters.diskTitle">
-          <svg viewBox="0 0 24 24" aria-hidden="true" v-html="GLYPHS.drive" />
-          {{ meters.disk }}
-        </span>
-        <span class="stat stat-network" :title="meters.networkTitle">
-          <svg
-            viewBox="0 0 24 24"
-            aria-hidden="true"
-            :class="{ busy: meters.down > 0.55 }"
-            :style="{ opacity: 0.3 + 0.7 * meters.down }"
-            v-html="GLYPHS.down"
-          />
-          <svg
-            viewBox="0 0 24 24"
-            aria-hidden="true"
-            :class="{ busy: meters.up > 0.55 }"
-            :style="{ opacity: 0.3 + 0.7 * meters.up }"
-            v-html="GLYPHS.up"
-          />
-        </span>
+        <HomeStatus
+          v-if="home"
+          :track="homeTrack"
+          :forecast="forecast"
+          @press="pressMedia"
+          @focus="media.focus()"
+          @weather="showWeather"
+        />
         <span
-          v-if="meters.app"
-          class="stat stat-app"
-          :title="`This dev build: ${meters.app.processes} processes, webview helpers included`"
+          v-if="statsShown && meters"
+          class="meters"
+          role="button"
+          aria-label="Open System Resources"
+          @click="openView('resources')"
         >
-          <svg viewBox="0 0 24 24" aria-hidden="true" v-html="GLYPHS.logo" />
-          <span class="stat-app-cpu">{{ Math.round(meters.app.cpu) }}%</span>
-          <span class="stat-app-memory">{{ bytes(meters.app.memory) }}</span>
+          <span v-tip="`CPU ${meters.cpu}\nClick for System Resources`" class="stat">
+            <svg viewBox="0 0 24 24" aria-hidden="true" v-html="GLYPHS.cpu" />
+            <span class="meter" aria-hidden="true">
+              <span
+                class="meter-fill"
+                :class="{ hot: meters.cpuHot }"
+                :style="{ transform: `scaleX(${meters.cpuScale})` }"
+              />
+            </span>
+            <span class="stat-value">{{ meters.cpu }}</span>
+          </span>
+          <span
+            v-if="meters.gpu"
+            v-tip="`${meters.gpuTitle}\nClick for System Resources`"
+            class="stat"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true" v-html="GLYPHS.gpu" />
+            <span class="meter" aria-hidden="true">
+              <span
+                class="meter-fill"
+                :class="{ hot: meters.gpuHot }"
+                :style="{ transform: `scaleX(${meters.gpuScale})` }"
+              />
+            </span>
+            <span class="stat-value">{{ meters.gpu }}</span>
+          </span>
+          <span v-tip="`${meters.memoryTitle}\nClick for System Resources`" class="stat">
+            <svg viewBox="0 0 24 24" aria-hidden="true" v-html="GLYPHS.memory" />
+            <span class="meter" aria-hidden="true">
+              <span class="meter-fill" :style="{ transform: `scaleX(${meters.memoryScale})` }" />
+            </span>
+            <span class="stat-value">{{ meters.memory }}</span>
+          </span>
+          <span v-if="meters.diskLow" v-tip="meters.diskTitle" class="stat stat-low">
+            <svg viewBox="0 0 24 24" aria-hidden="true" v-html="GLYPHS.drive" />
+            {{ meters.disk }}
+          </span>
         </span>
+        <NowPlayingStrip
+          v-if="!home && playingNow"
+          :track="playingNow"
+          @toggle="media.press('toggle')"
+          @next="media.press('next')"
+          @previous="media.press('previous')"
+          @focus="media.focus()"
+        />
       </footer>
     </template>
   </div>

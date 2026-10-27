@@ -3,12 +3,14 @@
   import type { NowPlaying } from '../types';
   import { iconFor } from './appIcons';
   import { GLYPHS } from './glyphs';
+  import { vTip } from '../tip';
+  import Marquee from '../components/Marquee.vue';
 
-  // What's playing: the cover (or the playing app's icon), the title and artist, and
-  // previous, play/pause and next. Clicking the title switches to what's playing. `compact`
-  // (in the search bar) keeps only the cover, the title and play/pause.
+  // What's playing, at the right of the bar's footer: the cover (or the playing app's icon),
+  // the title and artist, and previous, play/pause and next. Clicking the title switches to
+  // what's playing.
 
-  const props = defineProps<{ track: NowPlaying; compact?: boolean }>();
+  const props = defineProps<{ track: NowPlaying }>();
   const emit = defineEmits<{ toggle: []; next: []; previous: []; focus: [] }>();
 
   // A browser's own icon says nothing about the song, so a tab with no cover gets the note.
@@ -28,12 +30,12 @@
 </script>
 
 <template>
-  <span class="now-playing" :class="{ compact }">
+  <span class="now-playing">
     <!-- mousedown.prevent keeps the typing caret in the bar's field. -->
     <button
       type="button"
       class="now-playing-title"
-      :title="`Switch to ${track.title}`"
+      v-tip="`Switch to ${track.title}`"
       @mousedown.prevent
       @click="emit('focus')"
     >
@@ -42,16 +44,15 @@
         <g v-html="GLYPHS.music" />
       </svg>
       <span class="now-playing-text">
-        <span class="now-playing-song">{{ track.title }}</span>
-        <span v-if="track.artist && !compact" class="now-playing-artist">{{ track.artist }}</span>
+        <Marquee class="now-playing-song" :text="track.title" />
+        <span v-if="track.artist" class="now-playing-artist">{{ track.artist }}</span>
       </span>
     </button>
     <button
-      v-if="!compact"
       type="button"
       class="now-playing-control"
       aria-label="Previous"
-      title="Previous (Ctrl+Shift+←)"
+      v-tip="'Previous (Ctrl+Shift+←)'"
       @mousedown.prevent
       @click="emit('previous')"
     >
@@ -61,18 +62,17 @@
       type="button"
       class="now-playing-control"
       :aria-label="track.playing ? 'Pause' : 'Play'"
-      :title="`${track.playing ? 'Pause' : 'Play'} (Ctrl+Space)`"
+      v-tip="`${track.playing ? 'Pause' : 'Play'} (Ctrl+Space)`"
       @mousedown.prevent
       @click="emit('toggle')"
     >
       <svg viewBox="0 0 24 24" aria-hidden="true" v-html="track.playing ? PAUSE : PLAY" />
     </button>
     <button
-      v-if="!compact"
       type="button"
       class="now-playing-control"
       aria-label="Next"
-      title="Next (Ctrl+Shift+→)"
+      v-tip="'Next (Ctrl+Shift+→)'"
       @mousedown.prevent
       @click="emit('next')"
     >

@@ -1,16 +1,17 @@
 <script setup lang="ts">
   import RowIcon from './RowIcon.vue';
+  import Keys from '../components/Keys.vue';
+  import KeyHints from '../components/KeyHints.vue';
   import { vFit } from '../fit';
   import { dragGesture } from './dragOut';
   import { rowKey, type Group } from './rows';
   import type { Suggestion } from '../types';
 
-  const props = defineProps<{
+  defineProps<{
     groups: Group[];
     selected: number;
-    /** Destination names by id, for the monogram on rows that search a destination. */
-    names?: Record<string, string>;
-    /** While the run-a-row modifier is held: the keys for the first nine rows. */
+    /** While the run-a-row modifier is held: that modifier ("alt", "cmd"), which with a
+     *  digit runs one of the first nine rows. */
     numbered?: string;
   }>();
   const emit = defineEmits<{
@@ -23,13 +24,6 @@
   }>();
 
   const gesture = dragGesture((index) => emit('drag', index));
-
-  // A row that searches a destination wears that destination's letter and color. Keyed on
-  // the typed text instead, its color changed with every keypress.
-  function iconLabel(row: Suggestion): string {
-    const id = row.icon?.startsWith('dest:') ? row.icon.slice(5) : '';
-    return (id && (props.names?.[id] ?? id)) || row.label;
-  }
 
   // WebKit sends a synthetic mousemove when the list scrolls under a still pointer; only a
   // real move selects, and a click only runs the row the pointer actually moved onto.
@@ -81,24 +75,26 @@
             onMove($event, group.start + offset, row);
           "
         >
-          <RowIcon :icon="row.icon" :label="iconLabel(row)" :size="20" />
+          <RowIcon :icon="row.icon" :label="row.label" :size="20" />
           <span class="item-text">
             <span class="label">{{ row.label }}</span>
             <span v-if="row.subtitle" class="item-sub">{{ row.subtitle }}</span>
           </span>
           <span class="item-acc">
-            <kbd
+            <Keys
               v-if="numbered && group.start + offset < 9"
-              class="kbd row-number"
+              class="row-number"
+              :keys="`${numbered}+${group.start + offset + 1}`"
               aria-hidden="true"
-              >{{ numbered }}{{ group.start + offset + 1 }}</kbd
-            >
+            />
             <template v-else>
               <span v-if="row.icons?.length" class="row-icons" aria-hidden="true">
                 <RowIcon v-for="icon in row.icons" :key="icon" :icon="icon" label="" :size="16" />
               </span>
-              <kbd v-for="key in row.keys" :key="key" class="kbd" aria-hidden="true">{{ key }}</kbd>
-              <template v-if="!row.keys?.length">{{ row.hint }}</template>
+              <!-- A row's hotkey shows only on the row in hand, so the list stays quiet. -->
+              <Keys v-if="row.keys?.length" class="row-hotkey" :keys="row.keys" />
+              <KeyHints v-else-if="row.keyHints?.length" :hints="row.keyHints" />
+              <template v-else>{{ row.hint }}</template>
             </template>
           </span>
         </li>

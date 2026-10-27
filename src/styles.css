@@ -186,40 +186,246 @@ input[type='number']::-webkit-outer-spin-button {
 }
 
 /* Lists never scroll; they show the rows that fit (v-fit in fit.ts). */
-.bar > .results {
+.bar > .results,
+.bar-body > .results {
   flex: 1 1 auto;
   min-height: 0;
   overflow: hidden;
 }
 
 /* With no footer, the results take the rest of the bar. */
-.bar > .results.sectioned {
+.bar > .results.sectioned,
+.bar-body > .results.sectioned {
   max-height: none;
 }
 
-.claude > .footer,
-.shell > .footer,
-.clip > .footer,
-.resources > .footer,
-.typing > .footer,
-.ai-view > .footer {
-  flex: none;
-  margin-top: auto;
-}
-
-.claude,
-.shell,
-.clip,
-.resources,
-.typing,
-.ai-view {
+/* Under the field: the results, and the weather card over them. */
+.bar-body {
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
   min-height: 0;
 }
 
-.claude > .results,
+/* Weather glyphs: strokes like the rest, the sun warm and rain or snow cool. */
+.status-icon,
+.weather-card svg:not(.weather-line) {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+:root {
+  --wx-sun: #ffc861;
+  --wx-wet: #7db4ff;
+}
+
+.wx-sun {
+  color: var(--wx-sun);
+}
+
+.wx-wet {
+  color: var(--wx-wet);
+}
+
+/* ---- Weather card ("weather", "forecast") ---- */
+
+.weather-card {
+  display: grid;
+  flex: none;
+  grid-template-columns: minmax(0, 1fr) 210px;
+  gap: 16px;
+  margin: 8px 8px 2px;
+  padding: 12px 14px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 12px;
+}
+
+.weather-now {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.weather-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.weather-head .key-hints {
+  cursor: pointer;
+  font-weight: 400;
+}
+
+.weather-place {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.weather-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.weather-big {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  color: var(--fg);
+}
+
+.weather-temp {
+  font-size: 30px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+
+.weather-detail {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.weather-detail b {
+  color: var(--fg);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.weather-hours {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  padding-top: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.weather-line {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 20px;
+  overflow: visible;
+}
+
+.weather-line polyline {
+  fill: none;
+  stroke: var(--focus);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+  opacity: 0.8;
+}
+
+.weather-hour {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  font-size: 12px;
+}
+
+.weather-hour-temp {
+  margin-top: 10px;
+}
+
+.weather-hour svg {
+  width: 16px;
+  height: 16px;
+  color: var(--fg);
+}
+
+.weather-hour small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.weather-days {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  margin: 0;
+  padding: 0 0 0 14px;
+  list-style: none;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  border-left: 1px solid var(--stroke);
+}
+
+.weather-days li {
+  display: grid;
+  grid-template-columns: 34px 16px 30px minmax(0, 1fr) 30px;
+  align-items: center;
+  gap: 6px;
+}
+
+.weather-days svg {
+  width: 16px;
+  height: 16px;
+  color: var(--fg);
+}
+
+.weather-day,
+.weather-low {
+  color: var(--muted);
+}
+
+.weather-low,
+.weather-high {
+  text-align: right;
+}
+
+.weather-range {
+  position: relative;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+}
+
+.weather-range span {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: linear-gradient(90deg, var(--wx-wet), var(--wx-sun));
+  border-radius: 2px;
+}
+
+.shell > .footer,
+.clip > .footer,
+.resources > .footer,
+.typing > .footer {
+  flex: none;
+  margin-top: auto;
+}
+
+.shell,
+.clip,
+.resources,
+.typing {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
 .shell > .results {
   flex: 0 1 auto;
   min-height: 0;
@@ -306,10 +512,8 @@ input[type='number']::-webkit-outer-spin-button {
 
 .text-button,
 .recorder,
-.row-actions button,
 .field > button,
 .primary,
-.history + button,
 section > button {
   border: 1px solid var(--stroke);
   background: var(--chip);
@@ -320,11 +524,11 @@ section > button {
   transition: background-color 80ms ease;
 }
 
-:is(.text-button, .row-actions button, .field > button, .history + button, section > button):hover {
+:is(.text-button, .field > button, section > button):hover {
   background: var(--chip-hover);
 }
 
-:is(.row-actions button, .field > button, section > button):disabled {
+:is(.field > button, section > button):disabled {
   opacity: 0.4;
   cursor: default;
 }
@@ -343,7 +547,7 @@ section > button {
 /* Raised above the shared button rules (`.field > button` outranked a bare `.primary`,
    leaving dark text on a dark fill). */
 .primary,
-:is(.field, section, .row-actions) > button.primary {
+:is(.field, section) > button.primary {
   background: var(--active);
   color: var(--active-fg);
   border-color: transparent;
@@ -351,7 +555,7 @@ section > button {
 }
 
 .primary:hover,
-:is(.field, section, .row-actions) > button.primary:hover {
+:is(.field, section) > button.primary:hover {
   background: var(--active-hover, #ffffff);
 }
 
@@ -383,12 +587,6 @@ section > button {
   font-weight: 500;
 }
 
-/* The armed destination, at the end of the input in place of the old chip row. */
-.armed-pill {
-  flex: none;
-  padding: 3px 9px;
-}
-
 /* A scoped search (Files, Bookmarks, Settings, Apps), in front of the text; Backspace on
    empty text or Esc removes it. */
 .scope-label {
@@ -399,13 +597,6 @@ section > button {
   background: var(--select);
   color: var(--fg);
   cursor: default;
-}
-
-/* Quieter than a selected chip: it names where Enter goes without outshining the text. */
-.chip.active.armed-pill {
-  background: var(--chip-hover);
-  border-color: var(--stroke-strong);
-  color: var(--fg);
 }
 
 .chip kbd {
@@ -458,15 +649,13 @@ section > button {
 /* Long text panes inside the bar scroll, but never show a scrollbar. */
 .results,
 .clip-list,
-.shell-output,
-.claude-detail {
+.shell-output {
   scrollbar-width: none;
 }
 
 .results::-webkit-scrollbar,
 .clip-list::-webkit-scrollbar,
-.shell-output::-webkit-scrollbar,
-.claude-detail::-webkit-scrollbar {
+.shell-output::-webkit-scrollbar {
   display: none;
 }
 
@@ -496,6 +685,17 @@ section > button {
   font-size: 11.5px;
   font-weight: 600;
   letter-spacing: 0.02em;
+}
+
+/* A row's hotkey keeps its space but shows only when the row is hovered or selected. */
+.item .row-hotkey {
+  opacity: 0;
+  transition: opacity 80ms ease;
+}
+
+.item:hover .row-hotkey,
+.item.selected .row-hotkey {
+  opacity: 1;
 }
 
 .results.sectioned .item {
@@ -537,9 +737,10 @@ section > button {
 }
 
 /* Alt+1..9 (⌘1..9) badges while the key is held. */
-.item-acc .row-number {
+.item-acc .row-number .kbd {
   color: var(--fg);
   border-color: var(--focus);
+  box-shadow: inset 0 -1px 0 var(--focus);
 }
 
 /* A launch group's apps, small, before its hint. */
@@ -549,19 +750,78 @@ section > button {
   margin-right: 6px;
 }
 
+/* A keycap: a translucent fill and a hairline edge, doubled along the bottom so it reads as a
+   key on every glass tint. Single glyphs (↵, ⌘, K) come out square. */
 .kbd {
-  display: inline-grid;
-  place-items: center;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
   min-width: 20px;
   height: 20px;
-  padding: 0 5px;
+  padding: 0 5px 1px;
+  border: 1px solid var(--stroke-strong);
   border-radius: 5px;
-  background: rgba(255, 255, 255, 0.08);
-  box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.25);
+  background: var(--chip);
+  box-shadow: inset 0 -1px 0 var(--stroke-strong);
   color: var(--fg);
+  font-family: inherit;
   font-size: 11.5px;
   font-weight: 500;
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
   line-height: 1;
+  white-space: nowrap;
+}
+
+/* One key or combo (the Keys component): its keycaps, a hair apart. */
+.keys {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 3px;
+  vertical-align: middle;
+}
+
+/* What the keycaps say, for a screen reader only. */
+.keys-spoken {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Smaller keycaps, for footers and the hints beside a row. */
+.keys.small {
+  gap: 2px;
+}
+
+.keys.small .kbd {
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px 1px;
+  border-radius: 4px;
+  font-size: 10.5px;
+}
+
+/* A line of key hints: each key with its word, spaced apart rather than dotted. */
+.key-hints {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 12px;
+  row-gap: 4px;
+}
+
+.key-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
 }
 
 .item-icon {
@@ -633,33 +893,6 @@ section > button {
   font-size: 12px;
   background: rgba(0, 0, 0, 0.18);
   border-top: 1px solid var(--stroke);
-}
-
-.answer-text {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  line-height: 1.5;
-  font-size: 14px;
-  user-select: text;
-}
-
-.answer-wait {
-  margin: 0;
-  color: var(--muted);
-  font-size: 13px;
-}
-
-.answer-error {
-  margin: 8px 0 0;
-  color: var(--notice);
-  font-size: 13px;
-}
-
-.answer-source {
-  margin: 0;
-  padding: 0 16px 8px 48px;
-  color: var(--faint);
-  font-size: 11px;
 }
 
 .caret {
@@ -931,9 +1164,18 @@ section > button {
 }
 
 .typing-hint {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
   margin: 10px 0 4px;
   color: var(--faint);
   font-size: 12px;
+}
+
+/* Quiet keycaps, so the hint doesn't pull the eye off the words being typed. */
+.typing-hint .kbd {
+  color: var(--muted);
 }
 
 .typing-result {
@@ -1021,19 +1263,204 @@ textarea.query {
   flex: none;
   align-items: center;
   gap: 18px;
-  padding: 7px 16px;
+  height: 38px;
+  box-sizing: border-box;
+  padding: 0 16px;
   color: var(--muted);
   font-size: 11.5px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   background: rgba(0, 0, 0, 0.14);
   border-top: 1px solid var(--stroke);
-  /* A click opens System Resources. */
+}
+
+/* The meters; a click opens System Resources. On the empty bar they sit at the right. */
+.meters {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 18px;
   cursor: pointer;
 }
 
-.stats:hover {
+.meters:hover {
   color: var(--fg);
+}
+
+.stats.home .meters {
+  margin-left: auto;
+}
+
+/* ---- The empty bar's footer: what's playing and the weather (HomeStatus.vue) ---- */
+
+.home-status {
+  display: contents;
+}
+
+.home-status button {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+/* Gives way first when the footer runs short. */
+.status-track {
+  display: inline-flex;
+  flex: 0 1000 auto;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  max-width: 190px;
+}
+
+.home-status .status-song {
+  gap: 7px;
+  margin-right: 2px;
+  color: var(--fg);
+}
+
+.status-song:hover .status-song-text {
+  text-decoration: underline;
+  text-decoration-color: var(--stroke-strong);
+  text-underline-offset: 2px;
+}
+
+.status-cover {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  object-fit: cover;
+  border-radius: 4px;
+}
+
+.status-cover.glyph {
+  color: var(--muted);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.status-song-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.home-status .status-control {
+  flex: none;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  color: var(--fg);
+  border-radius: 6px;
+}
+
+.home-status .status-control:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.status-control svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.status-divider {
+  flex: none;
+  width: 1px;
+  height: 18px;
+  margin: 0 -4px;
+  background: var(--stroke-strong);
+}
+
+/* Its condition gives way after the track's title. */
+.home-status .status-weather {
+  flex: 0 1 auto;
+  gap: 6px;
+}
+
+.status-weather b {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.status-weather:hover b {
+  text-decoration: underline;
+  text-decoration-color: var(--stroke-strong);
+  text-underline-offset: 2px;
+}
+
+.status-icon {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  color: var(--fg);
+}
+
+.status-condition {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.status-condition.wet {
+  color: var(--wx-wet);
+}
+
+/* ---- Tooltips (tip.ts): the app's own, over everything, in the bar's glass ---- */
+
+.app-tip {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-width: 320px;
+  padding: 6px 9px;
+  color: var(--fg);
+  font-size: 12px;
+  line-height: 1.35;
+  font-variant-numeric: tabular-nums;
+  white-space: normal;
+  background: var(--glass-strong);
+  border: 1px solid var(--stroke-strong);
+  border-radius: 8px;
+  box-shadow:
+    inset 0 1px 0 var(--highlight),
+    0 8px 24px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(18px) saturate(1.4);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 90ms ease;
+}
+
+.app-tip.shown {
+  opacity: 1;
+}
+
+.app-tip-line {
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-tip {
+    transition: none;
+  }
 }
 
 .stat {
@@ -1093,48 +1520,8 @@ textarea.query {
   color: var(--notice);
 }
 
-/* Network as two arrows that brighten with traffic, on a log scale. */
-.stat-network {
-  margin-left: auto;
-  gap: 2px;
-}
-
-.stat-network svg {
-  width: 14px;
-  height: 14px;
-  stroke: #c9c9ce;
-  stroke-width: 1.9;
-  transition:
-    opacity 350ms ease-out,
-    stroke 350ms ease-out;
-}
-
-.stat-network svg.busy {
-  stroke: var(--active);
-}
-
-/* Dev builds: the app's own use, at the far right, set apart from the system stats. */
-.stat-app {
-  color: var(--faint);
-}
-
-.stat-app-cpu,
-.stat-app-memory {
-  display: inline-block;
-  text-align: right;
-}
-
-.stat-app-cpu {
-  width: 4ch;
-}
-
-.stat-app-memory {
-  width: 7ch;
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .meter-fill,
-  .stat-network svg {
+  .meter-fill {
     transition: none;
   }
 }
@@ -1207,8 +1594,10 @@ textarea.query {
   gap: 2px;
   min-width: 0;
   max-width: 55%;
-  /* Two lines and a bigger cover fit in the footer's padding, so it keeps its height. */
-  margin: -5px 0;
+  /* Two lines and a bigger cover fit in the footer's padding, so it keeps its height; it
+     sits at the right end. */
+  margin: -5px 0 -5px auto;
+  cursor: default;
 }
 
 .now-playing button {
@@ -1285,64 +1674,31 @@ textarea.query {
   height: 14px;
 }
 
-/* In the search bar: one line, the cover, the title and play/pause. */
-.now-playing.compact {
-  flex: 0 1 auto;
-  max-width: 190px;
-  margin: 0;
-  color: var(--muted);
-  font-size: 12px;
+/* ---- Scrolling text (Marquee.vue) ---- */
+
+.marquee {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
-.now-playing.compact .now-playing-cover {
-  width: 18px;
-  height: 18px;
+.marquee.moving {
+  text-overflow: clip;
+  mask-image: linear-gradient(90deg, transparent, #000 6px, #000 calc(100% - 14px), transparent);
 }
 
-.now-playing.compact .now-playing-cover.glyph {
-  width: 14px;
-  height: 14px;
-  margin: 2px;
+.marquee.moving .marquee-track {
+  display: inline-block;
+  will-change: transform;
 }
 
-/* ---- Ask AI ---- */
-
-.ai-turns {
-  flex: 1 1 auto;
-  min-height: 0;
-  scrollbar-width: none;
-  overflow-y: auto;
-  padding: 10px 18px 6px 48px;
+.marquee-copy {
+  padding-left: 40px;
 }
 
-.ai-turn + .ai-turn {
-  margin-top: 14px;
-  padding-top: 12px;
-  border-top: 1px solid var(--stroke);
-}
-
-.ai-question {
-  margin: 0 0 6px;
-  color: var(--muted);
-  font-size: 13px;
-  white-space: pre-wrap;
-}
-
-.ai-turns .answer-source {
-  padding: 4px 0 0;
-}
-
-.ai-input {
-  border-top: 1px solid var(--stroke);
-}
-
-.ai-mark {
-  flex: none;
-  width: 20px;
-  color: var(--focus);
-  font-size: 16px;
-  text-align: center;
-}
+/* ---- Sync ---- */
 
 .recovery-key {
   display: flex;
@@ -1370,16 +1726,6 @@ textarea.query {
 .device-words {
   display: inline-block;
   font-size: 16px;
-}
-
-/* ---- Claude jobs ---- */
-
-.claude-mark {
-  flex: none;
-  width: 20px;
-  color: #d97757;
-  font-size: 18px;
-  text-align: center;
 }
 
 /* ---- Shell ---- */
@@ -1411,6 +1757,17 @@ textarea.query {
 
 .shell-run {
   border-top: 1px solid var(--stroke);
+}
+
+/* The command this output is from; the input line has already cleared for the next one. */
+.shell-ran {
+  margin: 0;
+  padding: 10px 18px 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .shell-output {
@@ -1448,84 +1805,6 @@ textarea.query {
   white-space: nowrap;
 }
 
-.claude-project {
-  flex: none;
-}
-
-.claude-job {
-  min-height: 46px;
-}
-
-.claude-glyph {
-  flex: none;
-  width: 14px;
-  color: var(--muted);
-  text-align: center;
-}
-
-.claude-job.running .claude-glyph {
-  color: var(--focus);
-}
-
-.claude-job.waiting .claude-glyph {
-  color: #fbbf24;
-}
-
-.claude-job.done .claude-glyph {
-  color: #4ade80;
-}
-
-.claude-job.failed .claude-glyph {
-  color: var(--notice);
-}
-
-.claude-job-text {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.claude-activity {
-  overflow: hidden;
-  color: var(--muted);
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.claude-detail {
-  max-height: 300px;
-  overflow-y: auto;
-  padding: 10px 18px 12px 48px;
-  border-top: 1px solid var(--stroke);
-}
-
-.claude-prompt {
-  margin: 6px 0;
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.claude-result {
-  margin: 0 0 8px;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font:
-    12.5px/1.5 ui-monospace,
-    'SF Mono',
-    Menlo,
-    Consolas,
-    monospace;
-  user-select: text;
-}
-
-.claude-denials {
-  margin: 0 0 8px;
-  color: var(--notice);
-  font-size: 12px;
-}
-
 .approval {
   margin: 8px;
   padding: 10px 12px;
@@ -1561,23 +1840,6 @@ textarea.query {
   white-space: nowrap;
 }
 
-.approval-detail {
-  max-height: 120px;
-  margin: 8px 0;
-  padding: 8px 10px;
-  overflow: auto;
-  border-radius: 8px;
-  background: rgba(0, 0, 0, 0.25);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font:
-    12px/1.45 ui-monospace,
-    'SF Mono',
-    Menlo,
-    Consolas,
-    monospace;
-}
-
 .approval-words {
   margin: 6px 0 8px;
   color: var(--muted);
@@ -1609,10 +1871,8 @@ textarea.query {
   background: rgba(251, 191, 36, 0.22);
 }
 
-.approval-actions kbd {
-  margin-left: 4px;
-  color: var(--muted);
-  font: inherit;
+.approval-actions .keys {
+  margin-left: 6px;
 }
 
 /* ---- Notes ---- */
@@ -1931,6 +2191,7 @@ textarea.query {
 
 .notes-footer {
   display: flex;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
   padding: 6px 12px;
@@ -1941,25 +2202,35 @@ textarea.query {
 
 /* ---- Settings ---- */
 
-/* The page itself never scrolls (the bar window must not), so settings scrolls inside. */
+/* One column, no sidebar: General is the home page and the other pages open from its
+   tiles. The page itself never scrolls (the bar window must not), so settings scrolls
+   inside. */
 .settings {
-  display: grid;
-  grid-template-columns: 210px 1fr;
+  display: flex;
+  flex-direction: column;
   height: 100vh;
   background: var(--bg-solid);
 }
 
-.settings-nav {
+.settings-pane {
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px 28px 48px;
+}
+
+.settings-pane > * {
+  max-width: 680px;
+  margin-inline: auto;
+}
+
+.settings-top {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 16px 10px 12px;
-  border-right: 1px solid var(--stroke);
-  background: rgba(0, 0, 0, 0.12);
+  gap: 8px;
+  margin-bottom: 18px;
 }
 
 .settings-search {
-  margin: 0 2px 10px;
+  flex: 1;
   padding: 7px 10px;
   border: 1px solid var(--stroke-strong);
   border-radius: 8px;
@@ -1972,62 +2243,66 @@ textarea.query {
   border-color: var(--focus);
 }
 
-/* Every row spans the sidebar at one height, so hover and selection fills line up. */
-.settings-nav nav {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+.settings-back {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 34px;
+  border: 1px solid var(--stroke-strong);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--muted);
+  cursor: pointer;
 }
 
-.nav-item {
+.settings-back:hover {
+  color: var(--fg);
+}
+
+.settings-back svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* The other pages, as a grid of tiles at the bottom of General. */
+.settings-tiles {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 26px;
+}
+
+.settings-tile {
   display: flex;
   align-items: center;
   gap: 10px;
-  width: 100%;
-  min-height: 32px;
-  padding: 6px 10px;
-  border: none;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--muted);
+  padding: 11px 12px;
+  border: 1px solid var(--stroke);
+  border-radius: 10px;
+  background: var(--chip);
   font-size: 13.5px;
   text-align: left;
   cursor: pointer;
 }
 
-.nav-item:hover {
-  background: var(--chip);
-  color: var(--fg);
+.settings-tile:hover {
+  background: var(--chip-hover);
 }
 
-.nav-item.active {
-  background: var(--select);
-  color: var(--fg);
-}
-
-/* Plain grey line icons, the same set and weight as the launcher's rows; no colored tiles. */
-.nav-icon {
-  display: grid;
+.settings-tile svg {
   flex: none;
-  place-items: center;
-  width: 18px;
-  height: 18px;
-  color: var(--muted);
-}
-
-.nav-icon svg {
-  width: 18px;
-  height: 18px;
-}
-
-.nav-item:hover .nav-icon,
-.nav-item.active .nav-icon {
-  color: var(--fg);
-}
-
-.settings-pane {
-  overflow-y: auto;
-  padding: 22px 28px 48px;
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .results-list {
@@ -2052,17 +2327,10 @@ textarea.query {
   background: var(--select);
 }
 
-.destination-row,
-.row-actions,
 .field,
 .check {
   display: flex;
   gap: 12px;
-}
-
-.destination-row {
-  justify-content: space-between;
-  align-items: center;
 }
 
 .settings h1,
@@ -2168,6 +2436,54 @@ textarea.query {
     background-color 0.12s;
 }
 
+/* A recorded shortcut shows as keycaps, like the bar's hints. */
+.recorder .kbd {
+  height: 22px;
+  min-width: 22px;
+  padding: 0 7px;
+  font-size: 12px;
+}
+
+.recorder .keys {
+  gap: 4px;
+}
+
+/* A one-of choice as joined buttons (Run at boot: Off, On, High-priority). */
+.boot-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 440px;
+}
+
+.segments {
+  display: inline-flex;
+  align-self: flex-start;
+  padding: 3px;
+  border: 1px solid var(--stroke-strong);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.segment {
+  padding: 5px 14px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.segment:hover {
+  color: var(--fg);
+}
+
+.segment.chosen {
+  background: var(--select);
+  color: var(--fg);
+}
+
 /* Dropdowns drop the native chrome for the glass field look, with their own chevron. */
 .settings select {
   appearance: none;
@@ -2192,54 +2508,10 @@ textarea.query {
   cursor: default;
 }
 
-.import-box {
-  width: 100%;
-  min-height: 120px;
-  padding: 8px 10px;
-  border: 1px solid var(--stroke-strong);
-  border-radius: 8px;
-  background: var(--panel);
-  color: var(--fg);
-  font:
-    12px/1.5 ui-monospace,
-    'SF Mono',
-    Menlo,
-    Consolas,
-    monospace;
-  resize: vertical;
-}
-
 .field input:focus,
 .field select:focus {
   border-color: var(--focus);
   outline: none;
-}
-
-/* Sign in with ChatGPT: OpenAI asks for a dark "Continue with ChatGPT" button. */
-.settings .chatgpt-button {
-  padding: 8px 16px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: 999px;
-  background: #0d0d0d;
-  color: #fff;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.settings .chatgpt-button:hover {
-  background: #1f1f1f;
-}
-
-.chatgpt-welcome {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 6px;
-  margin: 12px 0;
-  padding: 12px 14px;
-  border: 1px solid var(--stroke-strong);
-  border-radius: 10px;
-  background: var(--panel);
 }
 
 /* First-run setup: a step train on top, one step in the middle, and a footer that is
@@ -2356,43 +2628,33 @@ textarea.query {
   display: none;
 }
 
+/* Each step is a title and its one control, centered in the window. */
 .onboarding-step {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 22px 28px 16px;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  min-height: 100%;
+  box-sizing: border-box;
+  padding: 22px 28px;
+  text-align: center;
 }
 
 .onboarding-step h1 {
-  margin: 4px 0 0;
+  margin: 0;
   font-size: 21px;
   font-weight: 600;
   letter-spacing: -0.01em;
 }
 
-.onboarding-step .lede {
-  margin: 0 0 6px;
+/* Setup centers the choice and its note. */
+.onboarding-step .boot-choice {
+  align-items: center;
 }
 
-.onboarding-icon {
-  display: grid;
-  place-items: center;
-  width: 40px;
-  height: 40px;
-  border-radius: 10px;
-  background: var(--select);
-  color: #fff;
-}
-
-.onboarding-icon svg {
-  width: 22px;
-  height: 22px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.8;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+.onboarding-step .segments {
+  align-self: center;
 }
 
 .onboarding-foot {
@@ -2433,32 +2695,22 @@ textarea.query {
   text-align: center;
 }
 
-.choices {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+.recorder.big .keys {
+  gap: 6px;
 }
 
-.choice {
-  padding: 7px 14px;
-  border: 1px solid var(--stroke-strong);
-  border-radius: 999px;
-  background: var(--panel);
-  cursor: pointer;
+.recorder.big .kbd {
+  height: 30px;
+  min-width: 30px;
+  padding: 0 10px 1px;
+  border-radius: 7px;
+  font-size: 15px;
 }
 
-.choice.chosen {
-  border-color: transparent;
-  background: var(--select);
-  color: #fff;
-}
-
-.onboarding-ai {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 8px;
-  margin-top: 4px;
+/* After the modifiers held so far, while the rest of the shortcut is still to come. */
+.recorder-more {
+  margin-left: 6px;
+  color: var(--muted);
 }
 
 /* Six themes in two rows of three, with short swatches, so the step fits. */
@@ -2604,6 +2856,38 @@ textarea.query {
   color: #fff;
 }
 
+/* Settings › Weather for: the city field and its matches under it. */
+.place-field {
+  position: relative;
+  display: flex;
+  gap: 6px;
+  width: min(100%, 520px);
+}
+
+.place-field input {
+  flex: 1;
+  min-width: 0;
+}
+
+.select-menu.place-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+}
+
+.place-list small {
+  overflow: hidden;
+  color: var(--muted);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.place-list .active small {
+  color: inherit;
+  opacity: 0.8;
+}
+
 .select-option.disabled {
   color: var(--faint);
   cursor: default;
@@ -2681,69 +2965,6 @@ textarea.query {
   }
 }
 
-.destination {
-  border-top: 1px solid var(--stroke);
-  padding: 12px 0;
-}
-
-.destination:last-of-type {
-  padding-bottom: 4px;
-}
-
-.destination-row {
-  align-items: center;
-}
-
-.destination-row .hint-text {
-  margin-left: 8px;
-  font-family: ui-monospace, 'SF Mono', 'Cascadia Mono', Consolas, monospace;
-}
-
-.destination-row strong {
-  font-weight: 500;
-}
-
-.row-actions {
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 6px;
-}
-
-.row-actions button {
-  padding: 3px 9px;
-  font-size: 12px;
-}
-
-.badge {
-  margin-left: 8px;
-  font-size: 11px;
-  color: var(--muted);
-  border: 1px solid var(--stroke);
-  border-radius: 4px;
-  padding: 1px 5px;
-}
-
-.editor {
-  display: grid;
-  gap: 4px;
-  margin-top: 12px;
-}
-
-.history {
-  list-style: none;
-  padding: 0;
-  margin: 0 0 12px;
-}
-
-.history li {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--stroke);
-  font-size: 13px;
-}
-
 .field.inline {
   flex-direction: row;
   align-items: center;
@@ -2753,6 +2974,207 @@ textarea.query {
 .field.inline input {
   flex: 1;
   min-width: 220px;
+}
+
+/* ---- Settings › Launch groups ---- */
+
+.launch-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0 0 14px;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--stroke);
+  border-radius: 12px;
+}
+
+.launch-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.launch-group-head .spacer {
+  flex: 1;
+}
+
+.launch-group-name,
+.launch-link input,
+.app-picker-field {
+  min-height: 34px;
+  box-sizing: border-box;
+  padding: 7px 12px;
+  border: 1px solid var(--stroke-strong);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 13px;
+  transition:
+    border-color 0.12s,
+    background-color 0.12s;
+}
+
+.launch-group-name {
+  width: 220px;
+  font-weight: 600;
+}
+
+.launch-group-name:focus,
+.launch-link input:focus,
+.app-picker-field:focus-within {
+  border-color: var(--focus);
+  outline: none;
+}
+
+.launch-group-head .recorder {
+  width: auto;
+  min-width: 120px;
+  color: var(--muted);
+}
+
+.launch-items {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.launch-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  padding: 0 6px 0 4px;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: grab;
+}
+
+.launch-item:hover,
+.launch-item:focus-visible {
+  background: rgba(255, 255, 255, 0.05);
+  outline: none;
+}
+
+.launch-item:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--focus);
+}
+
+.launch-item.dragging {
+  opacity: 0.4;
+}
+
+.launch-item.over {
+  box-shadow: inset 0 2px 0 var(--focus);
+}
+
+.launch-grip {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: var(--faint);
+  stroke-width: 2.6;
+  stroke-linecap: round;
+}
+
+.launch-item-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.launch-item-remove {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.launch-item:hover .launch-item-remove,
+.launch-item:focus-within .launch-item-remove {
+  opacity: 1;
+}
+
+.launch-item-remove:hover {
+  color: var(--fg);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.launch-item-remove svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.app-picker {
+  position: relative;
+}
+
+.app-picker-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.app-picker-field input {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  color: inherit;
+  background: none;
+  border: 0;
+  outline: none;
+}
+
+.app-picker-mark {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.select-menu.app-picker-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+}
+
+.app-picker-list .item-icon {
+  flex: none;
+}
+
+.launch-link {
+  display: flex;
+  gap: 6px;
+}
+
+.launch-link input {
+  flex: 1;
+}
+
+.launch-more {
+  display: flex;
+  gap: 4px;
+  margin-left: -10px;
 }
 
 .folders {
@@ -3070,7 +3492,8 @@ html.update-page #app {
 
 /* ---- File preview (Shift+Space on a file) ---- */
 
-.bar.previewing > .results {
+.bar.previewing > .results,
+.bar.previewing > .bar-body > .results {
   padding-right: calc(52% + 6px);
 }
 
@@ -3193,7 +3616,9 @@ html.update-page #app {
 
 .res-tiles {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  /* Three tiles, or four with a GPU. */
+  grid-auto-columns: minmax(0, 1fr);
+  grid-auto-flow: column;
   gap: 8px;
   padding: 10px 12px;
   border-top: 1px solid var(--stroke);
@@ -3281,6 +3706,10 @@ button.res-tile:hover {
 
 .res-spark.memory {
   --res-color: #c084fc;
+}
+
+.res-spark.gpu {
+  --res-color: #fbbf24;
 }
 
 .res-spark.network {

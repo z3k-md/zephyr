@@ -1,26 +1,18 @@
 import { Channel, invoke } from '@tauri-apps/api/core';
 import type {
-  AiEvent,
-  ClaudeApproval,
-  ClaudeCliStatus,
-  ClaudeJob,
-  ClaudeSettings,
   ClipDetail,
   ClipList,
   ClipboardSettings,
-  AiPreset,
-  AiSettings,
-  Destination,
   DispatchOutcome,
   FileIndexStatus,
-  LocalServer,
   Note,
   NoteSummary,
   Binding,
   FilePreview,
-  BookmarkSource,
   MediaControl,
   NowPlaying,
+  Forecast,
+  Place,
   UpdateStatus,
   PowerAction,
   PowerPreview,
@@ -33,7 +25,6 @@ import type {
   ResourceSnapshot,
   ResourceSort,
   SystemStats,
-  ChatgptAccount,
   LaunchGroup,
   Permission,
   PermissionId,
@@ -45,12 +36,8 @@ export function getSnapshot(): Promise<Snapshot> {
   return invoke<Snapshot>('get_snapshot');
 }
 
-export function suggest(
-  query: string,
-  destinationId: string,
-  includeRemote: boolean
-): Promise<SuggestResponse> {
-  return invoke<SuggestResponse>('suggest', { query, destinationId, includeRemote });
+export function suggest(query: string, includeRemote: boolean): Promise<SuggestResponse> {
+  return invoke<SuggestResponse>('suggest', { query, includeRemote });
 }
 
 /**
@@ -80,18 +67,28 @@ export function appQuit(appId: string): Promise<void> {
   return invoke('app_quit', { appId });
 }
 
-/** Opens the connection to a destination's suggestion service before the first keystroke. */
-export function warmSuggestions(destinationId: string): Promise<void> {
-  return invoke('warm_suggestions', { destinationId });
+/** Opens the connection to Google's suggestion service before the first keystroke. */
+export function warmSuggestions(): Promise<void> {
+  return invoke('warm_suggestions');
 }
 
-/** Adds an entry to the running bug capture's log (Ctrl+Alt+R). */
+/** Adds an entry to the running bug capture's log (Ctrl+R). */
 export function captureEvent(kind: string, data: unknown): Promise<void> {
   return invoke('capture_event', { kind, data });
 }
 
 export function captureRecording(): Promise<boolean> {
   return invoke<boolean>('capture_recording');
+}
+
+/** Ctrl+R: starts or stops a bug recording of the Zephyr window in front. */
+export function captureToggle(): Promise<void> {
+  return invoke('capture_toggle');
+}
+
+/** Ctrl+Shift+S: a bug snapshot of the Zephyr window in front, also put on the clipboard. */
+export function captureSnapshot(): Promise<void> {
+  return invoke('capture_snapshot');
 }
 
 /** Makes the snap grid's window before the first Ctrl+drag. */
@@ -143,40 +140,13 @@ export function saveFileFolders(roots: string[] | null, excludes: string[]): Pro
   return invoke<Snapshot>('save_file_folders', { roots, excludes });
 }
 
-export function dispatch(
-  query: string,
-  destinationId: string,
-  interpret: boolean
-): Promise<DispatchOutcome> {
-  return invoke<DispatchOutcome>('dispatch', { query, destinationId, interpret });
+/** Does what Enter would with `query`; `interpret` off searches it as it is (a picked suggestion). */
+export function dispatch(query: string, interpret: boolean): Promise<DispatchOutcome> {
+  return invoke<DispatchOutcome>('dispatch', { query, interpret });
 }
 
-export function saveSettings(
-  summonShortcut: string,
-  launchAtStartup: boolean,
-  defaultDestinationId: string
-): Promise<Snapshot> {
-  return invoke<Snapshot>('save_settings', {
-    summonShortcut,
-    launchAtStartup,
-    defaultDestinationId,
-  });
-}
-
-export function saveDestination(destination: Destination): Promise<Snapshot> {
-  return invoke<Snapshot>('save_destination', { destination });
-}
-
-export function removeDestination(id: string): Promise<Snapshot> {
-  return invoke<Snapshot>('remove_destination', { id });
-}
-
-export function moveDestination(id: string, delta: number): Promise<Snapshot> {
-  return invoke<Snapshot>('move_destination', { id, delta });
-}
-
-export function clearHistory(): Promise<Snapshot> {
-  return invoke<Snapshot>('clear_history');
+export function saveSettings(summonShortcut: string, launchAtStartup: boolean): Promise<Snapshot> {
+  return invoke<Snapshot>('save_settings', { summonShortcut, launchAtStartup });
 }
 
 export function setBarHeight(height: number, width?: number): Promise<void> {
@@ -197,56 +167,6 @@ export function openSettings(): Promise<void> {
 
 export function checkForUpdates(): Promise<string> {
   return invoke<string>('check_for_updates');
-}
-
-export function aiAsk(
-  question: string,
-  onEvent: (event: AiEvent) => void,
-  history: { question: string; answer: string }[] = []
-): Promise<void> {
-  const channel = new Channel<AiEvent>();
-  channel.onmessage = onEvent;
-  return invoke('ai_ask', { question, history, onEvent: channel });
-}
-
-export function aiCancel(): Promise<void> {
-  return invoke('ai_cancel');
-}
-
-export function saveAiSettings(settings: AiSettings): Promise<Snapshot> {
-  return invoke<Snapshot>('save_ai_settings', { settings });
-}
-
-export function aiPresets(): Promise<AiPreset[]> {
-  return invoke<AiPreset[]>('ai_presets');
-}
-
-export function aiSetKey(provider: string, key: string | null): Promise<void> {
-  return invoke('ai_set_key', { provider, key });
-}
-
-export function aiHasKey(provider: string): Promise<boolean> {
-  return invoke<boolean>('ai_has_key', { provider });
-}
-
-export function aiModels(settings: AiSettings): Promise<string[]> {
-  return invoke<string[]>('ai_models', { settings });
-}
-
-export function aiDetectLocal(): Promise<LocalServer[]> {
-  return invoke<LocalServer[]>('ai_detect_local');
-}
-
-export function resolveUrl(query: string, destinationId: string): Promise<string> {
-  return invoke<string>('resolve_url', { query, destinationId });
-}
-
-export function exportDestinations(): Promise<string> {
-  return invoke<string>('export_destinations');
-}
-
-export function importDestinations(json: string): Promise<Snapshot> {
-  return invoke<Snapshot>('import_destinations', { json });
 }
 
 export function clipList(query: string, filter: string): Promise<ClipList> {
@@ -326,6 +246,11 @@ export function saveNotesShortcut(shortcut: string): Promise<Snapshot> {
   return invoke<Snapshot>('save_notes_shortcut', { shortcut });
 }
 
+/** Turns Zephyr's own shortcuts off while one is being recorded, and back on after. */
+export function pauseShortcuts(paused: boolean): Promise<void> {
+  return invoke('pause_shortcuts', { paused });
+}
+
 /** Shows this settings or notes window once its first frame has painted. */
 export function pageReady(): void {
   requestAnimationFrame(() =>
@@ -338,50 +263,6 @@ export function pageReady(): void {
 /** Resolves true when the result is a new personal best for its mode. */
 export function saveTypingResult(result: TypingBest): Promise<boolean> {
   return invoke<boolean>('save_typing_result', { result });
-}
-
-export function claudeJobs(): Promise<ClaudeJob[]> {
-  return invoke<ClaudeJob[]>('claude_jobs');
-}
-
-export function claudeApprovals(): Promise<ClaudeApproval[]> {
-  return invoke<ClaudeApproval[]>('claude_approvals');
-}
-
-export function claudeSubmit(input: string, projectId?: string): Promise<string> {
-  return invoke<string>('claude_submit', { input, projectId: projectId ?? null });
-}
-
-export function claudeFollowUp(jobId: string, prompt: string): Promise<void> {
-  return invoke('claude_follow_up', { jobId, prompt });
-}
-
-export function claudeCancel(jobId: string): Promise<void> {
-  return invoke('claude_cancel', { jobId });
-}
-
-export function claudeRemove(jobId: string): Promise<void> {
-  return invoke('claude_remove', { jobId });
-}
-
-export function claudeOpenTerminal(jobId: string): Promise<void> {
-  return invoke('claude_open_terminal', { jobId });
-}
-
-export function claudeAnswer(
-  approvalId: string,
-  decision: 'allow' | 'always' | 'deny',
-  reason?: string
-): Promise<void> {
-  return invoke('claude_answer', { approvalId, decision, reason: reason ?? null });
-}
-
-export function claudeStatus(): Promise<ClaudeCliStatus> {
-  return invoke<ClaudeCliStatus>('claude_status');
-}
-
-export function saveClaudeSettings(settings: ClaudeSettings): Promise<Snapshot> {
-  return invoke<Snapshot>('save_claude_settings', { settings });
 }
 
 export function saveResumeSeconds(seconds: number): Promise<Snapshot> {
@@ -420,14 +301,6 @@ export function saveShellProgram(program: ShellProgram): Promise<Snapshot> {
   return invoke<Snapshot>('save_shell_program', { program });
 }
 
-export function saveShellTerminal(terminal: 'auto' | 'console'): Promise<Snapshot> {
-  return invoke<Snapshot>('save_shell_terminal', { terminal });
-}
-
-export function clearShellHistory(): Promise<Snapshot> {
-  return invoke<Snapshot>('clear_shell_history');
-}
-
 /** The system folder picker; null when cancelled. */
 export function pickFolder(): Promise<string | null> {
   return invoke<string | null>('pick_folder');
@@ -452,12 +325,8 @@ export function keepNoteWindow(): Promise<void> {
   return invoke('keep_note_window');
 }
 
-export function saveOpenBehavior(
-  returnToMode: boolean,
-  routeCmd: string,
-  routeAlt: string
-): Promise<Snapshot> {
-  return invoke<Snapshot>('save_open_behavior', { returnToMode, routeCmd, routeAlt });
+export function saveOpenBehavior(returnToMode: boolean): Promise<Snapshot> {
+  return invoke<Snapshot>('save_open_behavior', { returnToMode });
 }
 
 export function permissionsStatus(): Promise<Permission[]> {
@@ -520,11 +389,6 @@ export function errorMessage(error: unknown): string {
   return 'Something went wrong';
 }
 
-/** A web destination's site icon as a data URL, or null to keep its letter tile. */
-export function siteIcon(destinationId: string): Promise<string | null> {
-  return invoke<string | null>('site_icon', { destinationId });
-}
-
 /** What typed text like "shutdown in 30m" would do, or null. */
 export function powerPreview(query: string): Promise<PowerPreview | null> {
   return invoke<PowerPreview | null>('power_preview', { query });
@@ -544,17 +408,28 @@ export function openUrl(url: string): Promise<void> {
   return invoke('open_url', { url });
 }
 
-export function bookmarkSources(): Promise<BookmarkSource[]> {
-  return invoke<BookmarkSource[]>('bookmark_sources');
-}
-
-export function saveBookmarkSources(disabled: string[]): Promise<Snapshot> {
-  return invoke<Snapshot>('save_bookmark_sources', { disabled });
-}
-
 /** A site's icon by address, as a data URL, or null. */
 export function siteIconUrl(url: string): Promise<string | null> {
   return invoke<string | null>('site_icon_url', { url });
+}
+
+/** The last weather fetched; later ones arrive as `weather` events. */
+export function weather(): Promise<Forecast | null> {
+  return invoke<Forecast | null>('weather');
+}
+
+/** Cities matching typed text, for the weather place setting. */
+export function weatherPlaces(text: string): Promise<Place[]> {
+  return invoke<Place[]>('weather_places', { text });
+}
+
+/** The weather for a city typed in the bar. */
+export function weatherAt(text: string): Promise<Forecast | null> {
+  return invoke<Forecast | null>('weather_at', { text });
+}
+
+export function saveWeatherPlace(place: Place | null): Promise<Snapshot> {
+  return invoke<Snapshot>('save_weather_place', { place });
 }
 
 /** What's playing now; later changes arrive as `nowplaying` events. */
@@ -571,23 +446,6 @@ export function nowPlayingFocus(): Promise<boolean> {
   return invoke<boolean>('now_playing_focus');
 }
 
-export function chatgptAccount(): Promise<ChatgptAccount | null> {
-  return invoke<ChatgptAccount | null>('chatgpt_account');
-}
-
-/** Signs in through the browser; resolves once the browser comes back. */
-export function chatgptSignIn(): Promise<ChatgptAccount> {
-  return invoke<ChatgptAccount>('chatgpt_sign_in');
-}
-
-export function chatgptCancelSignIn(): Promise<void> {
-  return invoke('chatgpt_cancel_sign_in');
-}
-
-export function chatgptSignOut(): Promise<void> {
-  return invoke('chatgpt_sign_out');
-}
-
 export function openOnboarding(): Promise<void> {
   return invoke('open_onboarding');
 }
@@ -601,6 +459,11 @@ export function saveOnboardingEveryLaunch(every: boolean): Promise<Snapshot> {
   return invoke<Snapshot>('save_onboarding_every_launch', { every });
 }
 
+/** Installed apps matching typed text, ranked as the bar ranks them: [id, name]. */
+export function searchApps(text: string, limit: number): Promise<[string, string][]> {
+  return invoke<[string, string][]>('search_apps', { text, limit });
+}
+
 export function saveLaunchGroups(groups: LaunchGroup[]): Promise<Snapshot> {
   return invoke<Snapshot>('save_launch_groups', { groups });
 }
@@ -608,15 +471,6 @@ export function saveLaunchGroups(groups: LaunchGroup[]): Promise<Snapshot> {
 /** Opens everything in a launch group; the bar closes at once. */
 export function launchGroup(id: string): Promise<void> {
   return invoke('launch_group', { id });
-}
-
-/** Every installed app as [id, name], for picking a group's apps. */
-export function installedApps(): Promise<[string, string][]> {
-  return invoke<[string, string][]>('installed_apps');
-}
-
-export function saveAiChoice(id: string): Promise<Snapshot> {
-  return invoke<Snapshot>('save_ai_choice', { id });
 }
 
 export function systemStats(): Promise<SystemStats> {
@@ -657,10 +511,6 @@ export function saveShowStats(show: boolean): Promise<Snapshot> {
   return invoke<Snapshot>('save_show_stats', { show });
 }
 
-export function saveShowNowPlaying(show: boolean): Promise<Snapshot> {
-  return invoke<Snapshot>('save_show_now_playing', { show });
-}
-
 export function saveBugCapture(enabled: boolean): Promise<Snapshot> {
   return invoke<Snapshot>('save_bug_capture', { enabled });
 }
@@ -690,10 +540,6 @@ export function updateLater(): Promise<void> {
 /** Dev builds only: plays the update card through with a made-up update. */
 export function rehearseUpdate(): Promise<void> {
   return invoke('rehearse_update');
-}
-
-export function saveSteamGames(enabled: boolean): Promise<Snapshot> {
-  return invoke<Snapshot>('save_steam_games', { enabled });
 }
 
 /** Saves a hotkey and alias for one target; both empty removes it. */

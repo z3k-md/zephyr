@@ -1,52 +1,6 @@
-export type SuggestKind = 'none' | 'google' | 'youtube' | 'wikipedia' | 'pubmed' | 'custom';
-
-export interface Destination {
-  id: string;
-  name: string;
-  triggers: string[];
-  urlTemplate: string;
-  suggest: SuggestKind;
-  suggestUrl?: string;
-  suggestPath?: string;
-  pinned: boolean;
-  builtin: boolean;
-  disabled: boolean;
-  kind?: 'web' | 'ai';
-}
-
-export type AiApi = 'openai' | 'anthropic';
-
-export interface AiSettings {
-  provider: string;
-  model: string;
-  baseUrl: string;
-  api: AiApi;
-}
-
-export interface AiPreset {
-  id: string;
-  name: string;
-  api: AiApi;
-  baseUrl: string;
-  needsKey: boolean;
-  local: boolean;
-  defaultModel: string;
-}
-
-export interface LocalServer {
-  provider: string;
-  name: string;
-  models: string[];
-}
-
-export type AiEvent =
-  | { kind: 'started'; provider: string; model: string }
-  | { kind: 'delta'; text: string }
-  | { kind: 'done' }
-  | { kind: 'error'; message: string };
-
 export interface HistoryEntry {
   query: string;
+  /** 'google' for a search, 'url' for a link. */
   destinationId: string;
   uses: number;
   lastUsed: number;
@@ -58,45 +12,69 @@ export interface Snapshot {
   launchAtStartup: boolean;
   /** Windows: start from a logon task right at sign-in (opt-in; Defender may flag it). */
   instantStartup: boolean;
-  defaultDestinationId: string;
-  destinations: Destination[];
   history: HistoryEntry[];
   launches: LaunchEntry[];
   appOverrides: string[];
   fileRoots: string[] | null;
   fileExcludes: string[];
   fileOpens: LaunchEntry[];
-  ai: AiSettings;
   clipboard: ClipboardSettings;
   notesShortcut: string;
   typingBests: TypingBest[];
-  claude: ClaudeSettings;
   resumeSeconds: number;
   activeMode: string;
   returnToMode: boolean;
-  routeCmd: string;
-  routeAlt: string;
   shell: ShellSettings;
   /** The color palette, e.g. violet or ocean. */
   theme: string;
   /** A power action set for later from the bar. */
   power: PowerSchedule | null;
-  /** Browser profiles whose bookmarks stay out of the bar. */
-  bookmarksDisabled: string[];
-  /** Whether the search bar shows the song or video playing. */
-  showNowPlaying: boolean;
   showStats: boolean;
-  /** The one AI the bar offers (a destination id); empty for the first AI listed. */
-  aiChoice: string;
   onboardingDone: boolean;
   onboardingEveryLaunch: boolean;
   launchGroups: LaunchGroup[];
   bugCapture: boolean;
   protectedFolders: boolean;
-  /** Whether installed Steam games are listed with the apps. */
-  steamGames: boolean;
-  /** Hotkeys and aliases the user gave commands, apps, destinations and bookmarks. */
+  /** Hotkeys and aliases the user gave commands, apps and bookmarks. */
   bindings: Binding[];
+  /** Where the weather is for; null uses where the IP address says. */
+  weatherPlace: Place | null;
+}
+
+/** A place weather is for. */
+export interface Place {
+  name: string;
+  /** State or province, when there is one. */
+  region: string;
+  country: string;
+  latitude: number;
+  longitude: number;
+}
+
+/** Weather from Open-Meteo, all metric (°C, km/h). */
+export interface Forecast {
+  place: Place;
+  fetchedAt: number;
+  /** The place's offset from UTC, so its days and hours read in its own time. */
+  utcOffsetSeconds: number;
+  current: { temperature: number; feelsLike: number; code: number; wind: number; isDay: boolean };
+  /** The next 48 hours; `time` in seconds since the epoch. */
+  hourly: {
+    time: number;
+    temperature: number;
+    code: number;
+    precipitation: number;
+    isDay: boolean;
+  }[];
+  /** Today and the next six days; `time` is midnight at the place. */
+  daily: {
+    time: number;
+    code: number;
+    high: number;
+    low: number;
+    precipitation: number;
+    uv: number;
+  }[];
 }
 
 /** The song or video playing on this computer. */
@@ -118,23 +96,22 @@ export interface NowPlaying {
 
 export type MediaControl = 'toggle' | 'next' | 'previous';
 
-export type ShellProgram = 'auto' | 'powershell' | 'gitbash' | 'wsl';
+export type ShellProgram = 'powershell' | 'gitbash' | 'wsl';
 
 export interface ShellSettings {
   program: ShellProgram;
   /** Commands run from the bar, newest first. */
   history: string[];
-  /** Windows: 'auto' sends Enter to Windows Terminal when installed, 'console' to a console. */
-  terminal: 'auto' | 'console';
 }
 
 export interface ShellInfo {
   /** Shells found on this PC; empty on macOS, which always uses the login shell. */
   available: ShellProgram[];
   using: string | null;
-  /** Where Enter sends a command, e.g. "Windows Terminal". */
+  /** The shell in use, which may stand in for a chosen one that isn't installed. */
+  program: ShellProgram | null;
+  /** Where Ctrl+Enter sends a command, e.g. "Windows Terminal". */
   terminal: string;
-  hasWindowsTerminal: boolean;
 }
 
 export type ShellEvent =
@@ -142,73 +119,6 @@ export type ShellEvent =
   | { kind: 'output'; text: string }
   | { kind: 'exit'; code: number | null; stopped: boolean; millis: number }
   | { kind: 'error'; message: string };
-
-export type ClaudeProfile = 'edit' | 'auto' | 'plan';
-
-export interface ClaudeProject {
-  id: string;
-  folder: string;
-  alias: string;
-  profile: ClaudeProfile;
-  allow: string[];
-  model: string;
-  effort: string;
-  note: string;
-}
-
-export interface ClaudeSettings {
-  binary: string;
-  projects: ClaudeProject[];
-  lastProject: string;
-  maxTurns: number;
-  timeoutMinutes: number;
-  approvalMinutes: number;
-  notifications: boolean;
-}
-
-export type ClaudeStatus =
-  'queued' | 'running' | 'waiting' | 'done' | 'failed' | 'cancelled' | 'interrupted';
-
-export interface ClaudeTurn {
-  prompt: string;
-  started: number | null;
-  ended: number | null;
-  result: string;
-  denials: string[];
-  exit: number | null;
-}
-
-export interface ClaudeJob {
-  id: string;
-  session: string;
-  projectId: string;
-  project: string;
-  folder: string;
-  title: string;
-  status: ClaudeStatus;
-  activity: string;
-  summary: string;
-  created: number;
-  updated: number;
-  turns: ClaudeTurn[];
-}
-
-export interface ClaudeApproval {
-  id: string;
-  jobId: string;
-  project: string;
-  tool: string;
-  summary: string;
-  detail: string;
-  created: number;
-}
-
-export interface ClaudeCliStatus {
-  path: string | null;
-  version: string | null;
-  loggedIn: boolean | null;
-  authMethod: string | null;
-}
 
 export interface TypingBest {
   mode: string;
@@ -284,11 +194,12 @@ export interface LaunchEntry {
 export interface Suggestion {
   label: string;
   query: string;
-  destinationId: string;
+  /** What the row opens: for a search row 'web' (a Google search of the query) or 'url', for
+   *  a command row its view or command; empty otherwise. */
+  target: string;
   kind:
     | 'history'
     | 'remote'
-    | 'destination'
     | 'app'
     | 'setting'
     | 'file'
@@ -297,7 +208,6 @@ export interface Suggestion {
     | 'noteNew'
     | 'view'
     | 'query'
-    | 'searchWith'
     | 'power'
     | 'bookmark'
     | 'powerPending'
@@ -307,11 +217,11 @@ export interface Suggestion {
   settingId?: string;
   path?: string;
   noteId?: string;
-  /** The section it's listed under (apps, web, files…); jump, searchWith, power and shell
-   *  come from the bar itself. */
+  /** The section it's listed under (apps, web, files…); jump, power and shell come from the
+   *  bar itself. */
   section?: string;
   subtitle?: string;
-  /** app:<id>, dest:<id>, site:<url>, glyph:<name>, or zephyr for the app's own icon. */
+  /** app:<id>, site:<url>, glyph:<name>, or zephyr for the app's own icon. */
   icon?: string;
   /** A browser's private window (Incognito, InPrivate); Shift+Enter opens one. */
   privateWindow?: string;
@@ -319,6 +229,9 @@ export interface Suggestion {
   icons?: string[];
   /** Keycaps shown instead of the hint. */
   keys?: string[];
+  /** Key hints ("enter" Search, "shift+enter" AI Mode) shown instead of the hint, which
+   *  keeps the same words as plain text. */
+  keyHints?: { keys: string; label: string }[];
   /** For power rows: what Enter runs. */
   power?: PowerPreview;
   /** An open app's windows, front to back; Enter switches to the first. */
@@ -343,29 +256,25 @@ export interface Note {
 }
 
 export interface SuggestResponse {
-  mode: 'search' | 'destinations' | 'recent';
+  mode: 'search' | 'recent';
   items: Suggestion[];
   notice: string | null;
   preselect: number | null;
+  /** Where free text goes: 'web' for a Google search, or 'url'. */
   target: string | null;
   text: string;
-  searchWith: string[];
 }
 
 export type DispatchOutcome =
-  | { kind: 'opened'; destinationId: string }
-  | { kind: 'armed'; destinationId: string }
+  | { kind: 'opened' }
   | { kind: 'launched'; appId: string }
   | { kind: 'settingOpened'; settingId: string }
   | { kind: 'fileOpened'; path: string }
-  | { kind: 'ask'; query: string }
-  | { kind: 'palette' }
-  | { kind: 'unknownBang'; trigger: string }
   | { kind: 'empty' };
 
 export function isSnapshot(value: unknown): value is Snapshot {
   if (typeof value !== 'object' || value === null) return false;
-  return Array.isArray((value as Snapshot).destinations);
+  return Array.isArray((value as Snapshot).history);
 }
 
 export type SyncPhase =
@@ -425,16 +334,6 @@ export interface PowerPreview {
   exact: boolean;
 }
 
-/** A browser profile bookmarks are read from. */
-export interface BookmarkSource {
-  /** e.g. chrome/Default */
-  id: string;
-  /** e.g. "Chrome · Zach" */
-  label: string;
-  count: number;
-  enabled: boolean;
-}
-
 /** The update card: downloading, counting down to install, installing, or failed. */
 export type UpdateStatus =
   | { phase: 'downloading'; version: string; downloaded: number; total: number | null }
@@ -449,8 +348,8 @@ export interface WindowRef {
 }
 
 /**
- * A hotkey and/or alias for one thing the bar can do. target: view:ai, scope:files,
- * app:<id>, dest:<id>, bookmark:<url>, group:<id> or setting:<id>.
+ * A hotkey and/or alias for one thing the bar can do. target: view:clip, scope:files,
+ * app:<id>, bookmark:<url>, group:<id> or setting:<id>.
  */
 export interface Binding {
   target: string;
@@ -467,6 +366,17 @@ export type FilePreview =
   | { kind: 'text'; text: string; truncated: boolean; size: number; modified: number }
   | { kind: 'info'; size: number; modified: number; folder: boolean };
 
+/** The GPU: its busiest engine, and the main GPU's own memory. */
+export interface GpuStats {
+  /** Empty where it isn't known (macOS). */
+  name: string;
+  /** 0–100. */
+  usage: number;
+  memoryUsed: number;
+  /** 0 where the GPU shares the computer's memory (Apple silicon). */
+  memoryTotal: number;
+}
+
 /** Live system stats for the bar's footer. */
 export interface SystemStats {
   cpu: number;
@@ -476,6 +386,8 @@ export interface SystemStats {
   diskTotal: number;
   netDown: number;
   netUp: number;
+  /** Absent without a GPU that reports its load. */
+  gpu?: GpuStats;
   /** Dev builds: the app's own use, webview helpers included. */
   app?: { cpu: number; memory: number; processes: number };
 }
@@ -511,6 +423,8 @@ export interface ResourcePoint {
   cpu: number;
   /** Share of memory in use, 0 to 1. */
   memory: number;
+  /** The GPU's load, 0–100; 0 without one. */
+  gpu: number;
   down: number;
   up: number;
 }
@@ -527,14 +441,6 @@ export interface ResourceSnapshot {
 }
 
 export type ResourceSort = 'cpu' | 'memory' | 'disk' | 'name';
-
-/** The ChatGPT account Ask AI uses, when signed in with ChatGPT. */
-export interface ChatgptAccount {
-  email: string;
-  name: string;
-  /** False when sign-in worked but sharing the plan wasn't allowed. */
-  plan: boolean;
-}
 
 /** Things opened together from one row or hotkey ("Coding", "Gaming"). */
 export interface LaunchGroup {

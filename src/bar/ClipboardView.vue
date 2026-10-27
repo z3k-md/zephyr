@@ -14,8 +14,10 @@
   import type { ClipDetail, ClipKind, ClipSummary } from '../types';
   import { dragGesture, dragOut } from './dragOut';
   import { bytes, dateTime } from '../format';
-  import { isMac, MOD_KEY as mod } from '../keys';
+  import { isMac } from '../keys';
   import SelectMenu from '../components/SelectMenu.vue';
+  import Keys from '../components/Keys.vue';
+  import KeyHints from '../components/KeyHints.vue';
 
   const props = defineProps<{ initialQuery: string }>();
   // `picked` means an item was pasted or copied, which ends the clipboard picker.
@@ -23,9 +25,22 @@
 
   interface Action {
     label: string;
+    /** Its key, as a spec for the Keys component ("mod+enter"). */
     keys?: string;
     run: () => unknown;
   }
+
+  const LIST_HINTS = [
+    { keys: 'enter', label: 'paste' },
+    { keys: 'mod+enter', label: 'copy' },
+    { keys: 'shift+enter', label: 'plain text' },
+    { keys: 'tab', label: 'type' },
+    { keys: 'mod+k', label: 'actions' },
+  ];
+  const MENU_HINTS = [
+    { keys: 'enter', label: 'run' },
+    { keys: 'esc', label: 'back' },
+  ];
 
   const FILTERS: { id: string; label: string }[] = [
     { id: 'all', label: 'All types' },
@@ -74,18 +89,18 @@
     const item = current.value;
     if (!item) return [];
     const list: Action[] = [
-      { label: 'Paste', keys: '↵', run: () => paste(false) },
-      { label: 'Copy to clipboard', keys: `${mod}↵`, run: () => copy() },
+      { label: 'Paste', keys: 'enter', run: () => paste(false) },
+      { label: 'Copy to clipboard', keys: 'mod+enter', run: () => copy() },
     ];
     if (item.kind !== 'image') {
-      list.push({ label: 'Paste as plain text', keys: '⇧↵', run: () => paste(true) });
+      list.push({ label: 'Paste as plain text', keys: 'shift+enter', run: () => paste(true) });
     }
     list.push({
       label: item.pinned ? 'Unpin' : 'Pin',
-      keys: `${mod}P`,
+      keys: 'mod+p',
       run: () => togglePin(),
     });
-    list.push({ label: 'Delete', keys: '⌃X', run: () => remove() });
+    list.push({ label: 'Delete', keys: 'ctrl+x', run: () => remove() });
     list.push({
       label: confirmClear.value
         ? 'Press again to delete all unpinned items'
@@ -411,7 +426,7 @@
             @mousemove="actionIndex = index"
           >
             <span class="label">{{ action.label }}</span>
-            <span v-if="action.keys" class="hint">{{ action.keys }}</span>
+            <Keys v-if="action.keys" :keys="action.keys" />
           </li>
         </ul>
         <template v-else-if="detail">
@@ -466,12 +481,7 @@
     </div>
 
     <footer class="footer">
-      <span>
-        <template v-if="actionsOpen">↵ run · Esc back</template>
-        <template v-else>
-          ↵ paste · {{ mod }}↵ copy · ⇧↵ plain text · Tab type · {{ mod }}K actions
-        </template>
-      </span>
+      <KeyHints :hints="actionsOpen ? MENU_HINTS : LIST_HINTS" />
       <span>{{ items.length }} items</span>
     </footer>
   </div>

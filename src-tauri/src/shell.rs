@@ -18,21 +18,18 @@ const HISTORY_LIMIT: usize = 50;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ShellSettings {
-    /// `auto`, `powershell`, `gitbash` or `wsl`. macOS and Linux always use the login shell.
+    /// `gitbash` (the default), `powershell` or `wsl`; one that isn't installed falls back to
+    /// Git Bash, then PowerShell. macOS and Linux always use the login shell.
     pub program: String,
     /// Commands run from the bar, newest first.
     pub history: Vec<String>,
-    /// Where Enter sends a command on Windows: `auto` (Windows Terminal when installed) or
-    /// `console` (a plain console window).
-    pub terminal: String,
 }
 
 impl Default for ShellSettings {
     fn default() -> Self {
         Self {
-            program: "auto".into(),
+            program: "gitbash".into(),
             history: Vec::new(),
-            terminal: "auto".into(),
         }
     }
 }
@@ -49,18 +46,10 @@ impl ShellSettings {
     }
 
     pub fn set_program(&mut self, program: &str) -> Result<(), String> {
-        if !matches!(program, "auto" | "powershell" | "gitbash" | "wsl") {
+        if !matches!(program, "powershell" | "gitbash" | "wsl") {
             return Err(format!("Unknown shell {program}"));
         }
         self.program = program.into();
-        Ok(())
-    }
-
-    pub fn set_terminal(&mut self, terminal: &str) -> Result<(), String> {
-        if !matches!(terminal, "auto" | "console") {
-            return Err(format!("Unknown terminal {terminal}"));
-        }
-        self.terminal = terminal.into();
         Ok(())
     }
 }
@@ -141,9 +130,11 @@ impl Shell {
 pub struct ShellInfo {
     pub available: Vec<String>,
     pub using: Option<String>,
-    /// Where Enter sends a command.
+    /// The setting's id for the shell in use (`gitbash` when Git Bash stands in for a
+    /// missing choice), which Settings shows as chosen.
+    pub program: Option<String>,
+    /// Where Ctrl+Enter sends a command.
     pub terminal: String,
-    pub has_windows_terminal: bool,
 }
 
 pub fn info(settings: &ShellSettings) -> ShellInfo {
@@ -160,40 +151,45 @@ pub fn info(settings: &ShellSettings) -> ShellInfo {
     #[cfg(not(windows))]
     let available = Vec::new();
     #[cfg(windows)]
-    let has_windows_terminal = windows_terminal().is_some();
-    #[cfg(not(windows))]
-    let has_windows_terminal = false;
-    let terminal = if cfg!(target_os = "macos") {
-        "Terminal"
-    } else if has_windows_terminal && settings.terminal != "console" {
+    let terminal = if windows_terminal().is_some() {
         "Windows Terminal"
     } else {
         "a console window"
     };
+    #[cfg(not(windows))]
+    let terminal = if cfg!(target_os = "macos") {
+        "Terminal"
+    } else {
+        "a terminal"
+    };
+    let shell = resolve(settings).ok();
     ShellInfo {
         available,
-        using: resolve(settings).ok().map(|shell| shell.name()),
+        using: shell.as_ref().map(Shell::name),
+        program: shell.and_then(|shell| match shell.kind {
+            Kind::GitBash => Some("gitbash".into()),
+            Kind::PowerShell => Some("powershell".into()),
+            Kind::Wsl => Some("wsl".into()),
+            Kind::Login => None,
+        }),
         terminal: terminal.into(),
-        has_windows_terminal,
     }
 }
 
 fn resolve(settings: &ShellSettings) -> Result<Shell, String> {
     #[cfg(windows)]
     {
+        // The chosen shell, or when it isn't installed (or the setting predates the choice),
+        // Git Bash, then the PowerShell every PC has.
         let shell = |kind, program| Shell { kind, program };
-        match settings.program.as_str() {
-            "powershell" => Ok(shell(Kind::PowerShell, powershell())),
-            "gitbash" => git_bash()
-                .map(|program| shell(Kind::GitBash, program))
-                .ok_or_else(|| "Git Bash isn't installed".into()),
-            "wsl" => wsl()
-                .map(|program| shell(Kind::Wsl, program))
-                .ok_or_else(|| "WSL isn't installed".into()),
-            _ => Ok(git_bash()
-                .map(|program| shell(Kind::GitBash, program))
-                .unwrap_or_else(|| shell(Kind::PowerShell, powershell()))),
-        }
+        let chosen = match settings.program.as_str() {
+            "powershell" => Some(shell(Kind::PowerShell, powershell())),
+            "wsl" => wsl().map(|program| shell(Kind::Wsl, program)),
+            _ => None,
+        };
+        Ok(chosen
+            .or_else(|| git_bash().map(|program| shell(Kind::GitBash, program)))
+            .unwrap_or_else(|| shell(Kind::PowerShell, powershell())))
     }
     #[cfg(not(windows))]
     {
@@ -510,7 +506,7 @@ pub fn open_in_terminal(
             }
         };
         // Windows Terminal opens a tab in the window already open; otherwise a console window.
-        let mut process = match windows_terminal().filter(|_| settings.terminal != "console") {
+        let mut process = match windows_terminal() {
             Some(wt) => {
                 let mut process = Command::new(wt);
                 process

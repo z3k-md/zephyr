@@ -1,17 +1,15 @@
-mod ai;
 mod answer;
 mod apps;
 mod bindings;
 mod bookmarks;
 mod browser;
 mod capture;
-mod chatgpt;
-mod claude;
 mod clipboard;
 mod commands;
 mod deeplink;
-mod destination;
 mod files;
+mod gpu;
+mod handoff;
 mod history;
 mod icons;
 mod ip;
@@ -37,10 +35,11 @@ mod stats;
 mod steam;
 mod suggest;
 mod sync;
-mod template;
 mod tray;
 mod updater;
 mod util;
+mod weather;
+mod web;
 mod window;
 
 use tauri::{Emitter, Manager, WindowEvent};
@@ -66,13 +65,6 @@ pub fn run() {
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, pressed, event| {
                     if event.state != ShortcutState::Pressed {
-                        return;
-                    }
-                    if shortcut::is_capture(pressed) {
-                        capture::toggle(app);
-                        return;
-                    } else if shortcut::is_snapshot(pressed) {
-                        capture::snapshot(app);
                         return;
                     }
                     if shortcut::is_clipboard(pressed) {
@@ -151,6 +143,7 @@ pub fn run() {
             notes::init(config_dir.join("notes"));
             icons::init(app.path().app_cache_dir()?.join("icons"));
             capture::init(app.path().app_data_dir()?.join("captures"));
+            weather::start(app.handle(), app.path().app_data_dir()?);
             // Dev builds keep their key in a file instead of the keychain (secrets.rs), so
             // they keep their own history too; sharing one wiped it at every switch.
             let clipboard_dir = if cfg!(debug_assertions) {
@@ -164,12 +157,10 @@ pub fn run() {
             );
 
             app.manage(state);
-            claude::init(app.handle(), app.path().app_data_dir()?.join("claude"));
+            handoff::start();
             power::resume(app.handle());
             browser::start();
             nowplaying::start(app.handle());
-            bookmarks::configure(&snapshot.bookmarks_disabled);
-            steam::configure(snapshot.steam_games);
 
             if let Err(err) = tray::init(app) {
                 log::error!("tray setup failed: {err}");
@@ -237,8 +228,6 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_snapshot,
-            commands::ai_ask,
-            commands::resolve_url,
             commands::clip_list,
             commands::clip_detail,
             commands::clip_paste,
@@ -257,7 +246,6 @@ pub fn run() {
             commands::now_playing,
             commands::now_playing_control,
             commands::now_playing_focus,
-            commands::save_show_now_playing,
             commands::save_bug_capture,
             commands::reveal_captures,
             commands::allow_protected_folders,
@@ -270,22 +258,20 @@ pub fn run() {
             commands::resources_switch,
             commands::resources_reveal,
             commands::save_show_stats,
-            commands::save_ai_choice,
+            commands::search_apps,
+            commands::weather,
+            commands::weather_places,
+            commands::weather_at,
+            commands::save_weather_place,
             commands::open_onboarding,
             commands::hide_settings,
             commands::bar_move,
             commands::bar_move_end,
             commands::save_launch_groups,
             commands::launch_group,
-            commands::installed_apps,
             commands::finish_onboarding,
             commands::save_onboarding_every_launch,
-            commands::chatgpt_account,
-            commands::chatgpt_sign_in,
-            commands::chatgpt_cancel_sign_in,
-            commands::chatgpt_sign_out,
             commands::permission_request,
-            commands::save_steam_games,
             commands::save_binding,
             commands::drag_prepare,
             commands::file_preview,
@@ -298,23 +284,20 @@ pub fn run() {
             commands::power_run,
             commands::power_cancel,
             commands::open_url,
-            commands::bookmark_sources,
-            commands::save_bookmark_sources,
             commands::site_icon_url,
             commands::app_icon,
-            commands::site_icon,
             commands::start_bar_drag,
             commands::prepare_grid,
             commands::warm_suggestions,
             commands::capture_event,
             commands::capture_recording,
+            commands::capture_toggle,
+            commands::capture_snapshot,
             commands::shell_run,
             commands::shell_stop,
             commands::shell_open_terminal,
             commands::shell_info,
             commands::save_shell_program,
-            commands::save_shell_terminal,
-            commands::clear_shell_history,
             commands::pick_folder,
             commands::set_active_mode,
             commands::open_note_window,
@@ -332,16 +315,6 @@ pub fn run() {
             commands::sync_revoke,
             commands::sync_recovery_key,
             commands::sync_sign_out,
-            commands::claude_jobs,
-            commands::claude_approvals,
-            commands::claude_submit,
-            commands::claude_follow_up,
-            commands::claude_cancel,
-            commands::claude_remove,
-            commands::claude_open_terminal,
-            commands::claude_answer,
-            commands::claude_status,
-            commands::save_claude_settings,
             commands::notes_list,
             commands::note_get,
             commands::note_create,
@@ -350,15 +323,7 @@ pub fn run() {
             commands::reveal_notes,
             commands::open_notes,
             commands::save_notes_shortcut,
-            commands::export_destinations,
-            commands::import_destinations,
-            commands::ai_cancel,
-            commands::save_ai_settings,
-            commands::ai_presets,
-            commands::ai_set_key,
-            commands::ai_has_key,
-            commands::ai_models,
-            commands::ai_detect_local,
+            commands::pause_shortcuts,
             commands::suggest,
             commands::dispatch,
             commands::launch_app,
@@ -373,10 +338,6 @@ pub fn run() {
             commands::save_file_folders,
             commands::save_settings,
             commands::save_instant_startup,
-            commands::save_destination,
-            commands::remove_destination,
-            commands::move_destination,
-            commands::clear_history,
             commands::set_bar_height,
             commands::hide_bar,
             commands::open_settings,
@@ -388,10 +349,13 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building Zephyr")
-        .run(|_app, event| {
-            if let tauri::RunEvent::Ready = event {
+        .run(|_app, event| match event {
+            tauri::RunEvent::Ready => {
                 startup::mark("event loop running, the summon shortcut works");
             }
+            // Tray Quit and an update's restart both come through here.
+            tauri::RunEvent::Exit => clipboard::flush(),
+            _ => {}
         });
 }
 

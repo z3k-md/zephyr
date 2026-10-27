@@ -67,5 +67,5 @@ export function useNowPlaying() {
     await nowPlayingFocus().catch(() => false);
   }
 
-  return { shown, press, focus, tick: () => (now.value = Date.now()) };
+  return { track, shown, press, focus, tick: () => (now.value = Date.now()) };
 }

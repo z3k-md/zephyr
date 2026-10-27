@@ -1,6 +1,6 @@
 use crate::apps::{self, LaunchEntry, Strength};
 
-/// Bang words that scope the bar to settings instead of naming a destination.
+/// Bang words that scope the bar to settings.
 pub const SCOPE_TRIGGERS: &[&str] = &["set", "settings"];
 
 pub fn is_scope(trigger: &str) -> bool {
@@ -211,8 +211,8 @@ fn is_zephyr(setting: &Setting) -> bool {
     matches!(setting.target, Target::Zephyr(_))
 }
 
-/// What ranks a match: naming a whole word of the page ("ai" in "Zephyr AI", not the start
-/// of "Airplane"), then match strength, then title over keyword.
+/// What ranks a match: naming a whole word of the page ("shell" in "Zephyr Shell", not just
+/// the start of a longer word), then match strength, then title over keyword.
 type Score = (bool, Strength, bool);
 
 /// Whether `query` is one or more whole words of `text`.
@@ -488,33 +488,25 @@ const ZEPHYR: &[Setting] = &[
     zephyr(
         "zephyr.appearance",
         "Zephyr Appearance",
-        "appearance",
+        "general:theme",
         &["theme", "color", "tint"],
     ),
     zephyr(
-        "zephyr.ai",
-        "Zephyr AI",
-        "ai",
-        &[
-            "ai provider",
-            "ollama",
-            "lm studio",
-            "anthropic",
-            "openai",
-            "chatgpt",
-            "model",
-        ],
+        "zephyr.about",
+        "About Zephyr",
+        "about",
+        &["zephyr version", "zephyr updates"],
     ),
     zephyr(
-        "zephyr.claude",
-        "Zephyr Claude",
-        "claude",
-        &["claude code", "claude projects", "background agent"],
+        "zephyr.dev",
+        "Zephyr Dev",
+        "dev",
+        &["bug report", "captures", "snapshot", "developer"],
     ),
     zephyr(
         "zephyr.shell",
         "Zephyr Shell",
-        "shell",
+        "general:shell",
         &["terminal", "bash", "powershell", "command", "wsl"],
     ),
     zephyr(
@@ -541,29 +533,6 @@ const ZEPHYR: &[Setting] = &[
         &["notes shortcut", "quick notes", "notes folder"],
     ),
     zephyr(
-        "zephyr.destinations",
-        "Zephyr Destinations",
-        "destinations",
-        &[
-            "add destination",
-            "search engines",
-            "triggers",
-            "edit destination",
-        ],
-    ),
-    zephyr(
-        "zephyr.bookmarks",
-        "Zephyr Bookmarks",
-        "bookmarks",
-        &["browser bookmarks", "bookmark sources"],
-    ),
-    zephyr(
-        "zephyr.nowplaying",
-        "Zephyr Now Playing",
-        "nowplaying",
-        &["music", "media controls"],
-    ),
-    zephyr(
         "zephyr.shortcuts",
         "Zephyr Shortcuts",
         "shortcuts",
@@ -587,12 +556,6 @@ const ZEPHYR: &[Setting] = &[
         ],
     ),
     zephyr(
-        "zephyr.history",
-        "Zephyr History",
-        "history",
-        &["clear history", "recent searches"],
-    ),
-    zephyr(
         "zephyr.permissions",
         "Zephyr Permissions",
         "permissions",
@@ -611,18 +574,11 @@ const ZEPHYR: &[Setting] = &[
         &["autostart", "login", "zephyr startup"],
     ),
     zephyr(
-        "zephyr.default",
-        "Zephyr Default Destination",
-        "general:default",
-        &["default search engine", "default destination"],
-    ),
-    zephyr(
         "zephyr.updates",
         "Check for Zephyr Updates",
-        "general:updates",
-        &["update zephyr", "zephyr version"],
+        "about:updates",
+        &["update zephyr", "zephyr version", "about zephyr"],
     ),
-    zephyr("zephyr.aikey", "Zephyr AI Key", "ai:key", &["api key"]),
 ];
 
 /// One idea, two platforms: the words people use for it and the page that has it on each.
@@ -888,8 +844,8 @@ mod tests {
             ["Screen Recording Permissions"]
         );
         assert_eq!(
-            titles(ranked(ZEPHYR, "add dest", 1)),
-            ["Zephyr Destinations"]
+            titles(ranked(ZEPHYR, "launch group", 1)),
+            ["Zephyr Launch Groups"]
         );
     }
 
@@ -957,7 +913,7 @@ mod tests {
             assert!(intent_titles(&catalog, "display prefs")[0].starts_with("Display"));
             let dark = intent_titles(&catalog, "settings dark");
             assert!(["Colors", "Appearance"].contains(&dark[0]), "{dark:?}");
-            assert_eq!(intent_titles(&catalog, "ai settings")[0], "Zephyr AI");
+            assert_eq!(intent_titles(&catalog, "shell settings")[0], "Zephyr Shell");
             assert!(intent_titles(&catalog, "iphone wifi settings not working").is_empty());
             assert!(intent_titles(&catalog, "wifi").is_empty());
         }

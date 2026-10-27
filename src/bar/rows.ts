@@ -1,27 +1,14 @@
 // Turns a suggest response into the bar's sectioned list: the query row, command rows and
 // section headers. Pure functions, so the bar only wires them up.
 
-import { CTRL, isMac, shortcutKeys } from '../keys';
-import { displayName, isOtherAi } from '../aiChoice';
-import type {
-  Binding,
-  ClaudeJob,
-  Destination,
-  LaunchGroup,
-  Snapshot,
-  Suggestion,
-  SuggestResponse,
-} from '../types';
+import { shortcutKeys } from '../keys';
+import type { Binding, LaunchGroup, Snapshot, Suggestion, SuggestResponse } from '../types';
 
 export interface RowCtx {
   snapshot: Snapshot | null;
-  armedId: string;
-  jobs: ClaudeJob[];
   /** The parked workspace ("Back to …"), if any. */
   parked: string;
   parkedName: string;
-  /** Ids behind Ctrl+1..8. */
-  strip: string[];
   /** The text as typed, for matching command names; empty in a scoped search. */
   typed: string;
 }
@@ -39,29 +26,16 @@ const SECTION_TITLES: Record<string, string> = {
   files: 'Files',
   settings: 'Settings',
   notes: 'Notes',
-  destinations: 'Destinations',
   jump: 'Commands',
-  searchWith: 'Search with',
   shell: 'Shell',
   power: 'Power',
   bookmarks: 'Bookmarks',
   windows: 'Windows',
 };
 
-function destination(ctx: RowCtx, id: string): Destination | undefined {
-  return ctx.snapshot?.destinations.find((item) => item.id === id);
-}
-
-function destinationName(ctx: RowCtx, id: string): string {
-  if (id === 'url') return 'Link';
-  const found = destination(ctx, id);
-  return found ? displayName(ctx.snapshot, found) : id;
-}
-
 export function rowKey(row: Suggestion): string {
   if (row.kind === 'query') return 'query';
-  if (row.kind === 'searchWith') return `sw-${row.destinationId}`;
-  return `${row.kind}-${row.destinationId}-${row.path ?? row.noteId ?? row.label}`;
+  return `${row.kind}-${row.target}-${row.path ?? row.noteId ?? row.label}`;
 }
 
 function view(id: string, label: string, icon: string, extra: Partial<Suggestion>): Suggestion {
@@ -69,7 +43,7 @@ function view(id: string, label: string, icon: string, extra: Partial<Suggestion
     label,
     hint: '',
     query: '',
-    destinationId: id,
+    target: id,
     kind: 'view',
     section: 'jump',
     icon,
@@ -83,7 +57,10 @@ function jumpRows(ctx: RowCtx): Suggestion[] {
   const settings = ctx.snapshot;
   if (ctx.parked && ctx.parkedName) {
     rows.push(
-      view('back', `Back to ${ctx.parkedName}`, 'glyph:back', { hint: 'Esc again to clear' })
+      view('back', `Back to ${ctx.parkedName}`, 'glyph:back', {
+        hint: 'Esc again to clear',
+        keyHints: [{ keys: 'esc', label: 'again to clear' }],
+      })
     );
   }
   if (settings?.clipboard.enabled) {
@@ -94,22 +71,6 @@ function jumpRows(ctx: RowCtx): Suggestion[] {
   rows.push(view('notes', 'Notes', 'glyph:note', noteKeys.length ? { keys: noteKeys } : {}));
   // Types "ip" in, so the addresses answer below it.
   rows.push(view('ip', 'IP address', 'glyph:network', {}));
-  if (ctx.jobs.length || settings?.claude.projects.length) {
-    const running = ctx.jobs.filter(
-      (job) => job.status === 'running' || job.status === 'queued'
-    ).length;
-    const waiting = ctx.jobs.filter((job) => job.status === 'waiting').length;
-    const parts = [running ? `${running} running` : '', waiting ? `${waiting} waiting` : ''].filter(
-      Boolean
-    );
-    const latest = ctx.jobs[0];
-    const hint = parts.length
-      ? parts.join(', ')
-      : latest
-        ? `${latest.status === 'failed' ? '✗' : '✓'} ${latest.title}`
-        : '';
-    rows.push(view('claude', 'Claude jobs', 'glyph:terminal', { hint }));
-  }
   return rows;
 }
 
@@ -126,7 +87,6 @@ interface Command {
 // Every mode and scoped search, by name, so none needs a bang: typing "files" offers the
 // files search, "typing" the typing test.
 const COMMANDS: Command[] = [
-  { id: 'ai', label: 'Ask AI', icon: 'glyph:sparkle', names: ['ai', 'chat'] },
   {
     id: 'clip',
     label: 'Clipboard history',
@@ -154,7 +114,6 @@ const COMMANDS: Command[] = [
       'force quit',
     ],
   },
-  { id: 'claude', label: 'Claude jobs', icon: 'glyph:terminal', names: ['claude', 'jobs'] },
   { id: 'shell', label: 'Shell', icon: 'glyph:prompt', names: ['terminal', 'command line'] },
   {
     id: 'typing',
@@ -255,8 +214,8 @@ export function buildRows(
   }
   const rows = [...response.items];
   let preselect = response.preselect;
-  // Free text going to a destination gets its own row at the top, selected. When a
-  // settings page leads ("wifi settings"), the web row comes second, under the best page.
+  // Free text going to the web gets its own row at the top, selected. When a settings page
+  // leads ("wifi settings"), the web row comes second, under the best page.
   const settingsFirst = response.preselect === 0 && rows[0]?.kind === 'setting';
   if (
     response.mode === 'search' &&
@@ -264,23 +223,21 @@ export function buildRows(
     (response.preselect === null || settingsFirst) &&
     response.text
   ) {
-    const target = response.target;
-    const ai = destination(ctx, target)?.kind === 'ai';
+    const link = response.target === 'url';
     rows.splice(settingsFirst ? 1 : 0, 0, {
       kind: 'query',
       label: response.text,
       query: response.text,
-      destinationId: target,
+      target: response.target,
       section: 'web',
-      icon: target === 'url' ? 'glyph:link' : `dest:${target}`,
-      hint:
-        target === 'url'
-          ? 'Open'
-          : ai
-            ? 'Ask'
-            : target === 'google'
-              ? `↵ Search · ${isMac ? '⇧' : 'Shift+'}↵ AI Mode`
-              : 'Search',
+      icon: link ? 'glyph:link' : 'glyph:google',
+      hint: link ? 'Open' : 'Search · AI Mode',
+      keyHints: link
+        ? undefined
+        : [
+            { keys: 'enter', label: 'Search' },
+            { keys: 'shift+enter', label: 'AI Mode' },
+          ],
     });
     preselect = 0;
   }
@@ -301,64 +258,30 @@ export function buildRows(
     rows.unshift(aliased);
     preselect = 0;
   }
-  if (response.mode === 'search' && response.target && response.text) {
-    const hasQuery = rows.some((row) => row.kind === 'query');
-    rows.push(...searchWithRows(response, ctx, hasQuery ? response.target : null));
-  }
   return { rows, preselect };
 }
 
-/** "Search with": up to three other destinations for the same text; ⌘K lists the rest. */
-function searchWithRows(
-  response: SuggestResponse,
-  ctx: RowCtx,
-  exclude: string | null
-): Suggestion[] {
-  // Only the one AI picked in Settings; the other AIs stay in ⌘K.
-  let ids = response.searchWith.filter((id) => {
-    const found = destination(ctx, id);
-    return id !== exclude && !(found && isOtherAi(ctx.snapshot, found));
-  });
-  if (!exclude && ids.includes(ctx.armedId)) {
-    ids = [ctx.armedId, ...ids.filter((id) => id !== ctx.armedId)];
-  }
-  return ids.slice(0, 3).map((id): Suggestion => {
-    const index = ctx.strip.indexOf(id);
-    return {
-      kind: 'searchWith',
-      section: 'searchWith',
-      label: destinationName(ctx, id),
-      query: response.text,
-      subtitle: response.text,
-      destinationId: id,
-      icon: `dest:${id}`,
-      keys: index >= 0 ? [CTRL, String(index + 1)] : undefined,
-      hint: '',
-    };
-  });
-}
-
-function titleFor(row: Suggestion, ctx: RowCtx): string {
+function titleFor(row: Suggestion): string {
   const section = row.section ?? '';
   if (section === 'web') {
-    const name = destinationName(ctx, row.destinationId);
-    return row.kind === 'remote' ? `${name} suggestions` : name;
+    if (row.kind === 'remote') return 'Google suggestions';
+    return row.target === 'url' ? 'Link' : 'Google';
   }
   return SECTION_TITLES[section] ?? '';
 }
 
 /** Splits rows into titled groups; a header starts wherever the section changes. */
-export function groups(rows: Suggestion[], ctx: RowCtx): Group[] {
+export function groups(rows: Suggestion[]): Group[] {
   const result: Group[] = [];
   rows.forEach((row, index) => {
-    const title = titleFor(row, ctx);
+    const title = titleFor(row);
     const previous = result[result.length - 1];
-    // Late suggestions share the query row's header when they're for the same destination.
+    // Late suggestions share the query row's header when it's a Google search.
     const sameWeb =
       previous &&
       row.kind === 'remote' &&
       previous.rows[previous.rows.length - 1]?.section === 'web' &&
-      previous.rows[0]?.destinationId === row.destinationId;
+      previous.rows[0]?.target === row.target;
     if (previous && (previous.title === title || sameWeb)) {
       previous.rows.push(row);
     } else {
@@ -393,27 +316,17 @@ function bindingRow(binding: Binding, groups: LaunchGroup[] = []): Suggestion | 
         appId: value,
         label: binding.label,
         query: '',
-        destinationId: '',
+        target: '',
         hint,
         section: 'apps',
         icon: `app:${value}`,
-      };
-    case 'dest':
-      return {
-        kind: 'destination',
-        label: binding.label,
-        query: '',
-        destinationId: value,
-        hint,
-        section: 'destinations',
-        icon: `dest:${value}`,
       };
     case 'bookmark':
       return {
         kind: 'bookmark',
         label: binding.label,
         query: value,
-        destinationId: '',
+        target: '',
         hint,
         section: 'bookmarks',
         icon: `site:${value}`,
@@ -440,18 +353,16 @@ function aliasRow(ctx: RowCtx): Suggestion | null {
 
 /**
  * The binding target for a row, when the row can have a hotkey or alias: an app, a
- * destination, a bookmark, or a command (a mode or scoped search).
+ * bookmark, a settings page, or a command (a mode or scoped search).
  */
 export function bindingTarget(row: Suggestion): { target: string; label: string } | null {
   if (row.kind === 'app' && row.appId) return { target: `app:${row.appId}`, label: row.label };
-  if (row.kind === 'destination') return { target: `dest:${row.destinationId}`, label: row.label };
-  if (row.kind === 'searchWith') return { target: `dest:${row.destinationId}`, label: row.label };
   if (row.kind === 'bookmark') return { target: `bookmark:${row.query}`, label: row.label };
   if (row.kind === 'setting' && row.settingId) {
     return { target: `setting:${row.settingId}`, label: row.label };
   }
   if (row.kind === 'view') {
-    const id = row.destinationId;
+    const id = row.target;
     if (id === 'back' || id === 'ip') return null;
     if (id.startsWith('group:')) return { target: id, label: row.label };
     const target = id.startsWith('scope:') ? id : `view:${id}`;

@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-/// Bang words that scope the bar to apps instead of naming a destination.
+/// Bang words that scope the bar to apps.
 pub const SCOPE_TRIGGERS: &[&str] = &["app", "apps"];
 
 /// How long a scan stays fresh before a summon triggers a background rescan.
@@ -309,14 +309,6 @@ impl AppIndex {
     /// Whether a scan has finished since startup.
     pub fn scanned(&self) -> bool {
         self.finished.load(Ordering::SeqCst)
-    }
-
-    /// Scans again at the next chance, as after Steam games are turned on or off.
-    pub fn rescan(index: &'static AppIndex) {
-        if let Ok(mut at) = index.scanned_at.lock() {
-            *at = None;
-        }
-        AppIndex::refresh_if_stale(index);
     }
 
     /// Starts a scan on a worker thread unless one is running or the last one is still fresh.

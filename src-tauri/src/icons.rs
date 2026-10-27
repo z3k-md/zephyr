@@ -39,14 +39,11 @@ pub fn app_icon(app_id: &str, size: u32) -> Option<String> {
     Some(format!("data:image/png;base64,{}", STANDARD.encode(png)))
 }
 
-/// The site icon for a web destination (`https://www.google.com/search?q={query}` gives
-/// Google's) as a `data:` URL, fetched once per host and kept on disk. Asks Google's favicon
-/// service for a crisp 64 px image, then the site's own /favicon.ico.
-pub async fn site_icon(url_template: &str) -> Option<String> {
-    let host = url::Url::parse(&url_template.replace("{query}", ""))
-        .ok()?
-        .host_str()?
-        .to_string();
+/// The site icon for a page (`https://www.google.com/search?q=x` gives Google's) as a `data:`
+/// URL, fetched once per host and kept on disk. Asks Google's favicon service for a crisp 64 px
+/// image, then the site's own /favicon.ico.
+pub async fn site_icon(url: &str) -> Option<String> {
+    let host = url::Url::parse(url).ok()?.host_str()?.to_string();
     let key = hex(&Sha256::digest(format!("site\n{host}").as_bytes()));
     let cached = DIR.get().map(|dir| dir.join(format!("{key}.site")));
     if let Some(saved) = cached.as_ref().and_then(|path| std::fs::read(path).ok()) {

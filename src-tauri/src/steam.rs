@@ -3,7 +3,6 @@
 //! isn't running.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
@@ -13,18 +12,8 @@ use crate::apps::App;
 /// App ids of Steam games: `steam:892970`.
 pub const ID_PREFIX: &str = "steam:";
 
-static ENABLED: AtomicBool = AtomicBool::new(true);
-
-/// Turns the games on or off (Settings > General); the next app scan follows.
-pub fn configure(enabled: bool) {
-    ENABLED.store(enabled, Ordering::SeqCst);
-}
-
 /// Every installed game in every Steam library on this computer.
 pub fn games() -> Vec<App> {
-    if !ENABLED.load(Ordering::SeqCst) {
-        return Vec::new();
-    }
     let Some(steam) = steam_dir() else {
         return Vec::new();
     };

@@ -11,6 +11,8 @@
   } from '../api';
   import type { ShellSettings } from '../types';
   import { MOD_KEY as mod } from '../keys';
+  import Keys from '../components/Keys.vue';
+  import KeyHints from '../components/KeyHints.vue';
 
   const props = defineProps<{ initialQuery: string; settings: ShellSettings | null }>();
   const emit = defineEmits<{ exit: [] }>();
@@ -27,6 +29,7 @@
 
   interface Action {
     label: string;
+    /** Its key, as a spec for the Keys component ("mod+enter"). */
     keys?: string;
     run: () => unknown;
   }
@@ -49,6 +52,14 @@
   let generation = 0;
 
   const running = computed(() => run.value?.status === 'running');
+
+  const EDIT_HINT = [{ keys: 'tab', label: 'edits' }];
+  const footerHints = computed(() => [
+    { keys: 'enter', label: running.value ? 'busy' : 'run' },
+    { keys: 'mod+enter', label: `open in ${terminalName.value}` },
+    { keys: 'mod+k', label: 'actions' },
+    ...(running.value ? [{ keys: 'mod+c', label: 'stop' }] : []),
+  ]);
 
   /** Past commands matching what is typed, newest first; hidden while output is showing. */
   const recent = computed(() => {
@@ -96,7 +107,7 @@
     const list: Action[] = [];
     const current = run.value;
     if (current?.status === 'running') {
-      list.push({ label: 'Stop', keys: `${mod}C`, run: stop });
+      list.push({ label: 'Stop', keys: 'mod+c', run: stop });
     }
     if (current?.output) list.push({ label: 'Copy output', run: copyOutput });
     if (current && current.status !== 'running') {
@@ -104,7 +115,7 @@
     }
     list.push({
       label: `Open in ${terminalName.value}`,
-      keys: `${mod}↵`,
+      keys: 'mod+enter',
       run: () => openTerminal(target.value),
     });
     if (current && current.status !== 'running') {
@@ -115,6 +126,7 @@
   });
 
   onMounted(async () => {
+    void focus();
     try {
       const info = await shellInfo();
       shellName.value = info.using;
@@ -122,9 +134,13 @@
     } catch {
       shellName.value = null;
     }
+  });
+
+  /** The bar calls this each time the shell view opens, since it stays mounted between. */
+  async function focus() {
     await nextTick();
     inputEl.value?.focus();
-  });
+  }
 
   watch(text, () => {
     selected.value = -1;
@@ -168,7 +184,8 @@
       return;
     }
     const current = ++generation;
-    text.value = value;
+    // The line clears for the next command; the output's header shows this one.
+    text.value = '';
     await nextTick();
     selected.value = -1;
     run.value = {
@@ -321,7 +338,7 @@
     }
   }
 
-  defineExpose({ onKey, text });
+  defineExpose({ onKey, text, focus });
 </script>
 
 <template>
@@ -362,12 +379,13 @@
         @mousemove="actionIndex = index"
       >
         <span class="label">{{ action.label }}</span>
-        <span v-if="action.keys" class="hint">{{ action.keys }}</span>
+        <Keys v-if="action.keys" :keys="action.keys" />
       </li>
     </ul>
 
     <template v-else>
       <section v-if="run" class="shell-run" :class="run.status" aria-live="polite">
+        <p class="shell-ran" :title="run.command">❯ {{ run.command }}</p>
         <!-- prettier-ignore -->
         <pre ref="outputEl" class="shell-output">{{ output || (run.status === 'running' ? '' : 'No output') }}<span v-if="run.status === 'running'" class="caret" /></pre>
         <p class="shell-status">{{ status }}</p>
@@ -390,18 +408,14 @@
           @mousemove="selected = index"
         >
           <span class="label shell-command">{{ command }}</span>
-          <span v-if="index === selected" class="hint">Tab edits</span>
+          <KeyHints v-if="index === selected" class="hint" :hints="EDIT_HINT" />
         </li>
       </ul>
       <p v-else-if="!run && !text.trim()" class="empty">Commands you run will show up here.</p>
     </template>
 
     <footer class="footer">
-      <span>
-        ↵ {{ running ? 'busy' : 'run' }} · {{ mod }}↵ open in {{ terminalName }} · {{ mod }}K
-        actions
-        <template v-if="running"> · {{ mod }}C stop</template>
-      </span>
+      <KeyHints :hints="footerHints" />
       <button
         type="button"
         class="text-button"

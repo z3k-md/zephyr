@@ -108,14 +108,23 @@ impl Sessions for Windows {
         if self.sessions_changed.swap(false, Ordering::SeqCst) {
             self.watch_sessions(&sessions);
         }
+        // Several browser tabs share one app id, so the session the media keys control is told
+        // apart by its title too.
         let current = self
             .manager
             .GetCurrentSession()
             .ok()
-            .and_then(|session| session.SourceAppUserModelId().ok());
+            .map(|session| read(&session))
+            .map(|session| (session.source_app, session.title));
         let read = sessions
             .iter()
-            .map(|session| read(session, current.as_ref()))
+            .map(|session| {
+                let mut read = read(session);
+                read.current = current
+                    .as_ref()
+                    .is_some_and(|(app, title)| *app == read.source_app && *title == read.title);
+                read
+            })
             .collect();
         self.listed = sessions;
         read
@@ -163,7 +172,7 @@ impl Sessions for Windows {
     }
 }
 
-fn read(session: &MediaSession, current: Option<&windows::core::HSTRING>) -> Session {
+fn read(session: &MediaSession) -> Session {
     let source_app = session
         .SourceAppUserModelId()
         .map(|id| id.to_string())
@@ -201,7 +210,7 @@ fn read(session: &MediaSession, current: Option<&windows::core::HSTRING>) -> Ses
         .and_then(|timeline| timeline.EndTime().ok())
         .and_then(|span| ms(span.Duration));
     Session {
-        current: current.is_some_and(|current| *current == source_app),
+        current: false,
         source_app,
         title,
         artist,

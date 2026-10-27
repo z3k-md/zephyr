@@ -11,7 +11,7 @@ mod windows;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::Duration;
 
 use base64::Engine;
@@ -232,7 +232,8 @@ struct History {
     items: Vec<ClipItem>,
     next_id: u64,
     dir: PathBuf,
-    cipher: Option<Cipher>,
+    /// Shared with the saver thread, which encrypts outside the lock.
+    cipher: Option<Arc<Cipher>>,
     settings: ClipboardSettings,
     /// The change count of this module's own last write, which is not a new copy.
     own_write: Option<i64>,
@@ -262,15 +263,16 @@ fn history() -> &'static Mutex<History> {
 
 /// Loads saved history and starts watching the clipboard.
 pub fn start(dir: PathBuf, settings: ClipboardSettings) {
+    let enabled = settings.enabled;
     {
         let Ok(mut history) = history().lock() else {
             return;
         };
         history.dir = dir;
         history.settings = settings;
-        if history.settings.enabled {
-            history.unlock();
-        }
+    }
+    if enabled {
+        unlock();
     }
     std::thread::Builder::new()
         .name("clipboard".into())
@@ -280,57 +282,81 @@ pub fn start(dir: PathBuf, settings: ClipboardSettings) {
 }
 
 pub fn apply_settings(settings: ClipboardSettings) {
-    if let Ok(mut history) = history().lock() {
+    let enabling = {
+        let Ok(mut history) = history().lock() else {
+            return;
+        };
         let enabling = settings.enabled && !history.settings.enabled;
         history.settings = settings;
-        if enabling {
-            history.unlock();
-        }
+        enabling
+    };
+    if enabling {
+        unlock();
+    }
+    if let Ok(mut history) = history().lock() {
         history.prune(now_secs());
         history.save();
     }
 }
 
-impl History {
-    /// Reads the key and the saved history. Until this succeeds nothing is recorded.
-    fn unlock(&mut self) {
-        if self.cipher.is_some() {
-            return;
+/// Reads the key and the saved history. Until this succeeds nothing is recorded.
+///
+/// The keychain can stop to ask the user for access, and the bar reads history on the main
+/// thread, so the slow part runs without the history lock; only installing the result takes it.
+fn unlock() {
+    // One attempt at a time, so two callers never put up two keychain prompts.
+    static UNLOCKING: Mutex<()> = Mutex::new(());
+    let Ok(_unlocking) = UNLOCKING.lock() else {
+        return;
+    };
+    let dir = match history().lock() {
+        Ok(history) if history.cipher.is_none() => history.dir.clone(),
+        _ => return,
+    };
+    // Nothing is recorded or saved while there's no key, so the file can't change under us.
+    let result = Cipher::from_keychain().map(|cipher| {
+        let saved = read_saved(&dir, &cipher);
+        (cipher, saved)
+    });
+    let Ok(mut history) = history().lock() else {
+        return;
+    };
+    // Unlocked some other way meanwhile: keep that key and what it loaded.
+    if history.cipher.is_some() {
+        return;
+    }
+    match result {
+        Ok((cipher, saved)) => {
+            if let Some(saved) = saved {
+                history.items = saved.items;
+                history.next_id = saved.next_id.max(1);
+            }
+            history.cipher = Some(Arc::new(cipher));
+            history.problem = None;
+            history.prune(now_secs());
         }
-        match Cipher::from_keychain() {
-            Ok(cipher) => {
-                if let Some(saved) = read_saved(&self.dir, &cipher) {
-                    self.items = saved.items;
-                    self.next_id = saved.next_id.max(1);
-                }
-                self.cipher = Some(cipher);
-                self.problem = None;
-                self.prune(now_secs());
-            }
-            Err(err) => {
-                log::error!("clipboard history is off: {err}");
-                self.problem = Some(err);
-            }
+        Err(err) => {
+            log::error!("clipboard history is off: {err}");
+            history.problem = Some(err);
         }
     }
+}
 
+impl History {
+    /// Hands a copy of the history to the saver thread. Encrypting and writing all of it takes
+    /// a while for a big history, too long to hold the lock the bar reads through.
     fn save(&self) {
         let Some(cipher) = &self.cipher else {
             return;
         };
-        let saved = Saved {
-            next_id: self.next_id,
-            items: self.items.clone(),
-        };
-        let result = serde_json::to_vec(&saved)
-            .map_err(|err| err.to_string())
-            .and_then(|plain| cipher.seal(&plain))
-            .and_then(|sealed| {
-                write_atomic(&self.dir.join("history.bin"), &sealed).map_err(|err| err.to_string())
-            });
-        if let Err(err) = result {
-            log::error!("couldn't save clipboard history: {err}");
-        }
+        saver().queue(Snapshot {
+            path: self.dir.join("history.bin"),
+            cipher: Arc::clone(cipher),
+            saved: Saved {
+                next_id: self.next_id,
+                items: self.items.clone(),
+            },
+        });
     }
 
     fn record(&mut self, capture: Capture, now: i64) -> Option<u64> {
@@ -467,6 +493,123 @@ impl History {
     }
 }
 
+// Saving
+
+/// History as it stood when a save was asked for, waiting to be written.
+struct Snapshot {
+    path: PathBuf,
+    cipher: Arc<Cipher>,
+    saved: Saved,
+}
+
+impl Snapshot {
+    fn write(&self) {
+        let result = serde_json::to_vec(&self.saved)
+            .map_err(|err| err.to_string())
+            .and_then(|plain| self.cipher.seal(&plain))
+            .and_then(|sealed| write_atomic(&self.path, &sealed).map_err(|err| err.to_string()));
+        if let Err(err) = result {
+            log::error!("couldn't save clipboard history: {err}");
+        }
+    }
+}
+
+#[derive(Default)]
+struct SaveQueue {
+    /// The newest unwritten snapshot of each file.
+    pending: Vec<Snapshot>,
+    writing: bool,
+}
+
+impl SaveQueue {
+    /// Only the latest state needs writing, so a newer snapshot replaces an older one still
+    /// waiting: a burst of copies costs one write, not one each.
+    fn push(&mut self, snapshot: Snapshot) {
+        self.pending.retain(|older| older.path != snapshot.path);
+        self.pending.push(snapshot);
+    }
+}
+
+/// Writes history on one thread of its own, in the order saves were asked for, so an older
+/// state never lands after a newer one. It writes as soon as asked, without waiting to batch,
+/// so a save asked for just before quitting is on disk by the time the user gets there; quitting
+/// mid-write leaves the previous file whole (`write_atomic`).
+struct Saver {
+    queue: Mutex<SaveQueue>,
+    changed: Condvar,
+    /// False if the thread couldn't start; saves are then written by whoever asks.
+    threaded: bool,
+}
+
+/// On quit: lets a save still being written finish, so the last copy isn't lost.
+pub fn flush() {
+    saver().flush(Duration::from_secs(2));
+}
+
+fn saver() -> &'static Saver {
+    static SAVER: OnceLock<Saver> = OnceLock::new();
+    SAVER.get_or_init(|| {
+        let threaded = std::thread::Builder::new()
+            .name("clipboard-save".into())
+            .spawn(|| saver().run())
+            .map_err(|err| log::error!("couldn't start saving clipboard history: {err}"))
+            .is_ok();
+        Saver {
+            queue: Mutex::new(SaveQueue::default()),
+            changed: Condvar::new(),
+            threaded,
+        }
+    })
+}
+
+impl Saver {
+    fn queue(&self, snapshot: Snapshot) {
+        if !self.threaded {
+            snapshot.write();
+            return;
+        }
+        if let Ok(mut queue) = self.queue.lock() {
+            queue.push(snapshot);
+            self.changed.notify_all();
+        }
+    }
+
+    fn run(&self) {
+        loop {
+            let batch = {
+                let Ok(queue) = self.queue.lock() else {
+                    return;
+                };
+                let Ok(mut queue) = self
+                    .changed
+                    .wait_while(queue, |queue| queue.pending.is_empty())
+                else {
+                    return;
+                };
+                queue.writing = true;
+                std::mem::take(&mut queue.pending)
+            };
+            for snapshot in &batch {
+                snapshot.write();
+            }
+            let Ok(mut queue) = self.queue.lock() else {
+                return;
+            };
+            queue.writing = false;
+            self.changed.notify_all();
+        }
+    }
+
+    /// Waits, up to `limit`, until everything asked for so far is written.
+    fn flush(&self, limit: Duration) {
+        if let Ok(queue) = self.queue.lock() {
+            let _ = self.changed.wait_timeout_while(queue, limit, |queue| {
+                !queue.pending.is_empty() || queue.writing
+            });
+        }
+    }
+}
+
 fn read_saved(dir: &Path, cipher: &Cipher) -> Option<Saved> {
     let sealed = fs::read(dir.join("history.bin")).ok()?;
     match cipher
@@ -533,15 +676,16 @@ fn watch() {
         // The keychain refuses while the Mac is asleep or locked; try again every ~30 s, but
         // never re-ask after the user declined.
         if ticks.is_multiple_of(75)
-            && let Ok(mut state) = history().lock()
-            && state.settings.enabled
-            && state.cipher.is_none()
-            && state
-                .problem
-                .as_deref()
-                .is_some_and(|problem| problem.contains("UI"))
+            && history().lock().is_ok_and(|state| {
+                state.settings.enabled
+                    && state.cipher.is_none()
+                    && state
+                        .problem
+                        .as_deref()
+                        .is_some_and(|problem| problem.contains("UI"))
+            })
         {
-            state.unlock();
+            unlock();
         }
         let current = platform.change_count();
         if current == last {
@@ -951,7 +1095,7 @@ mod tests {
             items: Vec::new(),
             next_id: 1,
             dir,
-            cipher: Some(Cipher::from_key(&[3u8; 32]).unwrap()),
+            cipher: Some(Arc::new(Cipher::from_key(&[3u8; 32]).unwrap())),
             settings: ClipboardSettings::default(),
             own_write: None,
             problem: None,
@@ -1033,10 +1177,48 @@ mod tests {
         let mut history = fresh();
         history.record(text("secret note"), 100);
         history.save();
+        saver().flush(Duration::from_secs(10));
         let raw = fs::read(history.dir.join("history.bin")).unwrap();
         assert!(!String::from_utf8_lossy(&raw).contains("secret note"));
         let saved = read_saved(&history.dir, history.cipher.as_ref().unwrap()).unwrap();
         assert_eq!(saved.items[0].text, "secret note");
+        let _ = fs::remove_dir_all(&history.dir);
+    }
+
+    #[test]
+    fn a_newer_save_replaces_one_still_waiting() {
+        let history = fresh();
+        let snapshot = |path: &str, next_id| Snapshot {
+            path: path.into(),
+            cipher: Arc::clone(history.cipher.as_ref().unwrap()),
+            saved: Saved {
+                next_id,
+                items: Vec::new(),
+            },
+        };
+        let mut queue = SaveQueue::default();
+        queue.push(snapshot("a", 1));
+        queue.push(snapshot("b", 2));
+        queue.push(snapshot("a", 3));
+        let pending: Vec<(String, u64)> = queue
+            .pending
+            .iter()
+            .map(|it| (it.path.display().to_string(), it.saved.next_id))
+            .collect();
+        assert_eq!(pending, vec![("b".into(), 2), ("a".into(), 3)]);
+    }
+
+    #[test]
+    fn rapid_saves_end_with_the_latest_state_on_disk() {
+        let mut history = fresh();
+        for n in 0..50 {
+            history.record(text(&format!("note {n}")), n);
+            history.save();
+        }
+        saver().flush(Duration::from_secs(10));
+        let saved = read_saved(&history.dir, history.cipher.as_ref().unwrap()).unwrap();
+        assert_eq!(saved.items.len(), 50);
+        assert_eq!(saved.next_id, 51);
         let _ = fs::remove_dir_all(&history.dir);
     }
 

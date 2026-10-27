@@ -819,6 +819,8 @@ fn build_settings(app: &AppHandle, section: Option<&str>) -> Result<(), String> 
     .focused(true)
     .build()
     .map_err(|err| err.to_string())?;
+    #[cfg(windows)]
+    no_window_menu(app, &window);
     open_on_active_space(app, &window);
     // Closing only hides it, so the next open is instant.
     let hidden = window.clone();
@@ -862,6 +864,8 @@ pub fn open_onboarding(app: &AppHandle) -> Result<(), String> {
     .focused(true)
     .build()
     .map_err(|err| err.to_string())?;
+    #[cfg(windows)]
+    no_window_menu(app, &window);
     // Closed with its close button rather than finished: the Dock icon goes with it.
     let handle = app.clone();
     let closing = window.clone();
@@ -1244,6 +1248,66 @@ fn contains(monitor: &tauri::Monitor, cursor: tauri::PhysicalPosition<f64>) -> b
         && cursor.x < position.x as f64 + size.width as f64
         && cursor.y >= position.y as f64
         && cursor.y < position.y as f64 + size.height as f64
+}
+
+#[cfg(windows)]
+static MENU_APP: std::sync::OnceLock<AppHandle> = std::sync::OnceLock::new();
+
+/// Windows: Settings and setup have no use for the window menu, and Alt+Space opened it over
+/// a shortcut being recorded (and Alt alone moved focus to it). Their window drops it.
+#[cfg(windows)]
+fn no_window_menu(app: &AppHandle, window: &tauri::WebviewWindow) {
+    use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+    use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
+    use windows::Win32::UI::WindowsAndMessaging::{SC_KEYMENU, WM_SYSCOMMAND};
+
+    unsafe extern "system" fn proc(
+        hwnd: HWND,
+        message: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+        _id: usize,
+        _data: usize,
+    ) -> LRESULT {
+        if message == WM_SYSCOMMAND && (wparam.0 & 0xFFF0) as u32 == SC_KEYMENU {
+            // The page never sees Alt+Space (the webview hands it to the window menu), so
+            // while a shortcut is being recorded it's passed on to the page from here.
+            if lparam.0 == 0x20
+                && crate::shortcut::recording()
+                && let Some(app) = MENU_APP.get()
+            {
+                use windows::Win32::UI::Input::KeyboardAndMouse::{
+                    GetKeyState, VK_CONTROL, VK_LWIN, VK_RWIN, VK_SHIFT,
+                };
+                // SAFETY: plain key state reads.
+                let down = |key: u16| unsafe { GetKeyState(i32::from(key)) } < 0;
+                let _ = app.emit(
+                    "alt-space",
+                    serde_json::json!({
+                        "ctrl": down(VK_CONTROL.0),
+                        "shift": down(VK_SHIFT.0),
+                        "meta": down(VK_LWIN.0) || down(VK_RWIN.0),
+                    }),
+                );
+            }
+            return LRESULT(0);
+        }
+        // SAFETY: the default handling for every other message.
+        unsafe { DefSubclassProc(hwnd, message, wparam, lparam) }
+    }
+
+    let _ = MENU_APP.set(app.clone());
+    let Ok(hwnd) = window.hwnd() else {
+        return;
+    };
+    let hwnd = hwnd.0 as isize;
+    // A window is subclassed on the thread that owns it.
+    let _ = app.run_on_main_thread(move || {
+        // SAFETY: a live window handle and a subclass procedure that lives as long as the app.
+        unsafe {
+            let _ = SetWindowSubclass(HWND(hwnd as *mut _), Some(proc), 1, 0);
+        }
+    });
 }
 
 fn force_foreground(window: &tauri::WebviewWindow) {

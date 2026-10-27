@@ -1,9 +1,10 @@
-//! Bug captures, in dev and installed builds alike (Settings can turn the shortcuts off):
-//! Ctrl+Alt+R records one of the app's windows (the bar, Notes or Settings, whichever is in front) for
-//! up to 30 seconds as PNG frames, plus a timestamped log of what its page did (for the bar:
-//! keys pressed in it, the text, the results and the selected row, suggestion fetches, size
-//! changes, errors), and Ctrl+Alt+S takes one frame with the page's state. Each capture is a
-//! folder under `captures/` in the app's data folder; the newest 20 are kept.
+//! Bug captures, in dev and installed builds alike (Settings › Dev can turn them off). Ctrl+R
+//! in any of the app's windows records the one in front (the bar, Notes or Settings) for up to
+//! 30 seconds as PNG frames, plus a timestamped log of what its page did (for the bar: keys
+//! pressed in it, the text, the results and the selected row, suggestion fetches, size
+//! changes, errors), and Ctrl+Shift+S takes one frame with the page's state. The keys are the
+//! pages' own (main.ts), not global, so other apps keep them. Each capture is a folder
+//! under `captures/` in the app's data folder; the newest 20 are kept.
 //!
 //! Only the app's own windows are involved: frames are taken of that window alone while it is
 //! showing (on macOS, of the window itself, which needs no Screen Recording permission), and
@@ -17,8 +18,6 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 use tauri::{AppHandle, Emitter, Manager};
 
-pub const SHORTCUT: &str = "ctrl+alt+r";
-pub const SNAPSHOT_SHORTCUT: &str = "ctrl+alt+s";
 const LIMIT: Duration = Duration::from_secs(30);
 const FRAME_EVERY: Duration = Duration::from_millis(150);
 const KEEP: usize = 20;
@@ -251,6 +250,9 @@ fn grab(rect: (i32, i32, u32, u32)) -> Option<Vec<u8>> {
         let bitmap = CreateCompatibleBitmap(screen, w, h);
         let previous = SelectObject(memory, bitmap.into());
         let copied = BitBlt(memory, 0, 0, w, h, Some(screen), x, y, SRCCOPY | CAPTUREBLT).is_ok();
+        if copied {
+            draw_pointer(memory, x, y);
+        }
         SelectObject(memory, previous);
         let mut info = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER {
@@ -292,6 +294,49 @@ fn grab(rect: (i32, i32, u32, u32)) -> Option<Vec<u8>> {
         writer.write_image_data(&bgra).ok()?;
         writer.finish().ok()?;
         Some(png)
+    }
+}
+
+/// The mouse pointer, as it looks right now, onto a frame whose top left is the screen's
+/// (`x`, `y`), so a snapshot can point at things. A screen copy leaves it out.
+#[cfg(windows)]
+unsafe fn draw_pointer(frame: windows::Win32::Graphics::Gdi::HDC, x: i32, y: i32) {
+    use windows::Win32::Graphics::Gdi::DeleteObject;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CURSOR_SHOWING, CURSORINFO, DI_NORMAL, DrawIconEx, GetCursorInfo, GetIconInfo, ICONINFO,
+    };
+    unsafe {
+        let mut cursor = CURSORINFO {
+            cbSize: std::mem::size_of::<CURSORINFO>() as u32,
+            ..Default::default()
+        };
+        if GetCursorInfo(&mut cursor).is_err() || cursor.flags.0 & CURSOR_SHOWING.0 == 0 {
+            return;
+        }
+        let mut icon = ICONINFO::default();
+        if GetIconInfo(cursor.hCursor.into(), &mut icon).is_err() {
+            return;
+        }
+        let left = cursor.ptScreenPos.x - x - icon.xHotspot as i32;
+        let top = cursor.ptScreenPos.y - y - icon.yHotspot as i32;
+        let _ = DrawIconEx(
+            frame,
+            left,
+            top,
+            cursor.hCursor.into(),
+            0,
+            0,
+            0,
+            None,
+            DI_NORMAL,
+        );
+        // GetIconInfo hands over copies of the cursor's bitmaps.
+        if !icon.hbmMask.is_invalid() {
+            let _ = DeleteObject(icon.hbmMask.into());
+        }
+        if !icon.hbmColor.is_invalid() {
+            let _ = DeleteObject(icon.hbmColor.into());
+        }
     }
 }
 
