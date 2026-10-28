@@ -28,6 +28,9 @@ pub struct Stats {
     /// None without a GPU that reports its load.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gpu: Option<crate::gpu::Gpu>,
+    /// °C, the hottest CPU and GPU sensors; none where they can't be read (only macOS so far).
+    pub cpu_temp: Option<f32>,
+    pub gpu_temp: Option<f32>,
     /// Trouble on the line (slow, dropping, offline), for the footer's chip.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub network: Option<crate::net::Alert>,
@@ -59,7 +62,13 @@ struct Sampler {
     /// Dev builds: the app's own use and when it was read, which walks every process, so
     /// the footer's twice-a-second readings reuse it for a second.
     app: Option<(Instant, AppUsage)>,
+    /// The CPU and GPU temperatures and when they were read: every other second is plenty,
+    /// and a read walks a few dozen sensors.
+    temps: Option<(Instant, Temps)>,
 }
+
+/// The hottest CPU and GPU sensors, in °C.
+type Temps = (Option<f32>, Option<f32>);
 
 /// One sample of the totals, for the sparklines.
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -200,6 +209,7 @@ impl Sampler {
             latest: None,
             history: std::collections::VecDeque::new(),
             app: None,
+            temps: None,
         }
     }
 }
@@ -239,6 +249,14 @@ fn record(sampler: &mut Sampler) -> Stats {
         None => (0, 0),
     };
     let (down, up) = throughput(&sampler.networks);
+    let (cpu_temp, gpu_temp) = match sampler.temps {
+        Some((at, temps)) if at.elapsed() < Duration::from_secs(2) => temps,
+        _ => {
+            let temps = crate::temps::read();
+            sampler.temps = Some((Instant::now(), temps));
+            temps
+        }
+    };
     let stats = Stats {
         cpu: sampler.system.global_cpu_usage(),
         memory_used: sampler.system.used_memory(),
@@ -248,6 +266,8 @@ fn record(sampler: &mut Sampler) -> Stats {
         net_down: (down as f64 / elapsed) as u64,
         net_up: (up as f64 / elapsed) as u64,
         gpu: sampler.gpu.as_mut().and_then(crate::gpu::Reader::read),
+        cpu_temp,
+        gpu_temp,
         network: crate::net::alert(),
         app: None,
     };
@@ -431,6 +451,8 @@ fn empty() -> Stats {
         net_down: 0,
         net_up: 0,
         gpu: None,
+        cpu_temp: None,
+        gpu_temp: None,
         network: None,
         app: None,
     }

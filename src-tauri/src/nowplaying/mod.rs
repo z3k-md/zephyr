@@ -2,9 +2,11 @@
 //! its artwork, and play/pause, next and previous. Each platform lists its media sessions
 //! through [`Sessions`]; the choosing, the artwork cache and the events to the bar are shared.
 
-// Only Windows has a backend so far; elsewhere the shared watcher is built but unused.
-#![cfg_attr(not(windows), allow(dead_code))]
+// Windows and macOS have backends; elsewhere the shared watcher is built but unused.
+#![cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 
+#[cfg(target_os = "macos")]
+mod mac;
 #[cfg(windows)]
 mod win;
 
@@ -98,7 +100,12 @@ pub fn start(app: &AppHandle) {
                 Ok(sessions) => watch(&app, sessions, &inbox),
                 Err(err) => log::error!("couldn't read what's playing: {err}"),
             }
-            #[cfg(not(windows))]
+            #[cfg(target_os = "macos")]
+            {
+                let sessions = mac::Mac::open(&app, wake);
+                watch(&app, sessions, &inbox);
+            }
+            #[cfg(not(any(windows, target_os = "macos")))]
             let _ = (app, wake, inbox);
         })
         .ok();
@@ -115,15 +122,20 @@ pub fn control(control: Control) {
     }
 }
 
-/// Turns what's playing up or down by `step` (0–1) in the volume mixer, just that app; the
-/// new level, or none where that can't be done (macOS has no per-app volume).
+/// Turns what's playing up or down by `step` (0–1): just that app in the volume mixer on
+/// Windows, the player's own volume on macOS (which has no per-app volume). The new level, or
+/// none where that can't be done.
 pub fn change_volume(step: f32) -> Option<f32> {
     let source = snapshot()?.source_app;
     #[cfg(windows)]
     {
         win::change_volume(&program(&source), step)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        mac::change_volume(&source, step)
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = (source, step);
         None
@@ -375,7 +387,12 @@ fn focus_app(source_app: &str) -> bool {
     win::focus_app(source_app)
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+fn focus_app(source_app: &str) -> bool {
+    mac::focus_app(source_app)
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 fn focus_app(_source_app: &str) -> bool {
     false
 }

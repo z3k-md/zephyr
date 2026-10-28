@@ -403,6 +403,12 @@
     };
   }
 
+  /** "12% · 54°C": hardware temperatures are always in Celsius. Just the value with no
+   *  reading. */
+  function withTemp(value: string, celsius: number | null | undefined): string {
+    return celsius == null ? value : `${value} · ${Math.round(celsius)}°C`;
+  }
+
   const tiles = computed(() => {
     const snapshot = data.value;
     if (!snapshot) return null;
@@ -411,7 +417,7 @@
     const totals = snapshot.totals;
     return {
       cpu: {
-        value: percent(totals.cpu),
+        value: withTemp(percent(totals.cpu), totals.cpuTemp),
         spark: spark(history, (p) => p.cpu, 100),
       },
       memory: {
@@ -420,9 +426,12 @@
       },
       gpu: totals.gpu
         ? {
-            value: totals.gpu.memoryUsed
-              ? `${percent(totals.gpu.usage)} · ${bytes(totals.gpu.memoryUsed)}`
-              : percent(totals.gpu.usage),
+            value: withTemp(
+              totals.gpu.memoryUsed
+                ? `${percent(totals.gpu.usage)} · ${bytes(totals.gpu.memoryUsed)}`
+                : percent(totals.gpu.usage),
+              totals.gpuTemp
+            ),
             title: gpuTitle(
               totals.gpu.name,
               totals.gpu.usage,

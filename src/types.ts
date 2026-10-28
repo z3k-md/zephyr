@@ -400,6 +400,9 @@ export interface SystemStats {
   netUp: number;
   /** Absent without a GPU that reports its load. */
   gpu?: GpuStats;
+  /** °C, the hottest CPU and GPU sensors; null where they can't be read. */
+  cpuTemp: number | null;
+  gpuTemp: number | null;
   /** Trouble on the line, for the footer's chip. */
   network?: NetworkAlert;
   /** Dev builds: the app's own use, webview helpers included. */

@@ -10,7 +10,8 @@
   // What's playing, at the end of the search row: one card with the cover (or the playing
   // app's icon), the title and artist, and previous, play/pause and next, under one hover
   // highlight. Clicking the title switches to what's playing; the scroll wheel over the card
-  // turns that app up or down (Windows), and the level shows in place of the artist.
+  // turns that app up or down (its volume mixer level on Windows, Spotify's or Music's own
+  // volume on macOS), and the level shows in place of the artist.
 
   const props = defineProps<{ track: NowPlaying }>();
   const emit = defineEmits<{ toggle: []; next: []; previous: []; focus: [] }>();

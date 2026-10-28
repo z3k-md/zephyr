@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>NSAppleEventsUsageDescription</key>
-	<string>Zephyr uses System Events to shut down, restart or log out when you ask it to.</string>
+	<string>Zephyr uses System Events to shut down, restart or log out when you ask it to, and asks Spotify and Music what they're playing so the bar can show it.</string>
 	<key>NSDesktopFolderUsageDescription</key>
 	<string>Zephyr indexes this folder so you can find your files from the bar. Nothing leaves your Mac.</string>
 	<key>NSDocumentsFolderUsageDescription</key>

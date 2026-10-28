@@ -35,6 +35,7 @@ mod stats;
 mod steam;
 mod suggest;
 mod sync;
+mod temps;
 mod tray;
 mod updater;
 mod util;
