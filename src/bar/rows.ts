@@ -31,11 +31,16 @@ const SECTION_TITLES: Record<string, string> = {
   power: 'Power',
   bookmarks: 'Bookmarks',
   windows: 'Windows',
+  ports: 'Ports',
 };
 
 export function rowKey(row: Suggestion): string {
   if (row.kind === 'query') return 'query';
   if (row.kind === 'netCard') return `netCard-${row.target}`;
+  if (row.portUse) {
+    const use = row.portUse;
+    return `${row.kind}-${use.protocol}-${use.port}-${use.pid}-${use.state}`;
+  }
   return `${row.kind}-${row.target}-${row.path ?? row.noteId ?? row.label}`;
 }
 

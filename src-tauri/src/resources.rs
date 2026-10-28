@@ -203,7 +203,7 @@ pub fn idle() {
     }
 }
 
-fn app_bundle(exe: &Path) -> Option<(String, String)> {
+pub(crate) fn app_bundle(exe: &Path) -> Option<(String, String)> {
     // The outermost .app, so helpers inside an app's bundle count toward the app.
     let mut path = std::path::PathBuf::new();
     for part in exe.components() {

@@ -24,6 +24,8 @@
   // apps using them, live. Rows are apps (helpers counted in) or command-line programs; Enter
   // switches to one, ⌘⌫ quits it, ⌥⌘⌫ force quits it, each after an inline confirm.
   const emit = defineEmits<{ exit: []; search: [text: string]; network: [] }>();
+  /** Text to filter by on opening (a process ID, from a port's row). */
+  const props = defineProps<{ initialFilter?: string }>();
 
   interface Action {
     label: string;
@@ -64,7 +66,7 @@
   const finder = isMac ? 'Finder' : 'Explorer';
 
   const inputEl = ref<HTMLInputElement | null>(null);
-  const filter = ref('');
+  const filter = ref(props.initialFilter ?? '');
   const sort = ref<ResourceSort>('cpu');
   const data = ref<ResourceSnapshot | null>(null);
   const rows = ref<ResourceRow[]>([]);

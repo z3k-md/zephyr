@@ -219,12 +219,16 @@ export interface Suggestion {
     | 'bookmark'
     | 'powerPending'
     | 'netCard'
+    | 'portCard'
+    | 'port'
     | 'window';
   hint: string;
   appId?: string;
   settingId?: string;
   path?: string;
   noteId?: string;
+  /** For a port row: the socket and the process that has it open. */
+  portUse?: PortUse;
   /** The section it's listed under (apps, web, files…); jump, power and shell come from the
    *  bar itself. */
   section?: string;
@@ -552,4 +556,23 @@ export interface SpeedProgress {
   ping: number | null;
   /** 0–1 through the phase. */
   done: number;
+}
+
+/** An open socket and the process behind it ("port 3000"). */
+export interface PortUse {
+  port: number;
+  /** TCP or UDP. */
+  protocol: string;
+  /** "127.0.0.1:3000", "[::1]:3000", "*:3000". */
+  local: string;
+  /** The other end of a connection; empty for a listener. */
+  remote: string;
+  /** LISTEN, ESTABLISHED…; empty for UDP. */
+  state: string;
+  pid: number;
+  /** Empty when the process can't be read. */
+  name: string;
+  command: string;
+  path: string;
+  icon: string;
 }

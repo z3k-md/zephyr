@@ -41,11 +41,13 @@
     powerCancel,
     openUrl,
     weatherAt,
+    resourcesQuit,
   } from '../api';
   import ClipboardView from './ClipboardView.vue';
   import ResourcesView from './ResourcesView.vue';
   import NetworkView from './NetworkView.vue';
   import NetworkCard from './NetworkCard.vue';
+  import PortCard from './PortCard.vue';
   import { useNetworkSummary } from './network';
   import TypingView from '../typing/TypingView.vue';
   import DeviceCard from './DeviceCard.vue';
@@ -75,6 +77,7 @@
     type SuggestResponse,
     type PowerPreview,
     type Forecast,
+    type PortUse,
   } from '../types';
 
   const root = ref<HTMLElement | null>(null);
@@ -459,7 +462,9 @@
   const rowActions = computed<Action[]>(() => {
     const item = selectedItem.value;
     const list: Action[] = [];
-    if (item?.kind === 'answer') {
+    if (item?.portUse) {
+      list.push(...portActions(item.portUse));
+    } else if (item?.kind === 'answer') {
       list.push({ label: 'Copy answer', run: () => copyText(item.label) });
     } else if (item?.kind === 'netCard') {
       if (item.target === 'ip') {
@@ -566,6 +571,75 @@
     if (alert.kind === 'drop') return 'Dropping';
     return `${Math.round(alert.ms)} ms`;
   });
+
+  // Port rows ("port 3000", "ports"): Enter shows the process in Resources; Ctrl+K quits it
+  // (a second Enter confirms, as in Resources), copies its PID or opens its local page.
+  const resourcesFilter = ref('');
+  function showInResources(pid: number) {
+    query.value = '';
+    resourcesFilter.value = String(pid);
+    enter('resources');
+  }
+
+  function portName(use: PortUse): string {
+    return use.name || `PID ${use.pid}`;
+  }
+
+  /** The quit waiting for Enter on this row, if any. */
+  function armedFor(use: PortUse | undefined): 'quit' | 'force' | null {
+    const [kind, what, pid] = confirmArm.value.split(':');
+    if (kind !== 'port' || !use || String(use.pid) !== pid) return null;
+    return what === 'force' ? 'force' : 'quit';
+  }
+
+  function armQuit(use: PortUse, force: boolean) {
+    confirmArm.value = `port:${force ? 'force' : 'quit'}:${use.pid}`;
+    // The card says so itself; a plain row needs the line.
+    notice.value =
+      selectedItem.value?.kind === 'portCard'
+        ? null
+        : `Press Enter to ${force ? 'force quit' : 'quit'} ${portName(use)}, or Esc to back out`;
+  }
+
+  const portConfirmText = computed(() => {
+    const use = selectedItem.value?.portUse;
+    const armed = armedFor(use);
+    if (!use || !armed) return '';
+    return `${armed === 'force' ? 'Force quit' : 'Quit'} ${portName(use)}?`;
+  });
+
+  async function quitPort(use: PortUse, force: boolean) {
+    confirmArm.value = '';
+    try {
+      await resourcesQuit(portName(use), [use.pid], force);
+      notice.value = `${force ? 'Force quit' : 'Quit'} ${portName(use)}.`;
+      window.setTimeout(scheduleSuggest, 400);
+    } catch (error) {
+      notice.value = errorMessage(error);
+    }
+  }
+
+  function portActions(use: PortUse): Action[] {
+    const name = portName(use);
+    const list: Action[] = [
+      { label: 'Show in Resources', keys: 'enter', run: () => showInResources(use.pid) },
+      { label: `Quit ${name}`, run: () => armQuit(use, false) },
+      { label: `Force quit ${name}`, run: () => armQuit(use, true) },
+      { label: 'Copy process ID', run: () => copyText(String(use.pid)) },
+    ];
+    if (use.protocol === 'TCP' && use.state === 'LISTEN') {
+      const url = `http://localhost:${use.port}`;
+      list.push({
+        label: `Open ${url}`,
+        run: () =>
+          openUrl(url)
+            .then(clearAfterOpen)
+            .catch((error) => (notice.value = errorMessage(error))),
+      });
+    }
+    if (use.command) list.push({ label: 'Copy command', run: () => copyText(use.command) });
+    return list;
+  }
 
   // What's playing, as a small chip at the end of the search bar.
   const media = useNowPlaying();
@@ -739,6 +813,11 @@
 
   watch(selected, () => {
     actionsOpen.value = false;
+    // A quit waiting for Enter belongs to the row it was asked on.
+    if (confirmArm.value.startsWith('port:')) {
+      confirmArm.value = '';
+      notice.value = null;
+    }
   });
 
   watch(view, async () => {
@@ -840,6 +919,7 @@
       enter('network');
       void nextTick(() => networkView.value?.runSpeedTest());
     } else if (id === 'resources') {
+      resourcesFilter.value = '';
       enter('resources');
     } else if (id === 'notes') {
       void openNotes();
@@ -1528,6 +1608,12 @@
         await copyText(item.label);
         return;
       }
+      if (item.portUse) {
+        const armed = armedFor(item.portUse);
+        if (armed) await quitPort(item.portUse, armed === 'force');
+        else showInResources(item.portUse.pid);
+        return;
+      }
       if (item.kind === 'netCard') {
         if (item.target === 'ip') await copyText(item.label);
         else openView('network');
@@ -1793,6 +1879,7 @@
       @exit="leave"
       @search="searchFromResources"
       @network="openView('network')"
+      :initial-filter="resourcesFilter"
     />
     <NetworkView
       v-if="view === 'network'"
@@ -1920,7 +2007,14 @@
           @fit="visibleCount = $event"
         >
           <template #card="{ row, selected: chosen }">
+            <PortCard
+              v-if="row.kind === 'portCard'"
+              :row="row"
+              :selected="chosen"
+              :confirm="portConfirmText"
+            />
             <NetworkCard
+              v-else
               :row="row"
               :selected="chosen"
               :summary="netSummary"

@@ -4606,3 +4606,42 @@ button.res-tile:hover {
 .speed-text .hint-text {
   font-size: 12.5px;
 }
+
+/* "port 3000": the process with the port open, as the first row. */
+.port-card {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+  height: 96px;
+}
+
+.port-card > .item-icon {
+  flex: none;
+}
+
+.port-card-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.port-card .net-card-big {
+  font-size: 19px;
+}
+
+.port-card-command {
+  overflow: hidden;
+  color: var(--faint);
+  font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.port-card.selected .port-card-command {
+  color: color-mix(in srgb, var(--fg) 60%, transparent);
+}

@@ -25,7 +25,8 @@
 
   const gesture = dragGesture((index) => emit('drag', index));
 
-  // The network card renders in the bar (#card), as the list's first row.
+  // A card (the network card, a port's process) renders in the bar (#card), as the
+  // list's first row.
   defineSlots<{ card(props: { row: Suggestion; selected: boolean }): unknown }>();
 
   // WebKit sends a synthetic mousemove when the list scrolls under a still pointer; only a
@@ -71,7 +72,7 @@
           :class="{
             selected: group.start + offset === selected,
             'is-answer': row.kind === 'answer',
-            'is-card': row.kind === 'netCard',
+            'is-card': row.kind === 'netCard' || row.kind === 'portCard',
           }"
           @mousedown.prevent="gesture.down($event, group.start + offset)"
           @mouseup="gesture.up()"
@@ -82,7 +83,7 @@
           "
         >
           <slot
-            v-if="row.kind === 'netCard'"
+            v-if="row.kind === 'netCard' || row.kind === 'portCard'"
             name="card"
             :row="row"
             :selected="group.start + offset === selected"

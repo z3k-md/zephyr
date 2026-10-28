@@ -49,6 +49,9 @@ pub struct Suggestion {
     /// opens one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub private_window: Option<String>,
+    /// For a port row: the socket and the process that has it open.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub port_use: Option<crate::net::ports::PortUse>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -186,6 +189,12 @@ pub async fn gather(
     // A URL names where the text goes, so apps stay out of the way.
     let is_url = query::looks_like_url(&parsed.query);
     let offer_apps = !is_url;
+    if offer_apps && let Some(port) = crate::net::ports::asked_port(&parsed.query) {
+        return port_answers(&parsed.query, Some(port));
+    }
+    if offer_apps && crate::net::ports::asks_for_list(&parsed.query) {
+        return port_answers(&parsed.query, None);
+    }
     if offer_apps && crate::net::ip::is_query(&parsed.query) {
         return ip_answers(&parsed.query, include_remote).await;
     }
@@ -374,6 +383,62 @@ pub async fn gather(
             .then_some(0),
         target: Some(if is_url { "url" } else { "web" }.into()),
         text: parsed.query.clone(),
+    }
+}
+
+/// "port 3000": the process using the port as a card, and any others below it. "ports":
+/// every listening port as a row. Read fresh on each keystroke; the tables are small.
+fn port_answers(text: &str, port: Option<u16>) -> SuggestResponse {
+    let uses = match port {
+        Some(port) => crate::net::ports::on_port(port),
+        None => crate::net::ports::listening(),
+    };
+    let row = |item: crate::net::ports::PortUse, card: bool| {
+        let name = if item.name.is_empty() {
+            format!("PID {}", item.pid)
+        } else {
+            item.name.clone()
+        };
+        let state = if item.state.is_empty() {
+            String::new()
+        } else {
+            format!(" · {}", item.state)
+        };
+        Suggestion {
+            label: if card {
+                name.clone()
+            } else {
+                format!(":{} {name}", item.port)
+            },
+            query: item.pid.to_string(),
+            target: item.port.to_string(),
+            kind: if card { "portCard" } else { "port" }.into(),
+            hint: format!("PID {}", item.pid),
+            section: if card { "card" } else { "ports" }.into(),
+            subtitle: format!("{} {}{state}", item.protocol, item.local),
+            icon: item.icon.clone(),
+            port_use: Some(item),
+            ..Default::default()
+        }
+    };
+    let card = port.is_some();
+    let items: Vec<Suggestion> = uses
+        .into_iter()
+        .enumerate()
+        .map(|(index, item)| row(item, card && index == 0))
+        .collect();
+    let notice = match (port, items.is_empty()) {
+        (Some(port), true) => Some(format!("Nothing is using port {port}")),
+        (None, true) => Some("Nothing is listening".to_string()),
+        _ => None,
+    };
+    SuggestResponse {
+        mode: "search".into(),
+        preselect: (!items.is_empty()).then_some(0),
+        items,
+        notice,
+        target: Some("web".into()),
+        text: text.to_string(),
     }
 }
 

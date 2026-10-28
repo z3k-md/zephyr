@@ -8,6 +8,7 @@ pub mod dns;
 pub mod ip;
 pub mod metrics;
 mod platform;
+pub mod ports;
 pub mod speed;
 
 use std::collections::VecDeque;
