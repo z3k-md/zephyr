@@ -19,8 +19,8 @@ permissions:
 # No checks of its own: main only takes commits whose checks passed on develop.
 jobs:
   version:
-    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
     outputs:
@@ -29,18 +29,31 @@ jobs:
       tag: ${{ inputs.tag || steps.semantic.outputs.tag }}
       release_id: ${{ steps.draft.outputs.release_id }}
     steps:
-      - uses: actions/checkout@v7
+      # Fails instead of skipping, so a run from the wrong branch doesn't show up as a success.
+      - name: Require main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Release runs only from main, not $GITHUB_REF_NAME."
+          exit 1
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # semantic-release reads the whole commit history
 
-      - uses: oven-sh/setup-bun@v2
-
-      - uses: actions/setup-node@v7
+      - uses: ./.github/actions/setup
         with:
-          node-version: 24
+          rust: false
 
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
+      # A rebuild only takes a tag that main already contains, so it can't ship unchecked code.
+      - name: Require tag on main
+        if: inputs.tag != ''
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          if ! git merge-base --is-ancestor "refs/tags/$TAG" HEAD; then
+            echo "::error::$TAG is not on main."
+            exit 1
+          fi
 
       - name: Semantic release
         id: semantic
@@ -49,6 +62,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_NOTES_FILE: ${{ runner.temp }}/notes.md
+
+      - name: Report nothing to release
+        if: inputs.tag == '' && steps.semantic.outputs.published != 'true'
+        run: |
+          echo "::warning::No feat or fix commits since the last tag, so nothing was released."
+          echo "Nothing to release: no feat or fix commits since the last tag." >> "$GITHUB_STEP_SUMMARY"
 
       # The release stays a draft until every platform is uploaded, so the updater never
       # sees a release that is missing its installers or latest.json.
@@ -76,6 +95,7 @@ jobs:
     needs: version
     if: needs.version.outputs.published == 'true'
     name: Build (${{ matrix.name }})
+    timeout-minutes: 45
     permissions:
       contents: write
     strategy:
@@ -85,14 +105,14 @@ jobs:
           - name: windows
             platform: windows-latest
             args: ''
-            rust_targets: ''
+          # Apple silicon only; Intel Macs aren't supported. The explicit target (the runner's
+          # own) names the bundles _aarch64, which the updater manifest maps to darwin-aarch64.
           - name: macos
             platform: macos-latest
-            args: --target universal-apple-darwin
-            rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
+            args: --target aarch64-apple-darwin
     runs-on: ${{ matrix.platform }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.version.outputs.tag }}
 
@@ -104,24 +124,12 @@ jobs:
           TAG: ${{ needs.version.outputs.tag }}
         run: npm pkg set version="${TAG#v}"
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: ./.github/actions/setup
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.rust_targets }}
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
-
-      - name: Install frontend dependencies
-        run: bun install --frozen-lockfile
-
-      # Signs with the certificate in the Apple secrets: a self-signed one keeps the same
-      # identity from release to release, so macOS keeps Zephyr's permissions across updates.
-      # Notarizing also needs a Developer ID and APPLE_ID, APPLE_PASSWORD and APPLE_TEAM_ID;
-      # empty ones aren't set, so Tauri skips notarizing. With no certificate at all the app is
-      # ad-hoc signed, which still installs and updates but loses permissions every update.
+      # Signs with the self-signed certificate in the Apple secrets, which keeps the same identity
+      # from release to release, so macOS keeps Zephyr's permissions across updates. Without a
+      # certificate the app is ad-hoc signed: it still installs and updates but loses its
+      # permissions every update. No notarizing: that needs an Apple Developer ID.
       - name: Configure macOS signing
         if: runner.os == 'macOS'
         shell: bash
@@ -129,9 +137,6 @@ jobs:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         # Tauri's own import of APPLE_CERTIFICATE only finds Apple-issued identities
         # ("Developer ID Application: …") and fails on a self-signed one, so the certificate
         # goes into a keychain here and Tauri gets just the identity's name to sign with.
@@ -151,18 +156,15 @@ jobs:
           rm "$RUNNER_TEMP/certificate.p12"
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s \
             -k "$keychain_password" "$keychain" > /dev/null
+          # Splits on purpose: one argument per keychain already in the search list.
+          # shellcheck disable=SC2046
           security list-keychains -d user -s "$keychain" \
             $(security list-keychains -d user | tr -d '"')
           security find-identity -p codesigning "$keychain"
           echo "APPLE_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY" >> "$GITHUB_ENV"
-          for name in APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
-            if [ -n "${!name}" ]; then
-              echo "$name=${!name}" >> "$GITHUB_ENV"
-            fi
-          done
 
       - name: Build and upload
-        uses: tauri-apps/tauri-action@v1
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
@@ -177,12 +179,13 @@ jobs:
   publish:
     needs: [version, build]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
 
@@ -191,7 +194,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_ID: ${{ needs.version.outputs.release_id }}
-          REQUIRED_PLATFORMS: windows-x86_64,darwin-aarch64,darwin-x86_64
+          REQUIRED_PLATFORMS: windows-x86_64,darwin-aarch64
 
       # Plain labels on the installers and a Download section on top of the notes.
       - name: Label downloads

@@ -31,7 +31,7 @@ Download the latest installer from [Releases](https://github.com/z3k-md/zephyr/r
 
 ## Develop
 
-- [Rust](https://www.rust-lang.org/tools/install)
+- [Rust](https://www.rust-lang.org/tools/install) through rustup, which installs the version pinned in `rust-toolchain.toml` on the first build
 - [Bun](https://bun.sh/)
 
 ```bash
@@ -43,23 +43,23 @@ bun dev
 
 ## Branches
 
-Work lands on `develop`. Checks run on Windows and macOS for every push and pull request to `develop` and `main`. `main` moves only when `develop` is promoted, by fast-forwarding it once `develop`'s checks are green:
+Work lands on `develop`. Checks run on Windows and macOS for every push to `develop` and every pull request to `develop` or `main`, next to a lint of the workflow files. Pushes to `main` aren't checked again: `main` moves only when `develop` is promoted, by fast-forwarding it once `develop`'s checks are green:
 
 ```bash
 git push origin develop:main
 ```
 
-`main` requires both checks to pass and can't be deleted.
+`main` requires both checks to pass and can't be deleted. Dependabot opens version updates as pull requests to `develop`.
 
 ## Release
 
-Releases are cut on demand from `main`: run the **Release** workflow from the Actions tab. It runs the checks on Windows and macOS, and if [semantic-release](https://semantic-release.gitbook.io/) finds a `feat:` or `fix:` commit since the last tag, it tags the next version and creates a draft GitHub release with its notes. Nothing is committed back to `main`: the build stamps the version from the tag, and the release notes replace `CHANGELOG.md`, which stops at 2.7.0. Windows and macOS (universal) installers are then built, signed for the updater, and uploaded. A final job writes `latest.json` and publishes the release, and installed copies pick it up from there.
+Releases are cut on demand from `main`: run the **Release** workflow from the Actions tab. It has no checks of its own, since `main` only holds commits already checked on `develop`; run from any other branch, it fails. If [semantic-release](https://semantic-release.gitbook.io/) finds a `feat:` or `fix:` commit since the last tag, it tags the next version and creates a draft GitHub release with its notes. Nothing is committed back to `main`: the build stamps the version from the tag, and the release notes replace `CHANGELOG.md`, which stops at 2.7.0. Windows and macOS (Apple silicon only) installers are then built, signed for the updater, and uploaded. A final job writes `latest.json` and publishes the release, and installed copies pick it up from there. With no `feat:` or `fix:` commit to release, the run ends with a warning and changes nothing.
 
 Repository secrets:
 
-| Secret                                                                                                                     | Purpose                                                                                                                                                                                           |
-| -------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `TAURI_PRIVATE_KEY`, `TAURI_KEY_PASSWORD`                                                                                  | Updater signing key. It must match the `pubkey` in `src-tauri/tauri.conf.json`, or installed copies will reject updates.                                                                          |
-| `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID` | Optional. With them, the macOS app is signed with a Developer ID and notarized. Without them it is ad-hoc signed: first launch needs right-click > Open, and updates still install automatically. |
+| Secret                                                                      | Purpose                                                                                                                                                                                                                                                                               |
+| --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TAURI_PRIVATE_KEY`, `TAURI_KEY_PASSWORD`                                   | Updater signing key. It must match the `pubkey` in `src-tauri/tauri.conf.json`, or installed copies will reject updates.                                                                                                                                                              |
+| `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY` | Optional. A self-signed certificate for the macOS app, so it keeps the same identity and its permissions across updates. Without them it is ad-hoc signed and asks for permissions again after every update. Either way it isn't notarized, so first launch needs right-click > Open. |
 
 For a local signed build, copy `.env.example` to `.env`, fill in the signing key, and run `bun run build`.

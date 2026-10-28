@@ -1,0 +1,5 @@
+# One compiler for local builds, Checks and Release. Dependabot proposes bumps.
+[toolchain]
+channel = "1.99.1"
+components = ["clippy", "rustfmt", "rust-src"] # rust-src for editors
+profile = "minimal"

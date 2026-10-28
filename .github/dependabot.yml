@@ -1,0 +1,43 @@
+# Version updates land on develop, where Checks runs on PRs. Security updates still target main.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directories: ['/', '/.github/actions/*']
+    target-branch: develop
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']
+
+  - package-ecosystem: rust-toolchain
+    directory: /
+    target-branch: develop
+    schedule:
+      interval: monthly
+
+  - package-ecosystem: cargo
+    directory: /src-tauri
+    target-branch: develop
+    schedule:
+      interval: monthly
+    groups:
+      cargo:
+        update-types: [minor, patch]
+    ignore:
+      # Held by choice (2026-10-21).
+      - dependency-name: keyring
+        update-types: [version-update:semver-major]
+
+  - package-ecosystem: bun
+    directory: /
+    target-branch: develop
+    schedule:
+      interval: monthly
+    groups:
+      bun:
+        update-types: [minor, patch]
+    ignore:
+      # Held by choice (2026-10-21).
+      - dependency-name: typescript
+        update-types: [version-update:semver-major]

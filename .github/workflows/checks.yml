@@ -16,7 +16,14 @@ concurrency:
 permissions:
   contents: read
 
+# No debug info: CI never debugs, and it makes linking, the target dir and the cache smaller.
+env:
+  CARGO_PROFILE_DEV_DEBUG: 0
+  CARGO_PROFILE_TEST_DEBUG: 0
+
 jobs:
+  # The ruleset requires these two by name ("Checks (windows-latest)", "Checks (macos-latest)"),
+  # so renaming the matrix values blocks promotion until the ruleset is updated.
   checks:
     name: Checks (${{ matrix.platform }})
     strategy:
@@ -24,25 +31,14 @@ jobs:
       matrix:
         platform: [windows-latest, macos-latest]
     runs-on: ${{ matrix.platform }}
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: oven-sh/setup-bun@v2
-
-      - uses: actions/setup-node@v7
+      # Only develop writes the cargo cache; PR runs read it.
+      - uses: ./.github/actions/setup
         with:
-          node-version: 24
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
-
-      - name: Install frontend dependencies
-        run: bun install --frozen-lockfile
+          save-cache: ${{ github.ref == 'refs/heads/develop' }}
 
       - name: Check formatting
         run: |
@@ -61,3 +57,15 @@ jobs:
 
       - name: Test
         run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+
+  workflows:
+    name: Lint workflows
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # actionlint checks expressions, job wiring and the run scripts (through shellcheck).
+      - uses: docker://rhysd/actionlint:1.7.12
+        with:
+          args: -color
