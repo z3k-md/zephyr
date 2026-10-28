@@ -31,6 +31,10 @@ import type {
   PermissionId,
   TypingBest,
   SuggestResponse,
+  NetworkAddress,
+  NetworkHistory,
+  NetworkSummary,
+  SpeedResult,
 } from './types';
 
 export function getSnapshot(): Promise<Snapshot> {
@@ -457,6 +461,12 @@ export function nowPlayingControl(control: MediaControl): Promise<void> {
   return invoke('now_playing_control', { control });
 }
 
+/** What's playing, a step louder or quieter in the volume mixer; the new level (0–1), or null
+ *  where an app's own volume can't be set. */
+export function nowPlayingVolume(step: number): Promise<number | null> {
+  return invoke<number | null>('now_playing_volume', { step });
+}
+
 /** Switches to the app or browser tab playing; true when it could. */
 export function nowPlayingFocus(): Promise<boolean> {
   return invoke<boolean>('now_playing_focus');
@@ -553,6 +563,12 @@ export function updateLater(): Promise<void> {
   return invoke('update_later');
 }
 
+/** A downloaded update put off with Later, by version; later changes arrive as
+ *  `update-waiting` events. */
+export function updateWaiting(): Promise<string | null> {
+  return invoke<string | null>('update_waiting');
+}
+
 /** Dev builds only: plays the update card through with a made-up update. */
 export function rehearseUpdate(): Promise<void> {
   return invoke('rehearse_update');
@@ -603,4 +619,36 @@ export function quickLook(path: string): Promise<void> {
 /** Windows: start from a logon task right at sign-in instead of the delayed startup list. */
 export function saveInstantStartup(enabled: boolean): Promise<Snapshot> {
   return invoke<Snapshot>('save_instant_startup', { enabled });
+}
+
+/** The connection's grade and numbers over 15 minutes; null before the monitor starts. */
+export function networkSummary(): Promise<NetworkSummary | null> {
+  return invoke<NetworkSummary | null>('network_summary');
+}
+
+/** The last 15 minutes in detail, for the Network view. */
+export function networkHistory(): Promise<NetworkHistory | null> {
+  return invoke<NetworkHistory | null>('network_history');
+}
+
+/** The address the internet sees; asked only while the IP card or Network view shows. */
+export function networkPublicIp(): Promise<string | null> {
+  return invoke<string | null>('network_public_ip');
+}
+
+export function networkAddresses(): Promise<NetworkAddress[]> {
+  return invoke<NetworkAddress[]>('network_addresses');
+}
+
+export function saveWatchConnection(watch: boolean): Promise<Snapshot> {
+  return invoke<Snapshot>('save_watch_connection', { watch });
+}
+
+/** Runs a speed test; progress arrives as "speed-test" events to the bar. */
+export function speedTest(): Promise<SpeedResult> {
+  return invoke<SpeedResult>('speed_test');
+}
+
+export function speedTestCancel(): Promise<void> {
+  return invoke('speed_test_cancel');
 }

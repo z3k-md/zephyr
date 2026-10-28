@@ -1,7 +1,8 @@
-//! Updates from GitHub Releases, checked at launch, every 6 hours and from "Check for
-//! updates". A small card in the screen's corner shows the download, then counts down a few
-//! seconds before installing: Install now skips the wait, and Later keeps the download for
-//! the next check.
+//! Updates from GitHub Releases, checked at launch, whenever the bar is summoned and the last
+//! check is over three minutes old, and from "Check for updates". A small card in the
+//! screen's corner shows the download, then counts down a few seconds before installing:
+//! Install now skips the wait, and Later keeps the download, with a button in the bar to
+//! install it whenever suits.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -14,8 +15,9 @@ use tauri_plugin_updater::{Update, UpdaterExt};
 use crate::util::now_ms;
 
 const FIRST_CHECK_DELAY: Duration = Duration::from_secs(5);
-/// The app lives in the tray for weeks at a time, so a launch-only check is not enough.
-const CHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
+/// A summon checks again once the last check is this old, so a release just published shows
+/// up within minutes of using the app, while a busy day of summons checks rarely.
+const STALE_AFTER: Duration = Duration::from_secs(3 * 60);
 /// Covers the check and the installer download. Without it a stalled request would hold
 /// `CHECKING` forever and block every later check.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
@@ -23,6 +25,8 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 const COUNTDOWN: Duration = Duration::from_secs(5);
 
 static CHECKING: AtomicBool = AtomicBool::new(false);
+/// When the last check started.
+static LAST_CHECK: Mutex<Option<Instant>> = Mutex::new(None);
 /// Bumped by Later and Install now, so a countdown already running stands down.
 static COUNTDOWN_GENERATION: AtomicU64 = AtomicU64::new(0);
 /// Later pressed while downloading: keep the download, but don't count down when it's done.
@@ -72,35 +76,62 @@ fn downloaded_slot() -> &'static Mutex<Option<Downloaded>> {
     DOWNLOADED.get_or_init(Default::default)
 }
 
+/// The check at launch, a few seconds in.
 pub fn spawn_background_checks(app: AppHandle) {
     if cfg!(debug_assertions) {
         return;
     }
     std::thread::spawn(move || {
         std::thread::sleep(FIRST_CHECK_DELAY);
-        loop {
-            match tauri::async_runtime::block_on(check_for_updates(&app)) {
-                Ok(message) => log::info!("{message}"),
-                Err(err) => log::warn!("{err}"),
-            }
-            std::thread::sleep(CHECK_INTERVAL);
-        }
+        background_check(&app);
     });
 }
 
+/// Called as the bar shows: checks again when the last check is over three minutes old.
+pub fn check_if_stale(app: &AppHandle) {
+    if cfg!(debug_assertions) {
+        return;
+    }
+    let stale = LAST_CHECK
+        .lock()
+        .map(|last| last.is_none_or(|at| at.elapsed() >= STALE_AFTER))
+        .unwrap_or(false);
+    if stale {
+        let app = app.clone();
+        std::thread::spawn(move || background_check(&app));
+    }
+}
+
+fn background_check(app: &AppHandle) {
+    match tauri::async_runtime::block_on(check(app, false)) {
+        Ok(message) => log::info!("{message}"),
+        Err(err) => log::warn!("{err}"),
+    }
+}
+
+/// "Check for updates", from Settings or the tray.
 pub async fn check_for_updates(app: &AppHandle) -> Result<String, String> {
+    check(app, true).await
+}
+
+/// A check by hand offers an update put off with Later again; one in the background leaves
+/// it to the button in the bar.
+async fn check(app: &AppHandle, by_hand: bool) -> Result<String, String> {
     if cfg!(debug_assertions) {
         return Ok("Update checks are skipped in dev builds.".into());
     }
     if CHECKING.swap(true, Ordering::SeqCst) {
         return Ok("Already checking for updates.".into());
     }
-    let result = download_latest(app).await;
+    if let Ok(mut last) = LAST_CHECK.lock() {
+        *last = Some(Instant::now());
+    }
+    let result = download_latest(app, by_hand).await;
     CHECKING.store(false, Ordering::SeqCst);
     result
 }
 
-async fn download_latest(app: &AppHandle) -> Result<String, String> {
+async fn download_latest(app: &AppHandle, by_hand: bool) -> Result<String, String> {
     let updater = app
         .updater_builder()
         .timeout(REQUEST_TIMEOUT)
@@ -115,14 +146,17 @@ async fn download_latest(app: &AppHandle) -> Result<String, String> {
     };
     let version = update.version.clone();
 
-    // Downloaded before and put off with Later: offer it again without downloading.
+    // Downloaded before and put off with Later: a check by hand offers it again without
+    // downloading; otherwise the button in the bar waits for the user.
     let have = downloaded_slot()
         .lock()
         .ok()
         .and_then(|saved| saved.as_ref().map(|saved| saved.version == version))
         .unwrap_or(false);
     if have {
-        count_down(app, &version);
+        if by_hand {
+            count_down(app, &version);
+        }
         return Ok(format!("Update {version} is ready."));
     }
 
@@ -148,8 +182,9 @@ async fn download_latest(app: &AppHandle) -> Result<String, String> {
     };
     keep(&version, Some(update), bytes);
     if DEFERRED.swap(false, Ordering::SeqCst) {
+        announce_waiting(app);
         return Ok(format!(
-            "Update {version} is downloaded; it installs at the next check."
+            "Update {version} is downloaded; the button in the bar installs it."
         ));
     }
     count_down(app, &version);
@@ -247,6 +282,7 @@ pub fn install_now(app: &AppHandle) {
     else {
         return;
     };
+    announce_waiting(app);
     let version = downloaded.version.clone();
     publish(
         app,
@@ -282,13 +318,32 @@ pub fn install_now(app: &AppHandle) {
     });
 }
 
-/// Puts the update off: the card goes away, and the download is kept for the next check.
+/// Puts the update off: the card goes away, and the download is kept, for the button in the
+/// bar or the next check by hand.
 pub fn later(app: &AppHandle) {
     COUNTDOWN_GENERATION.fetch_add(1, Ordering::SeqCst);
     if matches!(current(), Some(Status::Downloading { .. })) {
         DEFERRED.store(true, Ordering::SeqCst);
     }
     hide(app);
+    announce_waiting(app);
+}
+
+/// A downloaded update put off with Later, by version: the bar shows a button for it.
+pub fn waiting() -> Option<String> {
+    if current().is_some() {
+        return None;
+    }
+    downloaded_slot()
+        .lock()
+        .ok()?
+        .as_ref()
+        .map(|saved| saved.version.clone())
+}
+
+/// Tells the bar whether an update is waiting, so its button comes and goes.
+fn announce_waiting(app: &AppHandle) {
+    let _ = app.emit_to("main", "update-waiting", waiting());
 }
 
 /// What the card shows now, for a card that just opened.

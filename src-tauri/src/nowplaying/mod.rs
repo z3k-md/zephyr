@@ -115,6 +115,36 @@ pub fn control(control: Control) {
     }
 }
 
+/// Turns what's playing up or down by `step` (0–1) in the volume mixer, just that app; the
+/// new level, or none where that can't be done (macOS has no per-app volume).
+pub fn change_volume(step: f32) -> Option<f32> {
+    let source = snapshot()?.source_app;
+    #[cfg(windows)]
+    {
+        win::change_volume(&program(&source), step)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (source, step);
+        None
+    }
+}
+
+/// The program behind an app id: `Spotify.exe` as is, a browser's own name
+/// (`chrome.exe` for `Chrome`), or a Store app's last part (`Spotify.exe` for
+/// `SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify`).
+#[cfg(windows)]
+fn program(source_app: &str) -> String {
+    if source_app.to_ascii_lowercase().ends_with(".exe") {
+        return source_app.to_string();
+    }
+    if let Some(exe) = browser_exe(source_app) {
+        return exe.to_string();
+    }
+    let name = source_app.rsplit('!').next().unwrap_or(source_app);
+    format!("{name}.exe")
+}
+
 /// The cover of the song shown, and how many times it has been read.
 struct Artwork {
     key: String,

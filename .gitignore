@@ -22,3 +22,6 @@ dist-ssr
 *.sw?
 
 .env
+
+# Cargo builds pointed outside src-tauri (CARGO_TARGET_DIR)
+/target

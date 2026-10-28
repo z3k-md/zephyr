@@ -1,17 +1,10 @@
 <script setup lang="ts">
-  import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+  import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-  import {
-    bindingFailures,
-    errorMessage,
-    pauseShortcuts,
-    saveBinding,
-    takePendingBinding,
-  } from '../api';
+  import { bindingFailures, errorMessage, saveBinding, takePendingBinding } from '../api';
   import { commandTargets } from '../bar/rows';
-  import { captureShortcut, formatShortcut, isModifierKey } from '../keys';
-  import Keys from '../components/Keys.vue';
-  import { useWindowListener } from '../windowEvents';
+  import { formatShortcut } from '../keys';
+  import ShortcutRecorder from '../components/ShortcutRecorder.vue';
   import type { Binding, Snapshot } from '../types';
   import InfoTip from '../components/InfoTip.vue';
 
@@ -31,12 +24,6 @@
   ]);
   /** One the bar asked about that isn't saved yet. */
   const draft = ref<Binding | null>(null);
-  const listening = ref<string | null>(null);
-  // Zephyr's own shortcuts are off while one is recorded, so a combo it uses records too.
-  watch(
-    () => listening.value !== null,
-    (recording) => void pauseShortcuts(recording).catch(() => undefined)
-  );
   const error = ref<{ target: string; message: string } | null>(null);
   const failures = ref<string[]>([]);
   const adding = ref('');
@@ -104,30 +91,6 @@
     draft.value = blank(command.target, command.label);
   }
 
-  /** While a hotkey is being recorded, the next full combo becomes that binding's hotkey. */
-  function onKey(event: KeyboardEvent) {
-    const target = listening.value;
-    if (!target || event.isComposing) return;
-    event.preventDefault();
-    event.stopPropagation();
-    const binding = rows.value.find((row) => row.target === target);
-    if (event.key === 'Escape' || !binding) {
-      listening.value = null;
-      return;
-    }
-    const hotkey = captureShortcut(event, true);
-    if (!hotkey) {
-      if (!isModifierKey(event)) {
-        error.value = { target, message: 'Use at least one modifier and a letter, number or key.' };
-      }
-      return;
-    }
-    listening.value = null;
-    void save(binding, { hotkey });
-  }
-
-  useWindowListener('keydown', onKey, true);
-
   onMounted(async () => {
     unlistens.push(await listen('binding-pending', () => void takePending()));
     await takePending();
@@ -175,17 +138,12 @@
         <label class="field">
           <span>Hotkey</span>
           <span class="binding-hotkey">
-            <button
-              type="button"
-              class="recorder"
-              :class="{ listening: listening === binding.target }"
-              @click="listening = binding.target"
-              @blur="listening === binding.target && (listening = null)"
-            >
-              <template v-if="listening === binding.target">Press a shortcut</template>
-              <template v-else-if="!binding.hotkey">None</template>
-              <Keys v-else :keys="binding.hotkey" />
-            </button>
+            <ShortcutRecorder
+              :keys="binding.hotkey"
+              function-keys
+              @record="save(binding, { hotkey: $event })"
+              @invalid="error = { target: binding.target, message: $event }"
+            />
             <button
               v-if="binding.hotkey"
               type="button"

@@ -20,10 +20,10 @@
   } from '../api';
   import type { ResourcePoint, ResourceRow, ResourceSnapshot, ResourceSort } from '../types';
 
-  // System Resources: the machine's CPU, memory, GPU and network over the last minute, and the
+  // System Resources: the machine's CPU, memory, GPU and network over the last 15 minutes, and the
   // apps using them, live. Rows are apps (helpers counted in) or command-line programs; Enter
   // switches to one, ⌘⌫ quits it, ⌥⌘⌫ force quits it, each after an inline confirm.
-  const emit = defineEmits<{ exit: []; search: [text: string] }>();
+  const emit = defineEmits<{ exit: []; search: [text: string]; network: [] }>();
 
   interface Action {
     label: string;
@@ -43,6 +43,8 @@
   const RATES = [1000, 2000, 5000];
   /** After a key or the pointer moves the selection, the order holds this long. */
   const HOLD_MS = 2000;
+  /** Seconds of history the sparklines span (stats.rs keeps this much). */
+  const WINDOW = 900;
 
   const LIST_HINTS = [
     { keys: 'enter', label: 'switch' },
@@ -371,7 +373,7 @@
   }
 
   /**
-   * The last minute as a filled sparkline in a 120×28 box, now at the right edge, placed by
+   * The last 15 minutes as a filled sparkline in a 120×28 box, now at the right edge, placed by
    * each point's age; a gap of more than a few seconds (the computer asleep) breaks the line.
    */
   function spark(points: ResourcePoint[], value: (point: ResourcePoint) => number, max: number) {
@@ -383,7 +385,7 @@
     for (const point of points) {
       if (previous === null || previous - point.age > 3) runs.push([]);
       previous = point.age;
-      const x = width - (Math.min(point.age, 60) / 60) * width;
+      const x = width - (Math.min(point.age, WINDOW) / WINDOW) * width;
       const y = height - 1 - Math.min(1, value(point) / top) * (height - 3);
       runs[runs.length - 1].push(`${x.toFixed(1)},${y.toFixed(1)}`);
     }
@@ -536,7 +538,13 @@
           <path class="line" :d="tiles.gpu.spark.line" />
         </svg>
       </div>
-      <div class="res-tile">
+      <button
+        type="button"
+        class="res-tile"
+        v-tip="'Open Network'"
+        @mousedown.prevent
+        @click="emit('network')"
+      >
         <span class="res-tile-head">
           <svg viewBox="0 0 24 24" aria-hidden="true" v-html="GLYPHS.updown" />
           Network
@@ -551,7 +559,7 @@
           <path class="area" :d="tiles.network.spark.area" />
           <path class="line" :d="tiles.network.spark.line" />
         </svg>
-      </div>
+      </button>
     </div>
 
     <p v-if="notice" class="notice">{{ notice }}</p>

@@ -186,7 +186,7 @@ pub async fn gather(
     // A URL names where the text goes, so apps stay out of the way.
     let is_url = query::looks_like_url(&parsed.query);
     let offer_apps = !is_url;
-    if offer_apps && crate::ip::is_query(&parsed.query) {
+    if offer_apps && crate::net::ip::is_query(&parsed.query) {
         return ip_answers(&parsed.query, include_remote).await;
     }
     // A bare "settings": the system's settings app, the app's own Settings, then the usual pages.
@@ -377,9 +377,9 @@ pub async fn gather(
     }
 }
 
-/// "ip", "my ip": the local address the internet is reached through, preselected so Enter
-/// copies it, then the public address (asked only on the pass that may use the network), then
-/// the computer's other addresses.
+/// "ip", "my ip": the network card with the local address the internet is reached through,
+/// preselected so Enter copies it, then the public address (asked only on the pass that may
+/// use the network), then the computer's other addresses.
 async fn ip_answers(text: &str, include_remote: bool) -> SuggestResponse {
     // A globe for the public address; the local ones show their link (Wi-Fi, Ethernet).
     let row = |value: String, detail: String, icon: &str| Suggestion {
@@ -392,18 +392,19 @@ async fn ip_answers(text: &str, include_remote: bool) -> SuggestResponse {
         icon: icon.into(),
         ..Default::default()
     };
-    let local = crate::ip::local();
+    let local = crate::net::ip::local();
     let mut items: Vec<Suggestion> = Vec::new();
     let mut rest = local.into_iter();
     if let Some(primary) = rest.next() {
-        let icon = primary.link.glyph();
-        items.push(row(
-            primary.value,
-            format!("Local IP · {}", primary.detail),
-            icon,
-        ));
+        items.push(Suggestion {
+            kind: "netCard".into(),
+            target: "ip".into(),
+            section: "card".into(),
+            icon: primary.link.glyph().into(),
+            ..row(primary.value, primary.detail, "")
+        });
     }
-    if include_remote && let Some(public) = crate::ip::public().await {
+    if include_remote && let Some(public) = crate::net::ip::public().await {
         items.push(row(
             public,
             "Public IP, as the internet sees this computer".into(),

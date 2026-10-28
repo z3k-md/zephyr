@@ -20,6 +20,8 @@
     syncRevoke,
     openNotes,
     openSettings,
+    updateInstallNow,
+    updateWaiting,
     setActiveMode,
     revealFile,
     setBarHeight,
@@ -42,6 +44,9 @@
   } from '../api';
   import ClipboardView from './ClipboardView.vue';
   import ResourcesView from './ResourcesView.vue';
+  import NetworkView from './NetworkView.vue';
+  import NetworkCard from './NetworkCard.vue';
+  import { useNetworkSummary } from './network';
   import TypingView from '../typing/TypingView.vue';
   import DeviceCard from './DeviceCard.vue';
   import ResultList from './ResultList.vue';
@@ -112,7 +117,7 @@
   // Views that take over the bar. Workspaces (typing and Shell) stick: every open lands back
   // in them until Esc leaves. Esc to the main bar only parks a workspace; a second Esc there
   // clears it. Clipboard is a picker: it sticks until something is picked.
-  type View = 'root' | 'clip' | 'typing' | 'shell' | 'resources';
+  type View = 'root' | 'clip' | 'typing' | 'shell' | 'resources' | 'network';
   const WORKSPACES = ['typing', 'shell'];
   const MODE_NAMES: Record<string, string> = {
     typing: 'typing test',
@@ -131,6 +136,7 @@
   const SHELL_PREFIX = /^\s*(?:>|!(?:sh|shell)(?:\s|$))\s*/i;
   const clipQuery = ref('');
   const resourcesView = ref<InstanceType<typeof ResourcesView> | null>(null);
+  const networkView = ref<InstanceType<typeof NetworkView> | null>(null);
   const clipView = ref<InstanceType<typeof ClipboardView> | null>(null);
   const typingView = ref<InstanceType<typeof TypingView> | null>(null);
   // Other computers asking to join sync; checked when the bar opens and every minute.
@@ -139,6 +145,15 @@
 
   // Reopening soon after closing returns to the view and text it closed on.
   let hiddenAt = 0;
+  let hiddenAtWall = 0;
+  /** How long the bar has been hidden: the monotonic clock, unless the wall clock saw more
+   *  (the webview's clock can stand still while the computer sleeps). */
+  function hiddenFor(): number {
+    if (!hiddenAt) return 0;
+    return Math.max(performance.now() - hiddenAt, Date.now() - hiddenAtWall);
+  }
+  // After this long hidden, the bar opens fresh on the main bar instead of where it was.
+  const FRESH_AFTER_MS = 5 * 60 * 1000;
 
   interface Action {
     label: string;
@@ -446,6 +461,12 @@
     const list: Action[] = [];
     if (item?.kind === 'answer') {
       list.push({ label: 'Copy answer', run: () => copyText(item.label) });
+    } else if (item?.kind === 'netCard') {
+      if (item.target === 'ip') {
+        list.push({ label: `Copy ${item.label}`, keys: 'enter', run: () => copyText(item.label) });
+      }
+      list.push({ label: 'Open Network', run: () => openView('network') });
+      list.push({ label: 'Run speed test', run: () => openView('speedtest') });
     } else if (item?.kind === 'app' && item.appId && item.windows?.length) {
       // A running app: switch to any of its windows, start another, or close it.
       const appId = item.appId;
@@ -531,9 +552,34 @@
     footerStats.push(next);
   }
 
+  // The network card ("ping", "ip"): its numbers refresh each second while it shows, and
+  // the footer's chip says when the line is in trouble (net.rs decides when).
+  const netCardShown = computed(
+    () => view.value === 'root' && items.value.some((row) => row.kind === 'netCard')
+  );
+  const netSummary = useNetworkSummary(netCardShown);
+  const netAlert = computed(() => (statsShown.value ? (meters.value?.network ?? null) : null));
+  const netAlertText = computed(() => {
+    const alert = netAlert.value;
+    if (!alert) return '';
+    if (alert.kind === 'offline') return 'Offline';
+    if (alert.kind === 'drop') return 'Dropping';
+    return `${Math.round(alert.ms)} ms`;
+  });
+
   // What's playing, as a small chip at the end of the search bar.
   const media = useNowPlaying();
   const playingNow = computed(() => media.shown.value);
+
+  // An update downloaded and put off with Later: a button beside Settings installs it.
+  const updateReady = ref<string | null>(null);
+  void updateWaiting()
+    .then((version) => (updateReady.value = version))
+    .catch(() => undefined);
+  function installUpdate() {
+    updateReady.value = null;
+    void updateInstallNow().catch((error) => (notice.value = errorMessage(error)));
+  }
 
   onMounted(async () => {
     try {
@@ -549,11 +595,18 @@
 
     unlistens.push(
       await listen('bar-shown', () => {
+        void updateWaiting()
+          .then((version) => (updateReady.value = version))
+          .catch(() => undefined);
         media.tick();
         // Opens the connection to the suggestion service before the first keystroke.
         void warmSuggestions().catch(() => undefined);
         void loadDevices();
-        if (snapshot.value && !snapshot.value.returnToMode) {
+        // Hidden over five minutes: start over on the main bar, as with returning to modes
+        // turned off.
+        const stale = hiddenFor() > FRESH_AFTER_MS;
+        if (stale && parked.value) void setActiveMode('').catch(() => undefined);
+        if (stale || (snapshot.value && !snapshot.value.returnToMode)) {
           parked.value = '';
           view.value = 'root';
           resetForSummon();
@@ -563,6 +616,7 @@
         }
         // Still inside a view (a workspace, or a picker mid-search): reopen right there.
         if (view.value === 'resources') resourcesView.value?.start();
+        if (view.value === 'network') networkView.value?.start();
         // Copies made while the bar was hidden.
         if (view.value === 'clip') void clipView.value?.refresh();
         if (view.value !== 'root') return;
@@ -572,7 +626,7 @@
         }
         // The main bar keeps its text only briefly.
         const limit = (snapshot.value?.resumeSeconds ?? 120) * 1000;
-        const recent = hiddenAt > 0 && limit > 0 && Date.now() - hiddenAt < limit;
+        const recent = hiddenAt > 0 && limit > 0 && hiddenFor() < limit;
         // A scoped search (files, apps, settings, notes) sticks until something is picked.
         const picker = scope.value !== null || /^!(note|notes)\b/i.test(query.value);
         if (!recent && !picker) resetForSummon();
@@ -583,6 +637,9 @@
       })
     );
     unlistens.push(
+      await listen<string | null>('update-waiting', (event) => (updateReady.value = event.payload))
+    );
+    unlistens.push(
       // Startup's unseen draw, again once the apps are found, so the first summon has them.
       await listen('bar-redraw', () => {
         if (!query.value) scheduleSuggest();
@@ -590,8 +647,10 @@
     );
     unlistens.push(
       await listen('bar-hidden', () => {
-        hiddenAt = Date.now();
+        hiddenAt = performance.now();
+        hiddenAtWall = Date.now();
         resourcesView.value?.stop();
+        networkView.value?.stop();
       })
     );
     unlistens.push(await listen<SystemStats>('stats', (event) => takeStats(event.payload)));
@@ -774,6 +833,12 @@
       enter(id);
     } else if (id === 'clip') {
       openClip('');
+    } else if (id === 'network') {
+      enter('network');
+    } else if (id === 'speedtest') {
+      // Into the Network view, where the test shows; a view kept open already has it.
+      enter('network');
+      void nextTick(() => networkView.value?.runSpeedTest());
     } else if (id === 'resources') {
       enter('resources');
     } else if (id === 'notes') {
@@ -1030,6 +1095,10 @@
       clipView.value?.onKey(event);
       return;
     }
+    if (view.value === 'network') {
+      networkView.value?.onKey(event);
+      return;
+    }
     if (view.value === 'resources') {
       resourcesView.value?.onKey(event);
       return;
@@ -1192,6 +1261,19 @@
     ) {
       event.preventDefault();
       if (!event.repeat) openForecast();
+      return;
+    }
+
+    // Ctrl+Enter with the IP card up opens the Network view; Enter copies the address.
+    if (
+      netCardShown.value &&
+      modifier &&
+      !event.altKey &&
+      !event.shiftKey &&
+      event.key === 'Enter'
+    ) {
+      event.preventDefault();
+      if (!event.repeat) openView('network');
       return;
     }
 
@@ -1444,6 +1526,11 @@
     if (item) {
       if (item.kind === 'answer') {
         await copyText(item.label);
+        return;
+      }
+      if (item.kind === 'netCard') {
+        if (item.target === 'ip') await copyText(item.label);
+        else openView('network');
         return;
       }
       if (item.kind === 'powerPending' || (item.kind === 'power' && item.power?.cancel)) {
@@ -1705,6 +1792,13 @@
       ref="resourcesView"
       @exit="leave"
       @search="searchFromResources"
+      @network="openView('network')"
+    />
+    <NetworkView
+      v-if="view === 'network'"
+      ref="networkView"
+      :last-speed="snapshot?.lastSpeed ?? null"
+      @exit="leave"
     />
     <ClipboardView
       v-if="clipMode"
@@ -1764,6 +1858,19 @@
           Drag to move
         </span>
         <button
+          v-if="updateReady"
+          v-tip="`Zephyr ${updateReady} is ready\nClick to restart and update`"
+          type="button"
+          class="bar-update"
+          @mousedown.prevent
+          @click="installUpdate"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 16V5M7.5 9.5 12 5l4.5 4.5M6 19h12" />
+          </svg>
+          Update
+        </button>
+        <button
           type="button"
           class="bar-settings"
           v-tip="`Zephyr settings (${isMac ? '⌘S' : 'Ctrl+S'})`"
@@ -1811,7 +1918,16 @@
           @hover="hover"
           @drag="dragRow"
           @fit="visibleCount = $event"
-        />
+        >
+          <template #card="{ row, selected: chosen }">
+            <NetworkCard
+              :row="row"
+              :selected="chosen"
+              :summary="netSummary"
+              :last-speed="snapshot?.lastSpeed ?? null"
+            />
+          </template>
+        </ResultList>
       </div>
 
       <!-- After the list's v-if chain, which it must not join. -->
@@ -1875,6 +1991,24 @@
             <svg viewBox="0 0 24 24" aria-hidden="true" v-html="GLYPHS.drive" />
             {{ meters.disk }}
           </span>
+        </span>
+        <span
+          v-if="netAlert"
+          v-tip="
+            netAlert.kind === 'offline'
+              ? 'No route to the internet\nClick for Network'
+              : netAlert.kind === 'drop'
+                ? 'The internet stopped answering\nClick for Network'
+                : 'Much slower than usual\nClick for Network'
+          "
+          class="net-alert"
+          :class="netAlert.kind"
+          role="button"
+          aria-label="Open Network"
+          @click="openView('network')"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true" v-html="GLYPHS.updown" />
+          {{ netAlertText }}
         </span>
         <FooterWeather v-if="forecast" :forecast="forecast" @open="showWeather" />
       </footer>

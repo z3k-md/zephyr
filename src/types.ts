@@ -41,6 +41,9 @@ export interface Snapshot {
   weatherPlace: Place | null;
   /** Celsius or Fahrenheit; null follows the region's own way. */
   weatherUnit: WeatherUnit | null;
+  /** Whether the connection monitor pings the router and 1.1.1.1 once a second. */
+  watchConnection: boolean;
+  lastSpeed: SpeedResult | null;
 }
 
 export type WeatherUnit = 'c' | 'f';
@@ -215,6 +218,7 @@ export interface Suggestion {
     | 'power'
     | 'bookmark'
     | 'powerPending'
+    | 'netCard'
     | 'window';
   hint: string;
   appId?: string;
@@ -392,6 +396,8 @@ export interface SystemStats {
   netUp: number;
   /** Absent without a GPU that reports its load. */
   gpu?: GpuStats;
+  /** Trouble on the line, for the footer's chip. */
+  network?: NetworkAlert;
   /** Dev builds: the app's own use, webview helpers included. */
   app?: { cpu: number; memory: number; processes: number };
 }
@@ -459,4 +465,91 @@ export interface GroupItem {
   kind: 'app' | 'url' | 'folder';
   value: string;
   label: string;
+}
+
+/** Trouble on the line: much slower than usual, probes lost in a row, or no route at all. */
+export type NetworkAlert = { kind: 'slow'; ms: number } | { kind: 'drop' } | { kind: 'offline' };
+
+export type NetworkGrade = 'good' | 'fair' | 'poor';
+
+/** The connection over the last 15 minutes, for the network card. */
+export interface NetworkSummary {
+  watching: boolean;
+  /** Whether anything has been sent to the internet yet. */
+  measured: boolean;
+  grade: NetworkGrade;
+  median: number | null;
+  jitter: number | null;
+  /** 0–1. */
+  loss: number;
+  verdict: string;
+  offline: boolean;
+  /** The internet's median for each of 180 five-second stretches, oldest first. */
+  spark: (number | null)[];
+  /** Which of those stretches lost probes. */
+  sparkLost: boolean[];
+  gateway: string | null;
+  dns: string | null;
+  /** "Wi-Fi" or "network". */
+  link: string;
+  alert: NetworkAlert | null;
+}
+
+export interface HopStats {
+  median: number | null;
+  p95: number | null;
+  jitter: number | null;
+  loss: number;
+  sent: number;
+}
+
+/** Five seconds of the chart. `flags`: 1 gap, 2 network change, 4 TCP timing, 8 speed test,
+ *  16 offline. */
+export interface NetworkBucket {
+  median: number | null;
+  p95: number | null;
+  lost: number;
+  sent: number;
+  down: number;
+  up: number;
+  flags: number;
+}
+
+export interface NetworkHistory {
+  summary: NetworkSummary;
+  buckets: NetworkBucket[];
+  router: HopStats;
+  internet: HopStats;
+  dnsHop: HopStats;
+  drops: { ago: number; seconds: number; pastRouter: boolean }[];
+  usedDown: number;
+  usedUp: number;
+  peakDown: number;
+  peakUp: number;
+}
+
+export interface NetworkAddress {
+  value: string;
+  detail: string;
+  icon: string;
+}
+
+export interface SpeedResult {
+  /** When it ran, ms since 1970. */
+  at: number;
+  downMbps: number;
+  upMbps: number;
+  idleMs: number | null;
+  downMs: number | null;
+  upMs: number | null;
+  /** A to D, or – without pings. */
+  bloat: string;
+}
+
+export interface SpeedProgress {
+  phase: 'ping' | 'download' | 'upload';
+  mbps: number | null;
+  ping: number | null;
+  /** 0–1 through the phase. */
+  done: number;
 }

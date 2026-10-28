@@ -525,6 +525,7 @@ input[type='number']::-webkit-outer-spin-button {
 .text-button,
 .recorder,
 .field > button,
+.speed-field > button,
 .primary,
 section > button {
   border: 1px solid var(--stroke);
@@ -536,11 +537,11 @@ section > button {
   transition: background-color 80ms ease;
 }
 
-:is(.text-button, .field > button, section > button):hover {
+:is(.text-button, .field > button, .speed-field > button, section > button):hover {
   background: var(--chip-hover);
 }
 
-:is(.field > button, section > button):disabled {
+:is(.field > button, .speed-field > button, section > button):disabled {
   opacity: 0.4;
   cursor: default;
 }
@@ -571,6 +572,12 @@ section > button {
   background: var(--active-hover, #ffffff);
 }
 
+/* Settings' page buttons match its 30 px fields. */
+.settings :is(.field > button:not(.recorder), .speed-field > button, section > button, .primary) {
+  height: 30px;
+  padding: 0 12px;
+  font-size: 13.5px;
+}
 .chip {
   display: inline-flex;
   align-items: center;
@@ -1452,6 +1459,37 @@ textarea.query {
 }
 
 /* Settings, at the right end of the search bar. */
+/* An update put off with Later: a small pill beside Settings that installs it. */
+.bar-update {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 10px 0 8px;
+  border: 1px solid var(--stroke-strong);
+  border-radius: 13px;
+  background: var(--select);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.bar-update:hover {
+  border-color: var(--focus);
+}
+
+.bar-update svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .bar-settings {
   display: inline-flex;
   flex: none;
@@ -1511,45 +1549,65 @@ textarea.query {
   stroke-linejoin: round;
 }
 
-/* What's playing, at the end of the search field; it gives way to the typed text. */
+/* What's playing, at the end of the search field: one card whose hover lights the cover,
+   the title and the buttons together. It gives way to the typed text. */
 .now-playing {
   display: inline-flex;
   flex: 0 1 auto;
   align-items: center;
   gap: 2px;
   min-width: 0;
-  max-width: 270px;
-  margin: -4px 0;
+  max-width: 280px;
+  margin: -6px 0;
+  padding: 4px 4px 4px 5px;
+  border-radius: 9px;
   color: var(--muted);
   cursor: default;
+  transition: background-color 80ms ease;
+}
+
+.now-playing:hover {
+  background: rgba(255, 255, 255, 0.07);
 }
 
 .now-playing button {
   display: inline-flex;
   align-items: center;
-  padding: 2px 4px;
+  padding: 0;
   color: inherit;
   font: inherit;
   background: none;
   border: 0;
-  border-radius: 5px;
+  border-radius: 6px;
   cursor: pointer;
 }
 
-.now-playing button:hover {
-  color: var(--fg);
-  background: rgba(255, 255, 255, 0.07);
+.now-playing-title {
+  gap: 8px;
+  min-width: 0;
+  margin-right: 4px;
 }
 
-.now-playing-title {
-  gap: 7px;
-  min-width: 0;
+.now-playing-title:hover {
+  color: var(--fg);
+}
+
+.now-playing .now-playing-control {
+  flex: none;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  color: var(--fg);
+}
+
+.now-playing .now-playing-control:hover {
+  background: rgba(255, 255, 255, 0.1);
 }
 
 .now-playing-cover {
   flex: none;
-  width: 30px;
-  height: 30px;
+  width: 26px;
+  height: 26px;
   object-fit: cover;
   border-radius: 5px;
 }
@@ -1585,18 +1643,18 @@ textarea.query {
 
 .now-playing-song {
   color: var(--fg);
-  font-size: 13px;
-  line-height: 16px;
+  font-size: 12.5px;
+  line-height: 15px;
 }
 
 .now-playing-artist {
-  font-size: 11.5px;
+  font-size: 11px;
   line-height: 14px;
 }
 
 .now-playing-control svg {
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
 }
 
 /* ---- Scrolling text (Marquee.vue) ---- */
@@ -2127,18 +2185,19 @@ textarea.query {
 
 /* ---- Settings ---- */
 
-/* A sidebar of pages beside the page itself. The window never scrolls; the page scrolls
-   inside, and the sidebar stays put. Below 640 px the sidebar is a rail of icons and the
-   search moves to the top of the page. */
+/* A toolbar across the top (title, search, window buttons) over a sidebar of pages beside
+   the page itself. The window never scrolls; the page scrolls inside, and the sidebar stays
+   put. Below 640 px the sidebar is a rail of icons. */
 .settings {
   display: grid;
-  grid-template-rows: 38px auto minmax(0, 1fr);
-  grid-template-columns: 200px minmax(0, 1fr);
+  grid-template-rows: 50px minmax(0, 1fr);
+  grid-template-columns: 212px minmax(0, 1fr);
   height: 100vh;
   background: var(--bg-solid);
 }
 
-/* Lighter glass over the window's own, with an edge like a pane divider. */
+/* Lighter glass over the window's own, with an edge like a pane divider; it runs up behind
+   the title. */
 .settings-side {
   grid-row: 1 / -1;
   grid-column: 1;
@@ -2148,27 +2207,117 @@ textarea.query {
     inset -2px 0 0 rgba(255, 255, 255, 0.05);
 }
 
-/* The title strip across the top, in the theme rather than the system's colors: it moves
-   the window, and on Windows ends in the window buttons (macOS keeps its traffic lights). */
+/* The toolbar: a drag strip (double-click maximizes) whose title spans the sidebar, so the
+   search starts where the page's title does. */
 .settings-titlebar {
   display: flex;
   grid-row: 1;
   grid-column: 1 / -1;
-  justify-content: flex-end;
+  align-items: center;
   min-width: 0;
+  /* Over the sidebar's glass, which comes later in the page. */
+  position: relative;
+  z-index: 1;
   user-select: none;
   -webkit-user-select: none;
 }
 
+.settings-title {
+  flex: none;
+  box-sizing: border-box;
+  width: 212px;
+  padding-left: 16px;
+  color: var(--fg);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+/* macOS keeps its traffic lights at the left of the toolbar. */
+[data-platform='macos'] .settings-title {
+  padding-left: 76px;
+}
+
+.settings-find {
+  position: relative;
+  flex: none;
+  width: 248px;
+  margin-left: 32px;
+}
+
+.settings-find-icon {
+  position: absolute;
+  top: 50%;
+  left: 9px;
+  width: 13px;
+  height: 13px;
+  transform: translateY(-50%);
+  fill: none;
+  stroke: var(--faint);
+  stroke-width: 2;
+  stroke-linecap: round;
+  pointer-events: none;
+}
+
+.settings-search {
+  box-sizing: border-box;
+  width: 100%;
+  height: 30px;
+  padding: 0 52px 0 28px;
+  border: 1px solid var(--stroke-strong);
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.18);
+  outline: none;
+  font-size: 13px;
+}
+
+.settings-search:focus {
+  border-color: var(--focus);
+}
+
+.settings-find-keys {
+  position: absolute;
+  top: 50%;
+  right: 7px;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.settings-search:focus ~ .settings-find-keys {
+  display: none;
+}
+
+/* A bug capture running, or a snapshot just taken, after the search. */
+.capture-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 16px;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.capture-note.recording::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #ef4444;
+  box-shadow: 0 0 6px rgba(239, 68, 68, 0.8);
+}
+
 .window-buttons {
   display: flex;
+  align-self: flex-start;
+  margin-left: auto;
 }
 
 .window-buttons button {
   display: grid;
   place-items: center;
   width: 46px;
-  height: 38px;
+  height: 50px;
   padding: 0;
   border: 0;
   background: transparent;
@@ -2195,50 +2344,14 @@ textarea.query {
   shape-rendering: crispEdges;
 }
 
-.settings-find {
-  position: relative;
-  grid-row: 2;
-  grid-column: 1;
-  padding: 0 12px 10px;
-}
-
-.settings-search {
-  box-sizing: border-box;
-  width: 100%;
-  height: 28px;
-  padding: 0 9px;
-  border: 1px solid var(--stroke-strong);
-  border-radius: 7px;
-  background: rgba(0, 0, 0, 0.18);
-  outline: none;
-  font-size: 13px;
-}
-
-.settings-search:focus {
-  border-color: var(--focus);
-}
-
-.settings-find-keys {
-  position: absolute;
-  /* Centered on the 28 px field. */
-  top: 14px;
-  right: 18px;
-  transform: translateY(-50%);
-  pointer-events: none;
-}
-
-.settings-search:focus + .settings-find-keys {
-  display: none;
-}
-
 .settings-nav {
   display: flex;
-  grid-row: 3;
+  grid-row: 2;
   grid-column: 1;
   flex-direction: column;
   gap: 1px;
   min-height: 0;
-  padding: 0 10px 12px;
+  padding: 6px 12px 12px;
   overflow: hidden;
 }
 
@@ -2246,15 +2359,15 @@ textarea.query {
   display: flex;
   flex: none;
   align-items: center;
-  gap: 9px;
-  height: 28px;
-  padding: 0 8px;
+  gap: 10px;
+  height: 30px;
+  padding: 0 9px;
   border: 0;
   border-radius: 6px;
   background: transparent;
   color: var(--fg);
   font: inherit;
-  font-size: 13px;
+  font-size: 13.5px;
   text-align: left;
   cursor: pointer;
 }
@@ -2295,7 +2408,7 @@ textarea.query {
 }
 
 .settings .settings-group {
-  margin: 14px 8px 4px;
+  margin: 16px 9px 6px;
   color: var(--faint);
   font-size: 11px;
   font-weight: 600;
@@ -2312,15 +2425,16 @@ textarea.query {
 }
 
 .settings-pane {
-  grid-row: 2 / -1;
+  grid-row: 2;
   grid-column: 2;
   overflow-y: auto;
-  padding: 0 28px 48px;
+  padding: 0 32px 48px;
 }
 
+/* The page reads from its left edge, under the search. */
 .settings-pane > * {
-  max-width: 680px;
-  margin-inline: auto;
+  max-width: 600px;
+  margin-inline: 0;
 }
 
 @media (max-width: 639px) {
@@ -2328,19 +2442,25 @@ textarea.query {
     grid-template-columns: 56px minmax(0, 1fr);
   }
 
-  .settings-find {
-    grid-column: 2;
-    padding: 0 28px 4px;
+  .settings-title {
+    width: 56px;
+    padding: 0;
+    color: transparent;
   }
 
-  .settings-find-keys {
-    right: 34px;
+  [data-platform='macos'] .settings-title {
+    width: 76px;
+    padding: 0;
+  }
+
+  .settings-find {
+    flex: 0 1 248px;
+    min-width: 120px;
   }
 
   .settings-nav {
-    grid-row: 2 / -1;
     align-items: center;
-    padding: 0 0 12px;
+    padding: 6px 0 12px;
   }
 
   .settings-row {
@@ -2368,9 +2488,8 @@ textarea.query {
     width: 36px;
   }
 
-  .settings-pane {
-    grid-row: 3;
-    padding-top: 10px;
+  .capture-note {
+    display: none;
   }
 }
 
@@ -2382,9 +2501,11 @@ textarea.query {
 
 .results-list button {
   display: flex;
+  align-items: center;
   justify-content: space-between;
   width: 100%;
-  padding: 8px 10px;
+  height: 30px;
+  padding: 0 10px;
   border: none;
   border-radius: 8px;
   background: transparent;
@@ -2415,9 +2536,10 @@ textarea.query {
 }
 
 .settings h2 {
-  font-size: 20px;
+  font-size: 22px;
   font-weight: 600;
-  margin-bottom: 4px;
+  line-height: 30px;
+  margin-bottom: 18px;
 }
 
 .settings h3 {
@@ -2435,7 +2557,8 @@ textarea.query {
 }
 
 .settings section h3 {
-  margin-top: 22px;
+  margin-top: 24px;
+  margin-bottom: 4px;
   padding-top: 14px;
   border-top: 1px solid var(--stroke);
 }
@@ -2480,12 +2603,13 @@ textarea.query {
   flex-direction: column;
   align-items: flex-start;
   gap: 6px;
-  margin: 14px 0;
-  font-size: 13px;
+  margin: 18px 0;
+  font-size: 13.5px;
 }
 
 .field > span:first-child {
   color: var(--muted);
+  font-size: 12.5px;
 }
 
 /* A label with a small info mark beside it; the mark's tooltip says what the setting does. */
@@ -2518,18 +2642,47 @@ textarea.query {
 .field input,
 .field select,
 .recorder {
+  box-sizing: border-box;
   width: min(100%, 520px);
-  min-height: 34px;
-  padding: 7px 12px;
-  border-radius: 8px;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 7px;
   border: 1px solid var(--stroke-strong);
   background: rgba(255, 255, 255, 0.05);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
-  font-size: 13px;
+  font-size: 13.5px;
   text-align: left;
   transition:
     border-color 0.12s,
     background-color 0.12s;
+}
+
+.field select {
+  max-width: 360px;
+}
+
+/* Keycaps sit 3 px in from every edge of the field. */
+.recorder {
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding: 3px;
+}
+
+/* Words line up with the keycaps' own text. */
+.recorder-prompt,
+.recorder-empty {
+  padding: 0 7px;
+}
+
+.recorder-prompt {
+  color: var(--muted);
+}
+
+.recorder-keys {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
 /* A recorded shortcut shows as keycaps, like the bar's hints. */
@@ -2542,6 +2695,63 @@ textarea.query {
 
 .recorder .keys {
   gap: 4px;
+}
+
+/* Listening: a ring that breathes, until the keys are let go. */
+.recorder.listening {
+  border-color: var(--focus);
+}
+
+.recorder.listening::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border: 2px solid var(--focus);
+  border-radius: 10px;
+  pointer-events: none;
+  animation: recorder-listen 1.2s ease-in-out infinite;
+}
+
+@keyframes recorder-listen {
+  0%,
+  100% {
+    opacity: 0.15;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+/* The modifiers held so far, with a waiting cap for the key still to come. */
+.recorder-waiting {
+  opacity: 0.45;
+  animation: recorder-listen 1.2s ease-in-out infinite;
+}
+
+/* Bound: the caps snap into place. */
+.recorder.snapped .recorder-keys {
+  animation: recorder-snap 0.3s cubic-bezier(0.2, 0.9, 0.3, 1.3);
+}
+
+@keyframes recorder-snap {
+  0% {
+    transform: scale(1.12);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .recorder.listening::after,
+  .recorder-waiting,
+  .recorder.snapped .recorder-keys {
+    animation: none;
+  }
+
+  .recorder.listening::after {
+    opacity: 0.4;
+  }
 }
 
 /* A one-of choice as joined buttons (Run at boot: Off, On, High-priority). */
@@ -3003,14 +3213,10 @@ textarea.query {
   height: 15px;
 }
 
-.recorder.listening {
-  border-color: var(--focus);
-}
-
 .check {
   align-items: center;
-  margin: 16px 0;
-  font-size: 14px;
+  margin: 20px 0;
+  font-size: 13.5px;
   cursor: pointer;
 }
 
@@ -3977,4 +4183,426 @@ button.res-tile:hover {
   margin: 0;
   padding: 6px 16px 6px 48px;
   border-top: 1px solid var(--stroke);
+}
+
+/* ---- The connection monitor: the network card, the Network view, the footer's chip ---- */
+
+.net-pill {
+  flex: none;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--chip);
+  color: var(--fg);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.net-pill.good {
+  background: rgba(56, 201, 138, 0.2);
+  color: #4ade9b;
+}
+
+.net-pill.fair {
+  background: rgba(240, 180, 67, 0.2);
+  color: #f0b443;
+}
+
+.net-pill.poor {
+  background: rgba(255, 97, 89, 0.2);
+  color: #ff7a73;
+}
+
+/* The card is the list's first row: 96 px, the selection fill when it's the one in hand. */
+.results.sectioned .item.is-card {
+  min-height: 96px;
+  margin-top: 2px;
+  padding: 0 14px;
+}
+
+.net-card {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+  height: 96px;
+}
+
+.net-card-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.net-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.net-card-head .key-hints {
+  margin-left: auto;
+}
+
+.net-card-big {
+  overflow: hidden;
+  font-size: 21px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.net-card-sub {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.net-card.selected .net-card-sub,
+.net-card.selected .net-card-head {
+  color: color-mix(in srgb, var(--fg) 82%, transparent);
+}
+
+.net-card-spark {
+  flex: none;
+}
+
+.net-card-spark path {
+  fill: none;
+  stroke: var(--fg);
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.net-card-spark .lost {
+  fill: rgba(255, 97, 89, 0.35);
+}
+
+/* The Network view. */
+.network {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.network > .footer {
+  flex: none;
+  margin-top: auto;
+}
+
+.network .input-row .chip svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.net-title {
+  flex: 1;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.net-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 16px 6px;
+  border-top: 1px solid var(--stroke);
+}
+
+.net-head .net-pill {
+  margin-top: 1px;
+}
+
+.net-verdict {
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.net-addr {
+  display: flex;
+  gap: 6px;
+  padding: 2px 16px 8px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.net-chip {
+  flex: none;
+  padding: 2px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--chip);
+  color: var(--muted);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.net-chip:hover {
+  background: var(--chip-hover);
+}
+
+.net-chip b {
+  color: var(--fg);
+  font-weight: 500;
+}
+
+.net-chip.more {
+  cursor: default;
+}
+
+.net-chart {
+  position: relative;
+  flex: none;
+  padding: 0 8px;
+}
+
+.net-chart svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.net-grid {
+  stroke: rgba(255, 255, 255, 0.08);
+}
+
+.net-axis {
+  fill: var(--muted);
+  font-size: 10px;
+}
+
+.net-axis.faint {
+  fill: var(--faint);
+}
+
+.net-band {
+  fill: rgba(91, 156, 255, 0.22);
+}
+
+.net-line {
+  fill: none;
+  stroke: #5b9cff;
+  stroke-width: 1.8;
+  stroke-linejoin: round;
+}
+
+.net-loss {
+  fill: #ff6159;
+}
+
+.net-drop {
+  fill: rgba(255, 97, 89, 0.2);
+}
+
+.net-gap {
+  fill: rgba(255, 255, 255, 0.04);
+}
+
+.net-change {
+  stroke: rgba(255, 255, 255, 0.35);
+  stroke-dasharray: 3 3;
+}
+
+.net-test {
+  stroke: #f0b443;
+  stroke-dasharray: 2 2;
+}
+
+.net-down {
+  fill: rgba(91, 156, 255, 0.45);
+}
+
+.net-up {
+  fill: rgba(180, 140, 255, 0.45);
+}
+
+.net-cursor {
+  stroke: rgba(255, 255, 255, 0.35);
+}
+
+.net-tip {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  padding: 3px 8px;
+  border: 1px solid var(--stroke-strong);
+  border-radius: 6px;
+  background: var(--glass-strong);
+  font-size: 11px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.net-hops {
+  display: grid;
+  grid-template-columns: 1.7fr repeat(4, 0.8fr);
+  padding: 4px 16px 6px;
+  font-size: 12.5px;
+}
+
+.net-hops > div {
+  display: flex;
+  align-items: center;
+  height: 27px;
+  border-bottom: 1px solid var(--stroke);
+}
+
+.net-hops > div:nth-last-child(-n + 5) {
+  border-bottom: 0;
+}
+
+.net-hops .h {
+  height: 20px;
+  color: var(--faint);
+  font-size: 10.5px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.net-hops .name {
+  gap: 8px;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.net-hops .name small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+}
+
+.net-hops .num {
+  justify-content: flex-end;
+}
+
+.net-hops .warn {
+  color: #f0b443;
+}
+
+.net-hops .bad {
+  color: #ff7a73;
+}
+
+.net-speed {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 6px 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--stroke);
+  border-radius: 10px;
+  background: var(--panel);
+}
+
+.net-speed-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.net-speed-bar {
+  position: relative;
+  flex: 1;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.net-speed-bar span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 2px;
+  background: var(--active);
+  transition: width 240ms linear;
+}
+
+.net-speed-main {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.net-speed-main b {
+  color: var(--fg);
+  font-size: 24px;
+  font-weight: 600;
+}
+
+.net-speed-main span {
+  margin-left: auto;
+}
+
+/* The footer's chip: amber while the line is slow or dropping, red offline. */
+.net-alert {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 7px;
+  border-radius: 5px;
+  background: #f0b443;
+  color: #1a1406;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.net-alert.offline {
+  background: #ff6159;
+  color: #fff;
+}
+
+.net-alert svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.speed-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 18px 0;
+}
+
+.speed-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 13.5px;
+}
+
+.speed-text b {
+  font-weight: 500;
+}
+
+.speed-text .hint-text {
+  font-size: 12.5px;
 }

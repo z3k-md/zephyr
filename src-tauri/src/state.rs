@@ -71,7 +71,7 @@ pub struct Persisted {
     pub power: Option<crate::power::Schedule>,
     /// Notes open in their own windows, reopened where they were at the next start.
     pub note_windows: Vec<NoteWindow>,
-    /// Whether Ctrl+Alt+R and Ctrl+Alt+S record and snapshot the bar for bug reports.
+    /// Whether Ctrl+R and Ctrl+Shift+S record and snapshot Zephyr's window for bug reports.
     #[serde(default = "yes")]
     pub bug_capture: bool,
     /// Whether file search may read Desktop, Documents and Downloads. macOS asks before an
@@ -90,6 +90,11 @@ pub struct Persisted {
     /// `c` or `f` for the weather's temperatures (and wind in km/h or mph); none follows
     /// the region's own way.
     pub weather_unit: Option<String>,
+    /// Whether the connection monitor pings the router and 1.1.1.1 once a second.
+    #[serde(default = "yes")]
+    pub watch_connection: bool,
+    /// The last speed test's result.
+    pub last_speed: Option<crate::net::speed::SpeedResult>,
 }
 
 /// The palettes Settings > Appearance offers; the first is the default.
@@ -231,6 +236,8 @@ impl Persisted {
             launch_groups: Vec::new(),
             weather_place: None,
             weather_unit: None,
+            watch_connection: true,
+            last_speed: None,
         }
     }
 

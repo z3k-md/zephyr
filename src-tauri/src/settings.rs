@@ -486,10 +486,10 @@ const ZEPHYR: &[Setting] = &[
         &["return to mode", "keep search text"],
     ),
     zephyr(
-        "zephyr.appearance",
-        "Zephyr Appearance",
-        "general:theme",
-        &["theme", "color", "tint"],
+        "zephyr.theme",
+        "Zephyr Theme",
+        "theme",
+        &["appearance", "color", "tint"],
     ),
     zephyr(
         "zephyr.about",
@@ -553,6 +553,17 @@ const ZEPHYR: &[Setting] = &[
             "celsius",
             "fahrenheit",
             "temperature units",
+        ],
+    ),
+    zephyr(
+        "zephyr.network",
+        "Zephyr Network",
+        "network",
+        &[
+            "connection monitor",
+            "watch connection",
+            "ping",
+            "speed test",
         ],
     ),
     zephyr(
@@ -944,11 +955,11 @@ mod tests {
         let catalog = all(MACOS);
         assert_eq!(
             intent_titles(&catalog, "appearance settings")[..2],
-            ["Appearance", "Zephyr Appearance"]
+            ["Appearance", "Zephyr Theme"]
         );
         assert_eq!(
-            intent_titles(&catalog, "zephyr appearance settings")[0],
-            "Zephyr Appearance"
+            intent_titles(&catalog, "zephyr theme settings")[0],
+            "Zephyr Theme"
         );
         assert_eq!(
             intent_titles(&catalog, "zephyr settings"),

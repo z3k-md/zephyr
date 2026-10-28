@@ -53,7 +53,7 @@ pub struct Address {
 }
 
 /// The kind of link behind an interface, and the name people know it by ("Wi-Fi" for en0).
-fn describe(interface: &str) -> (Link, String) {
+pub fn describe(interface: &str) -> (Link, String) {
     let port = hardware_ports()
         .iter()
         .find(|(device, _)| device == interface)
@@ -160,10 +160,19 @@ fn route_address() -> Option<IpAddr> {
     (!ip.is_unspecified()).then_some(ip)
 }
 
-/// The address the internet sees, when the echo service answers within two seconds.
+static PUBLIC: Mutex<Option<(Instant, String)>> = Mutex::new(None);
+
+/// Forgets the public address, after the network changed.
+pub fn forget_public() {
+    if let Ok(mut cache) = PUBLIC.lock() {
+        *cache = None;
+    }
+}
+
+/// The address the internet sees, when the echo service answers within two seconds; kept
+/// for a minute.
 pub async fn public() -> Option<String> {
-    static CACHE: Mutex<Option<(Instant, String)>> = Mutex::new(None);
-    if let Ok(cache) = CACHE.lock()
+    if let Ok(cache) = PUBLIC.lock()
         && let Some((at, ip)) = cache.as_ref()
         && at.elapsed() < Duration::from_secs(60)
     {
@@ -184,7 +193,7 @@ pub async fn public() -> Option<String> {
         .ok()?;
     let ip: IpAddr = text.trim().parse().ok()?;
     let ip = ip.to_string();
-    if let Ok(mut cache) = CACHE.lock() {
+    if let Ok(mut cache) = PUBLIC.lock() {
         *cache = Some((Instant::now(), ip.clone()));
     }
     Some(ip)

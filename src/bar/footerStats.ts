@@ -97,6 +97,7 @@ export function useFooterStats() {
       diskLow: diskShare < 0.1,
       disk: `${Math.round(diskShare * 100)}% free`,
       diskTitle: `${bytes(stats.diskFree)} free of ${bytes(stats.diskTotal, 0)} on the system disk`,
+      network: stats.network ?? null,
     };
   });
 

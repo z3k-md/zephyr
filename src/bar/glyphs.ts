@@ -35,6 +35,10 @@ export const GLYPHS: Record<string, string> = {
   network:
     '<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.4 2.3 3.6 5.1 3.6 8.5s-1.2 6.2-3.6 8.5c-2.4-2.3-3.6-5.1-3.6-8.5s1.2-6.2 3.6-8.5z"/>',
   check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
+  // The connection monitor: latency as a pulse, the speed test as a gauge.
+  pulse: '<path d="M3 12.5h4l2.5-6 4.5 11 2.5-5H21"/>',
+  gauge:
+    '<path d="M4.2 17a8.5 8.5 0 1 1 15.6 0"/><path d="m12 14 4-5"/><circle cx="12" cy="14" r="1.2"/>',
   palette:
     '<path d="M12 3.5a8.5 8.5 0 1 0 0 17c1.2 0 1.8-.9 1.8-1.8 0-.5-.2-.9-.5-1.3-.3-.4-.5-.8-.5-1.3 0-1 .8-1.8 1.8-1.8h2.1a3.8 3.8 0 0 0 3.8-3.8C20.5 6.9 16.7 3.5 12 3.5z"/><path d="M7.5 11.5h.01M10 7.5h.01M14.5 7.5h.01"/>',
   // System stats in the footer.

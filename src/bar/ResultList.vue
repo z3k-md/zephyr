@@ -25,6 +25,9 @@
 
   const gesture = dragGesture((index) => emit('drag', index));
 
+  // The network card renders in the bar (#card), as the list's first row.
+  defineSlots<{ card(props: { row: Suggestion; selected: boolean }): unknown }>();
+
   // WebKit sends a synthetic mousemove when the list scrolls under a still pointer; only a
   // real move selects, and a click only runs the row the pointer actually moved onto.
   let lastX = -1;
@@ -54,8 +57,10 @@
     v-fit="(count: number) => emit('fit', count)"
   >
     <li v-for="group in groups" :key="group.start" role="presentation">
-      <div :id="`head-${group.start}`" class="section-head">{{ group.title }}</div>
-      <ul role="group" :aria-labelledby="`head-${group.start}`">
+      <div v-if="group.title" :id="`head-${group.start}`" class="section-head">
+        {{ group.title }}
+      </div>
+      <ul role="group" :aria-labelledby="group.title ? `head-${group.start}` : undefined">
         <li
           v-for="(row, offset) in group.rows"
           :id="`result-${group.start + offset}`"
@@ -66,6 +71,7 @@
           :class="{
             selected: group.start + offset === selected,
             'is-answer': row.kind === 'answer',
+            'is-card': row.kind === 'netCard',
           }"
           @mousedown.prevent="gesture.down($event, group.start + offset)"
           @mouseup="gesture.up()"
@@ -75,28 +81,36 @@
             onMove($event, group.start + offset, row);
           "
         >
-          <RowIcon :icon="row.icon" :label="row.label" :size="20" />
-          <span class="item-text">
-            <span class="label">{{ row.label }}</span>
-            <span v-if="row.subtitle" class="item-sub">{{ row.subtitle }}</span>
-          </span>
-          <span class="item-acc">
-            <Keys
-              v-if="numbered && group.start + offset < 9"
-              class="row-number"
-              :keys="`${numbered}+${group.start + offset + 1}`"
-              aria-hidden="true"
-            />
-            <template v-else>
-              <span v-if="row.icons?.length" class="row-icons" aria-hidden="true">
-                <RowIcon v-for="icon in row.icons" :key="icon" :icon="icon" label="" :size="16" />
-              </span>
-              <!-- A row's hotkey shows only on the row in hand, so the list stays quiet. -->
-              <Keys v-if="row.keys?.length" class="row-hotkey" :keys="row.keys" />
-              <KeyHints v-else-if="row.keyHints?.length" :hints="row.keyHints" />
-              <template v-else>{{ row.hint }}</template>
-            </template>
-          </span>
+          <slot
+            v-if="row.kind === 'netCard'"
+            name="card"
+            :row="row"
+            :selected="group.start + offset === selected"
+          />
+          <template v-else>
+            <RowIcon :icon="row.icon" :label="row.label" :size="20" />
+            <span class="item-text">
+              <span class="label">{{ row.label }}</span>
+              <span v-if="row.subtitle" class="item-sub">{{ row.subtitle }}</span>
+            </span>
+            <span class="item-acc">
+              <Keys
+                v-if="numbered && group.start + offset < 9"
+                class="row-number"
+                :keys="`${numbered}+${group.start + offset + 1}`"
+                aria-hidden="true"
+              />
+              <template v-else>
+                <span v-if="row.icons?.length" class="row-icons" aria-hidden="true">
+                  <RowIcon v-for="icon in row.icons" :key="icon" :icon="icon" label="" :size="16" />
+                </span>
+                <!-- A row's hotkey shows only on the row in hand, so the list stays quiet. -->
+                <Keys v-if="row.keys?.length" class="row-hotkey" :keys="row.keys" />
+                <KeyHints v-else-if="row.keyHints?.length" :hints="row.keyHints" />
+                <template v-else>{{ row.hint }}</template>
+              </template>
+            </span>
+          </template>
         </li>
       </ul>
     </li>

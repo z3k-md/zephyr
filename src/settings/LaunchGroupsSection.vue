@@ -1,16 +1,8 @@
 <script setup lang="ts">
-  import { computed, ref, watch } from 'vue';
-  import {
-    bindingFailures,
-    errorMessage,
-    pauseShortcuts,
-    pickFolder,
-    saveBinding,
-    saveLaunchGroups,
-  } from '../api';
-  import { captureShortcut, formatShortcut, isModifierKey } from '../keys';
-  import { useWindowListener } from '../windowEvents';
-  import Keys from '../components/Keys.vue';
+  import { computed, ref } from 'vue';
+  import { bindingFailures, errorMessage, pickFolder, saveBinding, saveLaunchGroups } from '../api';
+  import { formatShortcut } from '../keys';
+  import ShortcutRecorder from '../components/ShortcutRecorder.vue';
   import RowIcon from '../bar/RowIcon.vue';
   import AppPicker from './AppPicker.vue';
   import type { Binding, GroupItem, LaunchGroup, Snapshot } from '../types';
@@ -138,11 +130,6 @@
   }
 
   // Each group's hotkey is its binding in Settings › Shortcuts, recorded right here.
-  const listening = ref<string | null>(null);
-  watch(
-    () => listening.value !== null,
-    (recording) => void pauseShortcuts(recording).catch(() => undefined)
-  );
   const failures = ref<string[]>([]);
   void bindingFailures()
     .then((found) => (failures.value = found))
@@ -175,27 +162,6 @@
       error.value = errorMessage(err);
     }
   }
-
-  function onKey(event: KeyboardEvent) {
-    const id = listening.value;
-    if (!id || event.isComposing) return;
-    event.preventDefault();
-    event.stopPropagation();
-    const group = groups.value.find((item) => item.id === id);
-    if (event.key === 'Escape' || !group) {
-      listening.value = null;
-      return;
-    }
-    const hotkey = captureShortcut(event, true);
-    if (!hotkey) {
-      if (!isModifierKey(event)) error.value = 'Use at least one modifier and a key.';
-      return;
-    }
-    listening.value = null;
-    void saveHotkey(group, hotkey);
-  }
-
-  useWindowListener('keydown', onKey, true);
 </script>
 
 <template>
@@ -220,18 +186,14 @@
             update(group.id, (g) => ({ ...g, name: ($event.target as HTMLInputElement).value }))
           "
         />
-        <button
-          type="button"
-          class="recorder"
-          :class="{ listening: listening === group.id }"
-          title="Hotkey"
-          @click="listening = group.id"
-          @blur="listening === group.id && (listening = null)"
-        >
-          <template v-if="listening === group.id">Press a shortcut</template>
-          <Keys v-else-if="hotkeyOf(group)" :keys="hotkeyOf(group)" />
-          <template v-else>Add hotkey</template>
-        </button>
+        <ShortcutRecorder
+          :keys="hotkeyOf(group)"
+          empty="Add hotkey"
+          function-keys
+          aria-label="Hotkey"
+          @record="saveHotkey(group, $event)"
+          @invalid="error = $event"
+        />
         <button
           v-if="hotkeyOf(group)"
           type="button"

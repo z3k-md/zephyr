@@ -1,7 +1,7 @@
 //! Live system stats for the bar's footer and System Resources: CPU, GPU, memory, free space
 //! on the system disk and network throughput. A background thread reads them once a second
 //! (about a millisecond each: totals only, never the process list), so Resources always
-//! opens with the last minute. While the bar shows it reads twice a second and sends each
+//! opens with the last 15 minutes. While the bar shows it reads twice a second and sends each
 //! reading to the footer.
 
 use std::path::Path;
@@ -22,12 +22,15 @@ pub struct Stats {
     pub memory_total: u64,
     pub disk_free: u64,
     pub disk_total: u64,
-    /// Bytes per second since the last sample, across every interface.
+    /// Bytes per second since the last sample, on the interface the internet goes through.
     pub net_down: u64,
     pub net_up: u64,
     /// None without a GPU that reports its load.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gpu: Option<crate::gpu::Gpu>,
+    /// Trouble on the line (slow, dropping, offline), for the footer's chip.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub network: Option<crate::net::Alert>,
     /// Dev builds: the app's own use, its webview helper processes included.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub app: Option<AppUsage>,
@@ -51,7 +54,7 @@ struct Sampler {
     last: Instant,
     /// The latest reading, which the footer and Resources show.
     latest: Option<Stats>,
-    /// The last minute of totals, with when each was read.
+    /// The last 15 minutes of totals, with when each was read.
     history: std::collections::VecDeque<(Instant, Point)>,
     /// Dev builds: the app's own use and when it was read, which walks every process, so
     /// the footer's twice-a-second readings reuse it for a second.
@@ -74,10 +77,10 @@ pub struct Point {
 }
 
 /// How far back the sparklines go, and how often the thread reads.
-const WINDOW: Duration = Duration::from_secs(60);
+const WINDOW: Duration = Duration::from_secs(15 * 60);
 const EVERY: Duration = Duration::from_secs(1);
 
-/// The last minute of totals, oldest first.
+/// The last 15 minutes of totals, oldest first.
 pub fn history() -> Vec<Point> {
     let Ok(guard) = SAMPLER.lock() else {
         return Vec::new();
@@ -235,13 +238,7 @@ fn record(sampler: &mut Sampler) -> Stats {
         }
         None => (0, 0),
     };
-    let (down, up) = sampler
-        .networks
-        .list()
-        .values()
-        .fold((0u64, 0u64), |(down, up), data| {
-            (down + data.received(), up + data.transmitted())
-        });
+    let (down, up) = throughput(&sampler.networks);
     let stats = Stats {
         cpu: sampler.system.global_cpu_usage(),
         memory_used: sampler.system.used_memory(),
@@ -251,6 +248,7 @@ fn record(sampler: &mut Sampler) -> Stats {
         net_down: (down as f64 / elapsed) as u64,
         net_up: (up as f64 / elapsed) as u64,
         gpu: sampler.gpu.as_mut().and_then(crate::gpu::Reader::read),
+        network: crate::net::alert(),
         app: None,
     };
     while sampler
@@ -285,6 +283,42 @@ fn record(sampler: &mut Sampler) -> Stats {
     }
     sampler.latest = Some(stats.clone());
     stats
+}
+
+/// Bytes moved since the last refresh on one interface: the one the internet goes through,
+/// or without the monitor the busiest real one. Summing them all counts a VPN's traffic twice
+/// (the tunnel and the link under it) and counts loopback as network.
+fn throughput(networks: &Networks) -> (u64, u64) {
+    let list = networks.list();
+    if let Some(data) = crate::net::primary_interface().and_then(|name| list.get(&name)) {
+        return (data.received(), data.transmitted());
+    }
+    list.iter()
+        .filter(|(name, _)| !virtual_interface(name))
+        .map(|(_, data)| (data.received(), data.transmitted()))
+        .max_by_key(|(down, up)| down + up)
+        .unwrap_or((0, 0))
+}
+
+/// Loopback, tunnels and virtual switches, by name.
+fn virtual_interface(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    [
+        "lo", "utun", "tun", "tap", "wg", "ipsec", "ppp", "gif", "stf", "awdl", "llw", "bridge",
+    ]
+    .iter()
+    .any(|prefix| name.starts_with(prefix))
+        || [
+            "loopback",
+            "vpn",
+            "wireguard",
+            "tailscale",
+            "vethernet",
+            "virtual",
+            "pseudo",
+        ]
+        .iter()
+        .any(|word| name.contains(word))
 }
 
 /// The app and the processes working for it: children (WebView2 on Windows), and on macOS
@@ -397,6 +431,7 @@ fn empty() -> Stats {
         net_down: 0,
         net_up: 0,
         gpu: None,
+        network: None,
         app: None,
     }
 }
@@ -404,6 +439,22 @@ fn empty() -> Stats {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tunnels_and_loopback_are_not_the_line() {
+        for name in [
+            "lo0",
+            "utun3",
+            "Loopback Pseudo-Interface 1",
+            "vEthernet (WSL)",
+            "Tailscale",
+        ] {
+            assert!(virtual_interface(name), "{name}");
+        }
+        for name in ["Wi-Fi", "Ethernet", "en0", "en7"] {
+            assert!(!virtual_interface(name), "{name}");
+        }
+    }
 
     #[test]
     fn samples_this_computer() {

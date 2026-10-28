@@ -152,7 +152,7 @@ fn start(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Ctrl+Alt+S: one frame of the app's window in front as it is now, plus its page's state
+/// Ctrl+Shift+S: one frame of the app's window in front as it is now, plus its page's state
 /// (the bar's text, results and selected row; the open note) in the log. The frame is taken first, so the recording dot isn't in it.
 pub fn snapshot(app: &AppHandle) {
     if recording() {

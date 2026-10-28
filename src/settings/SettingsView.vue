@@ -19,12 +19,14 @@
     saveTheme,
     saveBugCapture,
     saveShowStats,
+    saveWatchConnection,
+    speedTest,
     openOnboarding,
     hideSettings,
     windowChrome,
+    captureRecording,
     saveOnboardingEveryLaunch,
     permissionRequest,
-    pauseShortcuts,
     revealCaptures,
     saveShellProgram,
     shellInfo,
@@ -40,8 +42,9 @@
   import PermissionsSection from './PermissionsSection.vue';
   import LaunchGroupsSection from './LaunchGroupsSection.vue';
   import { THEMES } from '../themes';
-  import { captureShortcut, isMac, isModifierKey, SHORTCUT_HELP } from '../keys';
+  import { isMac } from '../keys';
   import Keys from '../components/Keys.vue';
+  import ShortcutRecorder from '../components/ShortcutRecorder.vue';
   import InfoTip from '../components/InfoTip.vue';
   import { vTip } from '../tip';
   import ShortcutsSection from './ShortcutsSection.vue';
@@ -49,6 +52,7 @@
   import WeatherSection from './WeatherSection.vue';
   import SelectMenu from '../components/SelectMenu.vue';
   import { GLYPHS } from '../bar/glyphs';
+  import { lastTestLine } from '../bar/network';
   import {
     isSnapshot,
     type ClipboardSettings,
@@ -65,7 +69,6 @@
     .catch(() => undefined);
   const status = ref<string | null>(null);
   const formError = ref<string | null>(null);
-  const listening = ref(false);
   const updateMessage = ref<string | null>(null);
   const busy = ref(false);
 
@@ -73,14 +76,6 @@
   const newRoot = ref('');
   const newExclude = ref('');
 
-  const notesListening = ref(false);
-  const clipListening = ref(false);
-  // While any recorder listens, Zephyr's own shortcuts are off, so pressing the current
-  // summon key records it instead of opening the bar.
-  watch(
-    () => listening.value || notesListening.value || clipListening.value,
-    (recording) => void pauseShortcuts(recording).catch(() => undefined)
-  );
   const clipNewApp = ref('');
   const clipCount = ref<number | null>(null);
   const clipPasteAllowed = ref<boolean | null>(null);
@@ -157,6 +152,7 @@
   }
   const SECTIONS = [
     { id: 'general', label: 'General', icon: 'gear' },
+    { id: 'theme', label: 'Theme', icon: 'palette' },
     { id: 'shortcuts', label: 'Shortcuts', icon: 'keyboard' },
     { id: 'launchgroups', label: 'Launch groups', icon: 'grid' },
     { id: 'files', label: 'Files', icon: 'folder' },
@@ -166,6 +162,13 @@
     { id: 'resources', label: 'Resources', icon: 'cpu', group: 'utilities' },
     { id: 'terminal', label: 'Terminal', icon: 'prompt', group: 'utilities' },
     { id: 'notes', label: 'Notes', icon: 'note', group: 'utilities' },
+    {
+      id: 'network',
+      label: 'Network',
+      icon: 'pulse',
+      group: 'utilities',
+      keywords: 'connection ping latency speed test',
+    },
     {
       id: 'weather',
       label: 'Weather',
@@ -191,6 +194,30 @@
   function onTitleDown(event: MouseEvent) {
     if (event.button === 0 && event.detail === 1) void windowChrome('drag');
   }
+
+  // Bug captures work here as in the bar (Ctrl+R records this window, Ctrl+Shift+S snapshots
+  // it); the title strip shows a recording running, or a snapshot just taken.
+  const recording = ref(false);
+  const snapped = ref(false);
+  let captureStarted = 0;
+  let snappedTimer = 0;
+  void captureRecording()
+    .then((on) => (recording.value = on))
+    .catch(() => undefined);
+  void listen<boolean>('capture-state', (event) => {
+    if (event.payload) {
+      captureStarted = Date.now();
+      recording.value = true;
+      return;
+    }
+    recording.value = false;
+    // A snapshot starts and stops within a moment; a recording is stopped by hand.
+    if (Date.now() - captureStarted < 1500) {
+      snapped.value = true;
+      window.clearTimeout(snappedTimer);
+      snappedTimer = window.setTimeout(() => (snapped.value = false), 1800);
+    }
+  }).then((unlisten) => unlistens.push(unlisten));
 
   // Below 640 px the sidebar is a rail of icons, and their names are tooltips.
   const narrowQuery = window.matchMedia('(max-width: 639px)');
@@ -366,53 +393,6 @@
       searchEl.value?.select();
       return;
     }
-    // A combo starts with its modifiers; recording waits for the key that completes it.
-    const recording = notesListening.value || clipListening.value || listening.value;
-    if (recording && isModifierKey(event)) {
-      event.preventDefault();
-      event.stopPropagation();
-      return;
-    }
-    if (notesListening.value && !event.isComposing) {
-      event.preventDefault();
-      event.stopPropagation();
-      notesListening.value = false;
-      if (event.key === 'Escape') return;
-      const shortcut = event.key === 'Backspace' ? '' : captureShortcut(event);
-      if (shortcut === null) {
-        formError.value = SHORTCUT_HELP;
-        return;
-      }
-      void saveNotesKey(shortcut);
-      return;
-    }
-    if (clipListening.value && !event.isComposing) {
-      event.preventDefault();
-      event.stopPropagation();
-      clipListening.value = false;
-      if (event.key === 'Escape') return;
-      const shortcut = captureShortcut(event);
-      if (!shortcut) {
-        formError.value = SHORTCUT_HELP;
-        return;
-      }
-      void saveClip({ shortcut });
-      return;
-    }
-    if (!listening.value || event.isComposing) return;
-    event.preventDefault();
-    event.stopPropagation();
-    if (event.key === 'Escape') {
-      listening.value = false;
-      return;
-    }
-    const shortcut = captureShortcut(event);
-    if (!shortcut) {
-      summonError.value = SHORTCUT_HELP;
-      return;
-    }
-    listening.value = false;
-    void commitShortcut(shortcut);
   }
 
   /** The new key caps say it took; only a failure (taken, or not a shortcut) says more, at
@@ -544,6 +524,25 @@
     if (snapshot.value) await save(saveShowStats(!snapshot.value.showStats));
   }
 
+  async function toggleWatch() {
+    if (snapshot.value) await save(saveWatchConnection(!snapshot.value.watchConnection));
+  }
+
+  // The speed test from Settings: the result lands in the state, and so on this page.
+  const speedRunning = ref(false);
+  const speedError = ref('');
+  async function runSpeed() {
+    speedRunning.value = true;
+    speedError.value = '';
+    try {
+      await speedTest();
+    } catch (error) {
+      speedError.value = errorMessage(error);
+    } finally {
+      speedRunning.value = false;
+    }
+  }
+
   async function toggleBugCapture() {
     if (snapshot.value) await save(saveBugCapture(!snapshot.value.bugCapture));
   }
@@ -656,7 +655,31 @@
 
 <template>
   <main ref="settingsEl" class="settings">
+    <!-- The toolbar: moves the window (a double-click maximizes it), with the title over the
+         sidebar, the search at the pages' edge, and on Windows the window buttons. -->
     <header class="settings-titlebar" @mousedown="onTitleDown" @dblclick="windowChrome('maximize')">
+      <span class="settings-title">Settings</span>
+      <div class="settings-find" @mousedown.stop @dblclick.stop>
+        <svg class="settings-find-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="11" cy="11" r="6.5" />
+          <path d="M16 16.5 20 20.5" />
+        </svg>
+        <input
+          ref="searchEl"
+          v-model="search"
+          class="settings-search"
+          type="search"
+          placeholder="Search settings"
+          aria-label="Search settings"
+          spellcheck="false"
+          @keydown="onSearchKey"
+        />
+        <Keys v-if="!search" class="settings-find-keys" keys="mod+f" small />
+      </div>
+      <span v-if="snapped" class="capture-note">Snapshot saved and copied</span>
+      <span v-else-if="recording" class="capture-note recording">
+        Recording · {{ isMac ? '⌃R' : 'Ctrl+R' }} stops
+      </span>
       <div v-if="isWindows" class="window-buttons" @mousedown.stop @dblclick.stop>
         <button type="button" aria-label="Minimize" @click="windowChrome('minimize')">
           <svg viewBox="0 0 10 10" aria-hidden="true"><path d="M0 5h10" /></svg>
@@ -671,22 +694,8 @@
         </button>
       </div>
     </header>
-    <!-- The sidebar's glass; the search and the rows sit over it (beside the pages on a
-         narrow window, where the sidebar is a rail of icons and search tops the pane). -->
+    <!-- The sidebar's glass, behind the toolbar's title too; the rows sit over it. -->
     <div class="settings-side" aria-hidden="true" />
-    <div class="settings-find">
-      <input
-        ref="searchEl"
-        v-model="search"
-        class="settings-search"
-        type="search"
-        placeholder="Search"
-        aria-label="Search settings"
-        spellcheck="false"
-        @keydown="onSearchKey"
-      />
-      <Keys v-if="!search" class="settings-find-keys" keys="mod+f" small />
-    </div>
     <nav class="settings-nav" aria-label="Settings" @keydown="onNavKey">
       <template v-for="section in MAIN" :key="section.id">
         <button
@@ -760,19 +769,11 @@
         <h2>General</h2>
         <div class="field" data-focus="summon">
           <span>Summon shortcut</span>
-          <button
-            type="button"
-            class="recorder"
-            :class="{ listening }"
-            @click="
-              listening = true;
-              summonError = null;
-            "
-            @blur="listening = false"
-          >
-            <template v-if="listening">Press a shortcut</template>
-            <Keys v-else :keys="snapshot.summonShortcut" />
-          </button>
+          <ShortcutRecorder
+            :keys="snapshot.summonShortcut"
+            @record="commitShortcut"
+            @invalid="summonError = $event"
+          />
           <p v-if="summonError" class="notice">{{ summonError }}</p>
         </div>
         <div class="field" data-focus="startup">
@@ -800,8 +801,14 @@
             </option>
           </select>
         </label>
+        <div class="field inline">
+          <button type="button" @click="openOnboarding">Run setup again</button>
+        </div>
+      </section>
+
+      <section v-if="snapshot" v-show="!search && active === 'theme'" id="section-theme">
+        <h2>Theme</h2>
         <div class="field" data-focus="theme">
-          <span>Theme</span>
           <div class="themes compact" role="radiogroup" aria-label="Theme">
             <button
               v-for="theme in THEMES"
@@ -823,9 +830,6 @@
               {{ theme.name }}
             </button>
           </div>
-        </div>
-        <div class="field inline">
-          <button type="button" @click="openOnboarding">Run setup again</button>
         </div>
       </section>
 
@@ -885,17 +889,11 @@
         </label>
         <div class="field">
           <span>Shortcut</span>
-          <button
-            type="button"
-            class="recorder"
-            :class="{ listening: clipListening }"
-            @click="clipListening = true"
-            @blur="clipListening = false"
-          >
-            <template v-if="clipListening">Press a shortcut</template>
-            <template v-else-if="!snapshot.clipboard.shortcut">None</template>
-            <Keys v-else :keys="snapshot.clipboard.shortcut" />
-          </button>
+          <ShortcutRecorder
+            :keys="snapshot.clipboard.shortcut"
+            @record="saveClip({ shortcut: $event })"
+            @invalid="formError = $event"
+          />
         </div>
         <label class="field">
           <span>Keep items for</span>
@@ -957,17 +955,12 @@
         <h2>Notes</h2>
         <div class="field">
           <span>Shortcut</span>
-          <button
-            type="button"
-            class="recorder"
-            :class="{ listening: notesListening }"
-            @click="notesListening = true"
-            @blur="notesListening = false"
-          >
-            <template v-if="notesListening">Press a shortcut, or Backspace for none</template>
-            <template v-else-if="!snapshot.notesShortcut">None</template>
-            <Keys v-else :keys="snapshot.notesShortcut" />
-          </button>
+          <ShortcutRecorder
+            :keys="snapshot.notesShortcut"
+            clearable
+            @record="saveNotesKey"
+            @invalid="formError = $event"
+          />
         </div>
         <div class="field inline">
           <button type="button" @click="openNotes()">Open notes</button>
@@ -994,6 +987,34 @@
           Show CPU, GPU and memory at the bottom of the bar
           <InfoTip text="A click on them opens System Resources." />
         </label>
+      </section>
+
+      <section v-if="snapshot" v-show="!search && active === 'network'" id="section-network">
+        <h2>Network</h2>
+        <label class="check">
+          <input
+            type="checkbox"
+            :checked="snapshot.watchConnection"
+            :disabled="busy"
+            @change="toggleWatch"
+          />
+          Watch connection
+          <InfoTip text="Pings your router and 1.1.1.1 once a second, about 1 MB an hour." />
+        </label>
+        <div class="speed-field">
+          <span class="speed-text">
+            <b>Speed test</b>
+            <span class="hint-text">
+              {{
+                speedRunning
+                  ? 'Testing, about 15 seconds…'
+                  : speedError ||
+                    (snapshot.lastSpeed ? lastTestLine(snapshot.lastSpeed) : 'Not run yet')
+              }}
+            </span>
+          </span>
+          <button type="button" :disabled="speedRunning" @click="runSpeed">Run speed test</button>
+        </div>
       </section>
 
       <section v-if="snapshot" v-show="!search && active === 'terminal'" id="section-terminal">

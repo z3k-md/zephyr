@@ -486,6 +486,9 @@ pub fn show_bar(app: &AppHandle) {
     if let Err(err) = window.emit(event, ()) {
         log::error!("couldn't notify the bar: {err}");
     }
+    if !was_visible {
+        crate::updater::check_if_stale(window.app_handle());
+    }
 
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(350));

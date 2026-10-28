@@ -305,6 +305,82 @@ fn focus_program(exe: &str) -> bool {
     }
 }
 
+/// Moves the volume of every audio session `exe` has (a browser plays from more than one
+/// process) by `step`, 0–1, in the volume mixer's per-app level. The new level, or none when
+/// the app has no audio session.
+pub fn change_volume(exe: &str, step: f32) -> Option<f32> {
+    use windows::Win32::Media::Audio::{
+        IAudioSessionControl2, IAudioSessionManager2, IMMDeviceEnumerator, ISimpleAudioVolume,
+        MMDeviceEnumerator, eConsole, eRender,
+    };
+    use windows::Win32::System::Com::{
+        CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
+    };
+    use windows::core::Interface;
+
+    // SAFETY: COM on this thread (already initialized is fine), then plain WASAPI calls on
+    // the objects it hands back, each released as it goes out of scope.
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        let devices: IMMDeviceEnumerator =
+            CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).ok()?;
+        let device = devices.GetDefaultAudioEndpoint(eRender, eConsole).ok()?;
+        let manager: IAudioSessionManager2 = device.Activate(CLSCTX_ALL, None).ok()?;
+        let sessions = manager.GetSessionEnumerator().ok()?;
+        let mut level = None;
+        for index in 0..sessions.GetCount().ok()? {
+            let Ok(session) = sessions.GetSession(index) else {
+                continue;
+            };
+            let Ok(session) = session.cast::<IAudioSessionControl2>() else {
+                continue;
+            };
+            let Ok(pid) = session.GetProcessId() else {
+                continue;
+            };
+            if !process_name(pid).is_some_and(|name| name.eq_ignore_ascii_case(exe)) {
+                continue;
+            }
+            let Ok(volume) = session.cast::<ISimpleAudioVolume>() else {
+                continue;
+            };
+            let Ok(current) = volume.GetMasterVolume() else {
+                continue;
+            };
+            // Every session of the app lands on the first one's level, so they move together.
+            let next = *level.get_or_insert((current + step).clamp(0.0, 1.0));
+            let _ = volume.SetMasterVolume(next, std::ptr::null());
+        }
+        level
+    }
+}
+
+/// A process's file name ("chrome.exe"), when it can be read.
+fn process_name(pid: u32) -> Option<String> {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Threading::{
+        OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+        QueryFullProcessImageNameW,
+    };
+    use windows::core::PWSTR;
+
+    // SAFETY: a handle opened, read and closed here.
+    unsafe {
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let mut path = [0u16; 1024];
+        let mut length = path.len() as u32;
+        let named = QueryFullProcessImageNameW(
+            process,
+            PROCESS_NAME_WIN32,
+            PWSTR(path.as_mut_ptr()),
+            &mut length,
+        );
+        let _ = CloseHandle(process);
+        named.ok()?;
+        let path = String::from_utf16_lossy(&path[..length as usize]);
+        path.rsplit('\\').next().map(str::to_string)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;

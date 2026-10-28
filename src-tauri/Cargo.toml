@@ -24,7 +24,10 @@ tauri-plugin-updater = { version = "2.13", default-features = false, features = 
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-reqwest = { version = "0.13", default-features = false, features = ["gzip", "charset", "native-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["gzip", "charset", "native-tls", "stream"] }
+# The speed test streams its uploads.
+bytes = "1"
+futures-util = { version = "0.3", default-features = false }
 urlencoding = "2.1"
 log = "0.4"
 flexi_logger = "0.31"
@@ -49,6 +52,7 @@ hkdf = "0.13"
 data-encoding = "2"
 tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
 if-addrs = "0.15.0"
+socket2 = "0.6"
 tokio = { version = "1", features = ["time"] }
 sysinfo = { version = "0.39", default-features = false, features = ["system", "disk", "network", "user"] }
 tauri-plugin-drag = "2.1.1"
@@ -85,6 +89,7 @@ windows = { version = "0.62", features = [
     "Win32_Graphics_Dwm",
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Gdi",
+    "Win32_Media_Audio",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
@@ -101,6 +106,9 @@ windows = { version = "0.62", features = [
     "Win32_UI_Shell_PropertiesSystem",
     "Win32_System_Threading",
     "Win32_System_Performance",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
+    "Win32_Networking_WinSock",
 ] }
 # Clipboard images: Windows hands over bitmaps, history keeps PNG.
 png = "0.18"

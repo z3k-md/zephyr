@@ -8,6 +8,7 @@ import './styles.css';
 
 // Lets the styles follow the native window chrome, which differs between platforms.
 if (navigator.userAgent.includes('Windows')) document.documentElement.dataset.platform = 'windows';
+else if (navigator.userAgent.includes('Mac')) document.documentElement.dataset.platform = 'macos';
 
 // Right-click outside text would open the browser's own menu (Back, Refresh, Print), which
 // has no place in an app; text keeps it for copy, paste and spelling. Dev builds keep it

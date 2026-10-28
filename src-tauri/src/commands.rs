@@ -774,6 +774,12 @@ pub fn update_status() -> Option<updater::Status> {
     updater::current()
 }
 
+/// A downloaded update put off with Later, for the bar's button.
+#[tauri::command]
+pub fn update_waiting() -> Option<String> {
+    updater::waiting()
+}
+
 #[tauri::command]
 pub fn update_install_now(app: AppHandle) {
     updater::install_now(&app);
@@ -1155,6 +1161,12 @@ pub fn now_playing_control(control: String) -> Result<(), String> {
     };
     crate::nowplaying::control(control);
     Ok(())
+}
+
+/// The scroll wheel over the track: what's playing a step louder or quieter, just that app.
+#[tauri::command]
+pub fn now_playing_volume(step: f32) -> Option<f32> {
+    crate::nowplaying::change_volume(step.clamp(-0.2, 0.2))
 }
 
 /// Switches to the app or browser tab playing the song, hiding the bar when it could.
@@ -1722,4 +1734,79 @@ pub fn quick_look(state: State<'_, AppState>, path: String) -> Result<(), String
     {
         Err("Quick Look is only on macOS".into())
     }
+}
+
+/// The connection's grade, numbers and sparkline, for the bar's network card and footer.
+#[tauri::command]
+pub fn network_summary() -> Option<crate::net::Summary> {
+    crate::net::summary()
+}
+
+/// The last 15 minutes in detail, for the Network view.
+#[tauri::command]
+pub fn network_history() -> Option<crate::net::History> {
+    crate::net::history()
+}
+
+/// The address the internet sees, fetched while the IP card or Network view shows.
+#[tauri::command]
+pub async fn network_public_ip() -> Option<String> {
+    crate::net::ip::public().await
+}
+
+#[tauri::command]
+pub fn save_watch_connection(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    watch: bool,
+) -> Result<Persisted, String> {
+    let snapshot = state.update(|persisted| {
+        persisted.watch_connection = watch;
+        Ok(())
+    })?;
+    crate::net::set_enabled(watch);
+    publish(&app, snapshot)
+}
+
+/// Runs a speed test, sending "speed-test" progress events, and keeps the result.
+#[tauri::command]
+pub async fn speed_test(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<crate::net::speed::SpeedResult, String> {
+    let result = crate::net::speed::run(&app).await?;
+    let snapshot = state.update(|persisted| {
+        persisted.last_speed = Some(result.clone());
+        Ok(())
+    })?;
+    publish(&app, snapshot)?;
+    Ok(result)
+}
+
+#[tauri::command]
+pub fn speed_test_cancel() {
+    crate::net::speed::cancel();
+}
+
+/// One of this computer's addresses, for the Network view's chips and the IP card.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkAddress {
+    value: String,
+    /// "Wi-Fi · IPv4".
+    detail: String,
+    icon: &'static str,
+}
+
+/// This computer's addresses, the one the internet is reached through first.
+#[tauri::command]
+pub fn network_addresses() -> Vec<NetworkAddress> {
+    crate::net::ip::local()
+        .into_iter()
+        .map(|address| NetworkAddress {
+            icon: address.link.glyph(),
+            value: address.value,
+            detail: address.detail,
+        })
+        .collect()
 }

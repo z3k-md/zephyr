@@ -35,6 +35,7 @@ const SECTION_TITLES: Record<string, string> = {
 
 export function rowKey(row: Suggestion): string {
   if (row.kind === 'query') return 'query';
+  if (row.kind === 'netCard') return `netCard-${row.target}`;
   return `${row.kind}-${row.target}-${row.path ?? row.noteId ?? row.label}`;
 }
 
@@ -114,6 +115,19 @@ const COMMANDS: Command[] = [
       'force quit',
     ],
   },
+  {
+    id: 'network',
+    label: 'Network',
+    icon: 'glyph:pulse',
+    names: ['network', 'internet', 'connection'],
+    keywords: ['ping', 'latency', 'jitter', 'lag', 'packet loss'],
+  },
+  {
+    id: 'speedtest',
+    label: 'Run speed test',
+    icon: 'glyph:gauge',
+    names: ['speed test', 'speedtest', 'internet speed', 'test speed'],
+  },
   { id: 'shell', label: 'Shell', icon: 'glyph:prompt', names: ['terminal', 'command line'] },
   {
     id: 'typing',
@@ -189,6 +203,18 @@ function commandRows(ctx: RowCtx): { rows: Suggestion[]; exact: number | null } 
   return { rows, exact };
 }
 
+/** Typed exactly, these show the network card. */
+const NET_WORDS = ['network', 'net', 'ping', 'internet', 'connection', 'latency', 'lag', 'jitter'];
+
+/** The network card as the list's first row; `ip` makes it the addresses card. */
+function netCard(target: 'network' | 'ip'): Suggestion {
+  return { kind: 'netCard', target, label: 'Network', query: '', hint: '', section: 'card' };
+}
+
+function commandRow(command: Command): Suggestion {
+  return view(command.id, command.label, command.icon, {});
+}
+
 /** A launch group's row: its name, its icon, and its apps' icons small beside it. */
 function groupRow(group: LaunchGroup, hint = ''): Suggestion {
   const apps = group.items.filter((item) => item.kind === 'app');
@@ -252,6 +278,30 @@ export function buildRows(
     preselect = 0;
   }
   rows.push(...commands.rows);
+  // "ping", "network" and the like: the network card on top, taking Enter (it opens the
+  // Network view), with the speed test under it.
+  if (NET_WORDS.includes(typed) && !appNamed) {
+    const kept = rows.filter((row) => !(row.kind === 'view' && row.target === 'network'));
+    if (!kept.some((row) => row.kind === 'view' && row.target === 'speedtest')) {
+      kept.unshift(commandRow(COMMANDS.find((command) => command.id === 'speedtest')!));
+    }
+    rows.splice(0, rows.length, netCard('network'), ...kept);
+    preselect = 0;
+  }
+  // "ip": the card is the local address; the view is a ⌘↵ away.
+  if (rows[0]?.kind === 'netCard' && rows[0].target === 'ip') {
+    let last = 0;
+    rows.forEach((row, index) => {
+      if (row.kind === 'answer') last = index;
+    });
+    rows.splice(
+      last + 1,
+      0,
+      view('network', 'Network', 'glyph:pulse', {
+        keyHints: [{ keys: 'mod+enter', label: 'Open' }],
+      })
+    );
+  }
   // An alias the user set, typed exactly, outranks everything, app name matches included.
   const aliased = aliasRow(ctx);
   if (aliased) {
@@ -263,6 +313,7 @@ export function buildRows(
 
 function titleFor(row: Suggestion): string {
   const section = row.section ?? '';
+  if (section === 'card') return '';
   if (section === 'web') {
     if (row.kind === 'remote') return 'Google suggestions';
     return row.target === 'url' ? 'Link' : 'Google';

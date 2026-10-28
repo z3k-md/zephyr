@@ -12,11 +12,11 @@ mod gpu;
 mod handoff;
 mod history;
 mod icons;
-mod ip;
 mod launch_groups;
 mod logger;
 mod login_task;
 mod loopback;
+mod net;
 mod note_windows;
 mod notes;
 mod nowplaying;
@@ -130,7 +130,10 @@ pub fn run() {
                     log::error!("{err}");
                 }
             });
-            // The minute of totals System Resources graphs is always being kept.
+            // The 15 minutes of totals System Resources graphs is always being kept, and the
+            // connection watched unless Settings turned that off.
+            net::set_enabled(snapshot.watch_connection);
+            net::start();
             stats::start(app.handle().clone());
             // The settings catalog reads every System Settings pane's plist on macOS (most of a
             // second); built now, the first search doesn't wait on it.
@@ -245,6 +248,7 @@ pub fn run() {
             commands::save_theme,
             commands::now_playing,
             commands::now_playing_control,
+            commands::now_playing_volume,
             commands::now_playing_focus,
             commands::save_bug_capture,
             commands::reveal_captures,
@@ -265,6 +269,13 @@ pub fn run() {
             commands::weather_at,
             commands::save_weather_place,
             commands::save_weather_unit,
+            commands::network_summary,
+            commands::network_history,
+            commands::network_public_ip,
+            commands::network_addresses,
+            commands::save_watch_connection,
+            commands::speed_test,
+            commands::speed_test_cancel,
             commands::open_onboarding,
             commands::hide_settings,
             commands::window_chrome,
@@ -346,6 +357,7 @@ pub fn run() {
             commands::open_settings,
             commands::check_for_updates,
             commands::update_status,
+            commands::update_waiting,
             commands::update_install_now,
             commands::update_later,
             commands::rehearse_update,
