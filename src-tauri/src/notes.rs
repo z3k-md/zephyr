@@ -169,23 +169,58 @@ pub fn list(query: &str) -> Vec<NoteSummary> {
         if !valid_id(id) {
             continue;
         }
-        let Ok(body) = fs::read_to_string(&path) else {
+        let Some(read) = read_note(&path, html) else {
             continue;
         };
-        let text = plain_text(&body, html);
-        let lower = text.to_lowercase();
-        if !words.iter().all(|word| lower.contains(word.as_str())) {
+        if !words.iter().all(|word| read.lower.contains(word.as_str())) {
             continue;
         }
         notes.push(NoteSummary {
             id: id.to_string(),
-            title: title_of(&text),
-            snippet: snippet_of(&text),
+            title: read.title,
+            snippet: read.snippet,
             updated: modified(&path),
         });
     }
     notes.sort_by(|a, b| b.updated.cmp(&a.updated).then(b.id.cmp(&a.id)));
     notes
+}
+
+/// What the list needs from one note file.
+#[derive(Clone)]
+struct ReadNote {
+    title: String,
+    snippet: String,
+    /// The whole text lowercased, for search.
+    lower: String,
+}
+
+/// A note's title, snippet and searchable text, read again only when the file changed: every
+/// keystroke in `!note` lists them all.
+fn read_note(path: &Path, html: bool) -> Option<ReadNote> {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    use std::time::SystemTime;
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, (SystemTime, ReadNote)>>> = OnceLock::new();
+    let stamp = fs::metadata(path).and_then(|meta| meta.modified()).ok()?;
+    let cache = CACHE.get_or_init(Default::default);
+    if let Ok(cache) = cache.lock()
+        && let Some((seen, read)) = cache.get(path)
+        && *seen == stamp
+    {
+        return Some(read.clone());
+    }
+    let body = fs::read_to_string(path).ok()?;
+    let text = plain_text(&body, html);
+    let read = ReadNote {
+        title: title_of(&text),
+        snippet: snippet_of(&text),
+        lower: text.to_lowercase(),
+    };
+    if let Ok(mut cache) = cache.lock() {
+        cache.insert(path.to_path_buf(), (stamp, read.clone()));
+    }
+    Some(read)
 }
 
 pub fn get(id: &str) -> Result<Note, String> {

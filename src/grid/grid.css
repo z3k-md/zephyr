@@ -1,0 +1,39 @@
+/* The snap grid window. Only it loads these rules. */
+
+/* ---- Snap grid (shown over the screen while the bar is Ctrl+dragged) ---- */
+
+html.grid-page,
+html.grid-page body,
+html.grid-page #app {
+  width: 100%;
+  height: 100%;
+  background: transparent;
+}
+
+.grid {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+}
+
+.grid line {
+  stroke: color-mix(in srgb, var(--focus) 35%, transparent);
+  stroke-width: 1;
+  stroke-dasharray: 6 6;
+}
+
+.grid line.top {
+  stroke-dasharray: 2 6;
+}
+
+.grid line.lit {
+  stroke: var(--focus);
+  stroke-width: 2;
+  stroke-dasharray: none;
+}
+
+.grid .landing {
+  fill: color-mix(in srgb, var(--focus) 10%, transparent);
+  stroke: var(--focus);
+  stroke-width: 2;
+}

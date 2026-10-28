@@ -46,8 +46,9 @@ pub fn launch(app: &AppHandle, id: &str) -> Result<(), String> {
     let group = state
         .snapshot()?
         .launch_groups
-        .into_iter()
+        .iter()
         .find(|group| group.id == id)
+        .cloned()
         .ok_or("That group no longer exists")?;
     crate::window::hide_bar(app);
     let app = app.clone();

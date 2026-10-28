@@ -7,8 +7,9 @@ use serde::{Deserialize, Serialize};
 /// Bang words that scope the bar to apps.
 pub const SCOPE_TRIGGERS: &[&str] = &["app", "apps"];
 
-/// How long a scan stays fresh before a summon triggers a background rescan.
-const STALE_AFTER: Duration = Duration::from_secs(120);
+/// How long a scan stays fresh before a summon triggers a background rescan. Installs are
+/// rare, so a half-hour-old list is still right nearly always.
+const STALE_AFTER: Duration = Duration::from_secs(30 * 60);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct App {
@@ -122,22 +123,26 @@ impl Strength {
 }
 
 pub fn strength(name: &str, query: &str) -> Option<Strength> {
-    let name = name.to_lowercase();
-    let query = query.trim().to_lowercase();
+    strength_lower(&name.to_lowercase(), &query.trim().to_lowercase())
+}
+
+/// `strength` for a name and query already lowercased (and the query trimmed), so a list
+/// ranked for one query lowercases it once.
+fn strength_lower(name: &str, query: &str) -> Option<Strength> {
     if query.is_empty() {
         return None;
     }
     if name == query {
         return Some(Strength::Exact);
     }
-    if name.starts_with(&query) {
+    if name.starts_with(query) {
         return Some(Strength::Prefix);
     }
     let words: Vec<&str> = name
         .split(|ch: char| !ch.is_alphanumeric())
         .filter(|word| !word.is_empty())
         .collect();
-    if (0..words.len()).any(|index| words[index..].join(" ").starts_with(&query)) {
+    if (0..words.len()).any(|index| words[index..].join(" ").starts_with(query)) {
         return Some(Strength::WordPrefix);
     }
     if query.chars().count() >= 2 && !query.contains(' ') {
@@ -145,14 +150,14 @@ pub fn strength(name: &str, query: &str) -> Option<Strength> {
             .iter()
             .filter_map(|word| word.chars().next())
             .collect();
-        if initials.starts_with(&query) {
+        if initials.starts_with(query) {
             return Some(Strength::Initials);
         }
     }
-    if name.contains(&query) {
+    if name.contains(query) {
         return Some(Strength::Substring);
     }
-    if query.chars().count() >= 3 && is_subsequence(&query, &name) {
+    if query.chars().count() >= 3 && is_subsequence(query, name) {
         return Some(Strength::Subsequence);
     }
     None
@@ -170,11 +175,12 @@ pub(crate) fn frecency(launches: &[LaunchEntry], app_id: &str, now: i64) -> f64 
     launches
         .iter()
         .find(|entry| entry.app_id == app_id)
-        .map(|entry| {
-            let age_hours = (now - entry.last_used).max(0) as f64 / 3600.0;
-            entry.uses as f64 / (1.0 + age_hours / 24.0)
-        })
-        .unwrap_or(0.0)
+        .map_or(0.0, |entry| entry_frecency(entry, now))
+}
+
+fn entry_frecency(entry: &LaunchEntry, now: i64) -> f64 {
+    let age_hours = (now - entry.last_used).max(0) as f64 / 3600.0;
+    entry.uses as f64 / (1.0 + age_hours / 24.0)
 }
 
 /// Apps matching `query`, best first: match strength, then launch frecency, then shorter names.
@@ -185,10 +191,19 @@ pub fn ranked<'a>(
     now: i64,
     limit: usize,
 ) -> Vec<(&'a App, Strength)> {
+    let query = query.trim().to_lowercase();
+    // Each app's launches looked up once, not searched for per match.
+    let launched: std::collections::HashMap<&str, f64> = launches
+        .iter()
+        .map(|entry| (entry.app_id.as_str(), entry_frecency(entry, now)))
+        .collect();
     let mut matches: Vec<(&App, Strength, f64)> = apps
         .iter()
         .filter_map(|app| {
-            strength(&app.name, query).map(|found| (app, found, frecency(launches, &app.id, now)))
+            strength_lower(&app.name.to_lowercase(), &query).map(|found| {
+                let score = launched.get(app.id.as_str()).copied().unwrap_or(0.0);
+                (app, found, score)
+            })
         })
         .collect();
     matches.sort_by(|left, right| {
@@ -250,6 +265,22 @@ pub fn preferred<'a>(
         .map(|(app, _)| app)
 }
 
+/// `preferred`, from matches already ranked for this query (best first).
+pub fn preferred_of<'a>(
+    matches: &[(&'a App, Strength)],
+    overrides: &[String],
+    query: &str,
+) -> Option<&'a App> {
+    let query = query.trim();
+    if query.chars().count() < 2 || overrides.iter().any(|entry| *entry == query.to_lowercase()) {
+        return None;
+    }
+    matches
+        .first()
+        .filter(|(_, found)| found.is_strong())
+        .map(|(app, _)| *app)
+}
+
 pub fn record_launch(launches: &mut Vec<LaunchEntry>, app_id: &str, now: i64) {
     if let Some(entry) = launches.iter_mut().find(|entry| entry.app_id == app_id) {
         entry.uses = entry.uses.saturating_add(1);
@@ -284,15 +315,19 @@ pub fn record_override(overrides: &mut Vec<String>, query: &str) {
 /// Installed apps, rescanned in the background so a summon never waits on discovery.
 #[derive(Default)]
 pub struct AppIndex {
-    apps: RwLock<Vec<App>>,
+    /// Shared, so each keystroke's read is a reference count, not a copy of every app.
+    apps: RwLock<std::sync::Arc<Vec<App>>>,
     scanned_at: Mutex<Option<Instant>>,
+    /// The app folders' newest change when the last scan started; a newer one (an install or
+    /// an uninstall) makes the list stale before its time is up.
+    folders_at: Mutex<Option<std::time::SystemTime>>,
     scanning: AtomicBool,
     /// Set once any scan ends, even a failed one, so startup can stop waiting.
     finished: AtomicBool,
 }
 
 impl AppIndex {
-    pub fn snapshot(&self) -> Vec<App> {
+    pub fn snapshot(&self) -> std::sync::Arc<Vec<App>> {
         self.apps
             .read()
             .map(|apps| apps.clone())
@@ -319,8 +354,13 @@ impl AppIndex {
             .ok()
             .and_then(|at| *at)
             .is_some_and(|at| at.elapsed() < STALE_AFTER);
-        if fresh || index.scanning.swap(true, Ordering::SeqCst) {
+        let folders = folders_changed_at();
+        let unchanged = index.folders_at.lock().is_ok_and(|seen| folders <= *seen);
+        if (fresh && unchanged) || index.scanning.swap(true, Ordering::SeqCst) {
             return;
+        }
+        if let Ok(mut seen) = index.folders_at.lock() {
+            *seen = folders;
         }
         std::thread::spawn(move || {
             let started = Instant::now();
@@ -343,7 +383,7 @@ impl AppIndex {
             found.sort_by_key(|app| app.name.to_lowercase());
             log::info!("found {} apps in {:?}", found.len(), started.elapsed());
             if let Ok(mut apps) = index.apps.write() {
-                *apps = found;
+                *apps = std::sync::Arc::new(found);
             }
             if let Ok(mut at) = index.scanned_at.lock() {
                 *at = Some(Instant::now());
@@ -352,6 +392,30 @@ impl AppIndex {
             index.scanning.store(false, Ordering::SeqCst);
         });
     }
+}
+
+/// When the folders apps are installed into last changed: the Start Menu's on Windows,
+/// Applications on macOS. Reading a few folders' times takes microseconds.
+fn folders_changed_at() -> Option<std::time::SystemTime> {
+    let folders: Vec<std::path::PathBuf> = if cfg!(windows) {
+        ["APPDATA", "ProgramData"]
+            .iter()
+            .filter_map(std::env::var_os)
+            .map(|base| {
+                std::path::PathBuf::from(base).join(r"Microsoft\Windows\Start Menu\Programs")
+            })
+            .collect()
+    } else {
+        let mut folders = vec![std::path::PathBuf::from("/Applications")];
+        if let Some(home) = std::env::var_os("HOME") {
+            folders.push(std::path::PathBuf::from(home).join("Applications"));
+        }
+        folders
+    };
+    folders
+        .iter()
+        .filter_map(|folder| std::fs::metadata(folder).ok()?.modified().ok())
+        .max()
 }
 
 pub fn index() -> &'static AppIndex {

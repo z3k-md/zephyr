@@ -66,6 +66,9 @@ pub struct SuggestResponse {
     pub target: Option<String>,
     /// The typed text without any bang.
     pub text: String,
+    /// Whether the second, network pass would add anything (web suggestions, the public
+    /// address), so the bar can skip asking for it.
+    pub remote: bool,
 }
 
 /// Local results (apps, history) come back without waiting on the network unless
@@ -224,6 +227,7 @@ pub async fn gather(
             notice: None,
             target: Some("web".into()),
             text: parsed.query.clone(),
+            remote: false,
         };
     }
     // "wifi settings", "settings dark": the pages lead and Enter opens the best; the web
@@ -237,12 +241,18 @@ pub async fn gather(
     } else {
         Vec::new()
     };
-    let preferred = (offer_apps && intent.is_empty())
-        .then(|| catalog.preferred(&parsed.query))
+    // Ranked once: the app Enter would launch is the best of these.
+    let app_matches = if offer_apps {
+        catalog.ranked(&parsed.query, 4)
+    } else {
+        Vec::new()
+    };
+    let preferred = intent
+        .is_empty()
+        .then(|| apps::preferred_of(&app_matches, catalog.overrides, &parsed.query))
         .flatten();
     let other_apps: Vec<Suggestion> = if offer_apps {
-        catalog
-            .ranked(&parsed.query, 4)
+        app_matches
             .into_iter()
             .filter(|(app, found)| {
                 *found >= apps::Strength::Substring
@@ -362,14 +372,10 @@ pub async fn gather(
 
     // Suggestions only help when free text is going to a search: not under an app match,
     // an inline answer, or a link.
-    if include_remote
-        && !parsed.query.is_empty()
-        && preferred.is_none()
-        && answer.is_none()
-        && !is_url
-    {
-        let remote = fetch_remote(&parsed.query).await;
-        merge_remote(&mut items, remote);
+    let remote = !parsed.query.is_empty() && preferred.is_none() && answer.is_none() && !is_url;
+    if include_remote && remote {
+        let found = fetch_remote(&parsed.query).await;
+        merge_remote(&mut items, found);
     }
     items.truncate(8);
     SuggestResponse {
@@ -383,6 +389,7 @@ pub async fn gather(
             .then_some(0),
         target: Some(if is_url { "url" } else { "web" }.into()),
         text: parsed.query.clone(),
+        remote,
     }
 }
 
@@ -439,6 +446,7 @@ fn port_answers(text: &str, port: Option<u16>) -> SuggestResponse {
         notice,
         target: Some("web".into()),
         text: text.to_string(),
+        remote: false,
     }
 }
 
@@ -487,6 +495,8 @@ async fn ip_answers(text: &str, include_remote: bool) -> SuggestResponse {
         notice: None,
         target: Some("web".into()),
         text: text.to_string(),
+        // The public address comes on the network pass.
+        remote: true,
     }
 }
 
@@ -760,7 +770,7 @@ async fn fetch_remote(query: &str) -> Vec<String> {
     let Some(client) = http_client() else {
         return Vec::new();
     };
-    let response = match client.get(url).send().await {
+    let response = match client.get(url).timeout(Duration::from_secs(4)).send().await {
         Ok(response) if response.status().is_success() => response,
         Ok(response) => {
             log::debug!("suggestions returned {}", response.status());
@@ -785,17 +795,7 @@ async fn fetch_remote(query: &str) -> Vec<String> {
 }
 
 fn http_client() -> Option<&'static reqwest::Client> {
-    use std::sync::OnceLock;
-    static CLIENT: OnceLock<Option<reqwest::Client>> = OnceLock::new();
-    CLIENT
-        .get_or_init(|| {
-            reqwest::Client::builder()
-                .user_agent("Zephyr")
-                .timeout(Duration::from_secs(4))
-                .build()
-                .ok()
-        })
-        .as_ref()
+    Some(crate::util::http())
 }
 
 fn string_list(value: Option<&Value>, query: &str) -> Vec<String> {

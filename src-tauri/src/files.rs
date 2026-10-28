@@ -655,11 +655,18 @@ impl FileIndex {
             *path = cache_path.clone();
         }
         std::thread::spawn(move || {
-            {
+            let fresh = {
                 let _writing = self.writer.lock();
                 let cached = cache_path
                     .as_deref()
                     .and_then(|path| load_cache(path, &config));
+                // How old the saved index is: a recent one is trusted, and the watcher keeps
+                // it current from here, so startup skips the walk.
+                let cache_age = cache_path
+                    .as_deref()
+                    .and_then(|path| std::fs::metadata(path).ok()?.modified().ok())
+                    .and_then(|modified| modified.elapsed().ok());
+                let loaded = cached.is_some();
                 if let Ok(mut contents) = self.contents.write() {
                     let unchanged = contents.config.roots == config.roots;
                     contents.config = config.clone();
@@ -669,9 +676,20 @@ impl FileIndex {
                         contents.entries.clear();
                     }
                 }
-            }
+                match cache_age.filter(|age| loaded && *age < STALE_AFTER) {
+                    Some(age) => {
+                        if let Ok(mut at) = self.scanned_at.lock() {
+                            *at = Instant::now().checked_sub(age);
+                        }
+                        true
+                    }
+                    None => false,
+                }
+            };
             self.watch(&config);
-            self.rescan();
+            if !fresh {
+                self.rescan();
+            }
         });
     }
 

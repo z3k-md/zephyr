@@ -2,7 +2,7 @@
   import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { bindingFailures, errorMessage, saveBinding, takePendingBinding } from '../api';
-  import { commandTargets } from '../bar/rows';
+  import { commandTargets, targetKind } from '../bar/rows';
   import { formatShortcut } from '../keys';
   import ShortcutRecorder from '../components/ShortcutRecorder.vue';
   import type { Binding, Snapshot } from '../types';
@@ -14,7 +14,7 @@
   const props = defineProps<{ snapshot: Snapshot }>();
   const emit = defineEmits<{ apply: [snapshot: Snapshot] }>();
 
-  // Commands, plus each launch group.
+  // Views, searches and commands, plus each launch group.
   const COMMANDS = computed(() => [
     ...commandTargets(),
     ...(props.snapshot.launchGroups ?? []).map((group) => ({
@@ -40,12 +40,6 @@
 
   function blank(target: string, label: string): Binding {
     return { target, label, hotkey: '', alias: '', direct: false };
-  }
-
-  function kindOf(target: string): string {
-    if (target.startsWith('app:')) return 'App';
-    if (target.startsWith('bookmark:')) return 'Bookmark';
-    return 'Command';
   }
 
   async function takePending() {
@@ -131,7 +125,7 @@
     >
       <div class="binding-head">
         <strong>{{ binding.label }}</strong>
-        <span class="hint-text">{{ kindOf(binding.target) }}</span>
+        <span class="hint-text">{{ targetKind(binding.target) }}</span>
         <button type="button" class="binding-remove" @click="remove(binding)">Remove</button>
       </div>
       <div class="binding-fields">

@@ -28,6 +28,7 @@ pub struct Bookmark {
     pub source: String,
 }
 
+#[derive(Clone)]
 struct Profile {
     /// `chrome/Default`.
     id: String,
@@ -38,8 +39,14 @@ struct Profile {
 #[derive(Default)]
 struct Index {
     checked: Option<Instant>,
+    /// Each browser's `Local State` and when it changed: profiles are listed again only
+    /// when one does (a profile added or removed), not on every check.
+    local_states: Vec<(PathBuf, Option<SystemTime>)>,
+    profiles: Vec<Profile>,
     stamps: Vec<(PathBuf, Option<SystemTime>)>,
     bookmarks: Vec<Bookmark>,
+    /// Each bookmark's folder, lowercased, and its site, worked out once per read.
+    keys: Vec<(String, String)>,
 }
 
 fn index() -> &'static Mutex<Index> {
@@ -186,7 +193,16 @@ fn refresh(index: &mut Index) {
     if cfg!(test) {
         return;
     }
-    let profiles = profiles();
+    let local_states = stamped(
+        browser_roots()
+            .into_iter()
+            .map(|(_, _, root)| root.join("Local State")),
+    );
+    if local_states != index.local_states {
+        index.local_states = local_states;
+        index.profiles = profiles();
+    }
+    let profiles = index.profiles.clone();
     let stamps: Vec<(PathBuf, Option<SystemTime>)> = profiles
         .iter()
         .flat_map(|profile| profile.files.iter())
@@ -217,7 +233,27 @@ fn refresh(index: &mut Index) {
             }
         }
     }
+    index.keys = keys(&bookmarks);
     index.bookmarks = bookmarks;
+}
+
+fn stamped(paths: impl Iterator<Item = PathBuf>) -> Vec<(PathBuf, Option<SystemTime>)> {
+    paths
+        .map(|path| {
+            let modified = std::fs::metadata(&path)
+                .and_then(|meta| meta.modified())
+                .ok();
+            (path, modified)
+        })
+        .collect()
+}
+
+/// What a bookmark matches besides its title: its folder, lowercased, and its site.
+fn keys(bookmarks: &[Bookmark]) -> Vec<(String, String)> {
+    bookmarks
+        .iter()
+        .map(|bookmark| (bookmark.folder.to_lowercase(), host(&bookmark.url)))
+        .collect()
 }
 
 /// The bookmark titled exactly `query` (any case), which Enter may open like an app.
@@ -241,10 +277,20 @@ pub fn search(query: &str, limit: usize) -> Vec<Bookmark> {
         return Vec::new();
     };
     refresh(&mut index);
-    rank(&index.bookmarks, query, limit)
+    rank_by(&index.bookmarks, &index.keys, query, limit)
 }
 
+#[cfg(test)]
 pub fn rank(bookmarks: &[Bookmark], query: &str, limit: usize) -> Vec<Bookmark> {
+    rank_by(bookmarks, &keys(bookmarks), query, limit)
+}
+
+fn rank_by(
+    bookmarks: &[Bookmark],
+    keys: &[(String, String)],
+    query: &str,
+    limit: usize,
+) -> Vec<Bookmark> {
     let query = query.trim();
     if query.is_empty() {
         return bookmarks.iter().take(limit).cloned().collect();
@@ -252,7 +298,8 @@ pub fn rank(bookmarks: &[Bookmark], query: &str, limit: usize) -> Vec<Bookmark> 
     let lower = query.to_lowercase();
     let mut scored: Vec<(u8, &Bookmark)> = bookmarks
         .iter()
-        .filter_map(|bookmark| {
+        .zip(keys)
+        .filter_map(|(bookmark, (folder, site))| {
             let title = apps::strength(&bookmark.title, query).map(|found| match found {
                 Strength::Exact => 6,
                 Strength::Prefix => 5,
@@ -261,9 +308,7 @@ pub fn rank(bookmarks: &[Bookmark], query: &str, limit: usize) -> Vec<Bookmark> 
                 Strength::Substring => 2,
                 Strength::Subsequence => 0,
             });
-            let elsewhere = (bookmark.folder.to_lowercase().contains(&lower)
-                || host(&bookmark.url).contains(&lower))
-            .then_some(1);
+            let elsewhere = (folder.contains(&lower) || site.contains(&lower)).then_some(1);
             title
                 .filter(|score| *score > 0)
                 .or(elsewhere)

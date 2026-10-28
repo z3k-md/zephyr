@@ -3,7 +3,7 @@
 //! and only the rows that can show are sent to the page, about once a second while it is
 //! open. The process table is dropped half a minute after the view closes.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
 use std::sync::Mutex;
 use std::time::Instant;
@@ -43,6 +43,8 @@ pub struct Row {
     pub memory: Option<u64>,
     /// Bytes read and written per second.
     pub disk: Option<u64>,
+    /// Windows: the busiest GPU engine any of its processes uses, 0–100.
+    pub gpu: Option<f32>,
     pub user: String,
     /// The app bundle or program, for Reveal and Copy Path.
     pub path: String,
@@ -66,6 +68,9 @@ pub struct Snapshot {
     pub processes: usize,
     /// Seconds since the computer started.
     pub uptime: u64,
+    /// None on a computer without one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub battery: Option<Battery>,
 }
 
 struct Table {
@@ -79,6 +84,9 @@ struct Table {
     /// macOS: each process's CPU time and disk bytes at the last tick.
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     counters: HashMap<u32, (u64, u64)>,
+    /// Each row's CPU and memory, a reading a tick while the view is open, for the detail
+    /// pane's graph.
+    histories: HashMap<String, VecDeque<(Instant, f32, u64)>>,
     last: Instant,
     used: Instant,
 }
@@ -169,6 +177,7 @@ impl Identity {
             cpu: None,
             memory: None,
             disk: None,
+            gpu: None,
             user: self.user.clone(),
             path: self.path.clone(),
             command: self.command.clone(),
@@ -240,6 +249,7 @@ pub fn snapshot(sort: &str, filter: &str, limit: usize) -> Snapshot {
         described: HashSet::new(),
         identities: HashMap::new(),
         counters: HashMap::new(),
+        histories: HashMap::new(),
         last: Instant::now(),
         used: Instant::now(),
     });
@@ -264,6 +274,12 @@ pub fn snapshot(sort: &str, filter: &str, limit: usize) -> Snapshot {
     }
     let processes = table.identities.len();
     let mut rows: Vec<Row> = groups.into_values().collect();
+    let gpu = stats::gpu_by_process();
+    for row in &mut rows {
+        let busiest = row.pids.iter().filter_map(|pid| gpu.get(pid)).copied();
+        row.gpu = (!gpu.is_empty()).then(|| busiest.fold(0.0, f32::max));
+    }
+    remember(table, &rows);
     drop(guard);
 
     let filter = filter.trim().to_lowercase();
@@ -289,6 +305,7 @@ pub fn snapshot(sort: &str, filter: &str, limit: usize) -> Snapshot {
         rows,
         processes,
         uptime: System::uptime(),
+        battery: battery(),
     }
 }
 
@@ -442,6 +459,7 @@ fn sort_rows(rows: &mut [Row], sort: &str) {
             match sort {
                 "memory" => row.memory.map(|value| value as f64),
                 "disk" => row.disk.map(|value| value as f64),
+                "gpu" => row.gpu.map(f64::from),
                 "name" => None,
                 _ => row.cpu.map(f64::from),
             }
@@ -456,6 +474,214 @@ fn sort_rows(rows: &mut [Row], sort: &str) {
             (None, None) => left.name.cmp(&right.name),
         }
     });
+}
+
+/// How far back a row's detail graph goes, like the tiles.
+const HISTORY: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+
+/// Adds this tick's reading to each row's history, and forgets rows that are gone.
+fn remember(table: &mut Table, rows: &[Row]) {
+    let now = Instant::now();
+    let seen: HashSet<&str> = rows.iter().map(|row| row.key.as_str()).collect();
+    table.histories.retain(|key, _| seen.contains(key.as_str()));
+    for row in rows {
+        let (Some(cpu), Some(memory)) = (row.cpu, row.memory) else {
+            continue;
+        };
+        let history = table.histories.entry(row.key.clone()).or_default();
+        while history
+            .front()
+            .is_some_and(|(at, _, _)| at.elapsed() > HISTORY)
+        {
+            history.pop_front();
+        }
+        history.push_back((now, cpu, memory));
+    }
+}
+
+/// One row in depth, for Show info: its processes' facts and its CPU and memory since the
+/// view opened.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Detail {
+    pub key: String,
+    /// The first (oldest) process's ID, its parent's name and when it started, in seconds
+    /// since 1970.
+    pub pid: u32,
+    pub parent: String,
+    pub started: u64,
+    /// Bytes read and written since each process started, summed.
+    pub read: u64,
+    pub written: u64,
+    /// Oldest first: seconds ago, CPU %, memory bytes.
+    pub history: Vec<(f32, f32, u64)>,
+}
+
+pub fn detail(key: &str, pids: &[u32]) -> Option<Detail> {
+    let guard = TABLE.lock().ok()?;
+    let table = guard.as_ref()?;
+    let processes: Vec<&sysinfo::Process> = pids
+        .iter()
+        .filter_map(|pid| table.system.process(Pid::from_u32(*pid)))
+        .collect();
+    let first = processes.iter().min_by_key(|process| process.start_time());
+    let parent = first
+        .and_then(|process| process.parent())
+        .and_then(|parent| table.system.process(parent))
+        .map(|parent| parent.name().to_string_lossy().into_owned())
+        .unwrap_or_default();
+    Some(Detail {
+        key: key.to_string(),
+        pid: first.map_or(pids.first().copied().unwrap_or(0), |process| {
+            process.pid().as_u32()
+        }),
+        parent,
+        started: first.map_or(0, |process| process.start_time()),
+        read: processes
+            .iter()
+            .map(|process| process.disk_usage().total_read_bytes)
+            .sum(),
+        written: processes
+            .iter()
+            .map(|process| process.disk_usage().total_written_bytes)
+            .sum(),
+        history: table
+            .histories
+            .get(key)
+            .map(|history| {
+                history
+                    .iter()
+                    .map(|(at, cpu, memory)| (at.elapsed().as_secs_f32(), *cpu, *memory))
+                    .collect()
+            })
+            .unwrap_or_default(),
+    })
+}
+
+/// The battery, read at most every 30 seconds.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Battery {
+    /// 0–100.
+    pub percent: f32,
+    /// `charging`, `discharging`, `full` or `unknown`.
+    pub state: String,
+    /// Seconds until empty (discharging) or full (charging), where the system estimates it.
+    pub seconds_left: Option<u64>,
+}
+
+fn battery() -> Option<Battery> {
+    static CACHE: Mutex<Option<(Instant, Option<Battery>)>> = Mutex::new(None);
+    let mut cache = CACHE.lock().ok()?;
+    if let Some((at, battery)) = cache.as_ref()
+        && at.elapsed().as_secs() < 30
+    {
+        return battery.clone();
+    }
+    let read = read_battery();
+    *cache = Some((Instant::now(), read.clone()));
+    read
+}
+
+fn read_battery() -> Option<Battery> {
+    use starship_battery::State;
+    use starship_battery::units::ratio::percent;
+    use starship_battery::units::time::second;
+    let manager = starship_battery::Manager::new().ok()?;
+    let battery = manager.batteries().ok()?.flatten().next()?;
+    let (state, left) = match battery.state() {
+        State::Charging => ("charging", battery.time_to_full()),
+        State::Discharging => ("discharging", battery.time_to_empty()),
+        State::Full => ("full", None),
+        _ => ("unknown", None),
+    };
+    Some(Battery {
+        percent: battery.state_of_charge().get::<percent>(),
+        state: state.into(),
+        seconds_left: left.map(|time| time.get::<second>() as u64),
+    })
+}
+
+/// Where the memory is, for the Memory drill-in. Windows: what's in use, the modified and
+/// standby lists (cache Windows can hand back) and what's free, plus the commit charge.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryBreakdown {
+    pub total: u64,
+    pub in_use: u64,
+    pub modified: u64,
+    pub standby: u64,
+    pub free: u64,
+    pub committed: u64,
+    pub commit_limit: u64,
+    pub paged_pool: u64,
+    pub nonpaged_pool: u64,
+}
+
+#[cfg(windows)]
+pub fn memory_breakdown() -> Option<MemoryBreakdown> {
+    use windows::Win32::System::Performance::{
+        PDH_FMT_COUNTERVALUE, PDH_FMT_LARGE, PDH_HCOUNTER, PDH_HQUERY, PdhAddEnglishCounterW,
+        PdhCloseQuery, PdhCollectQueryData, PdhGetFormattedCounterValue, PdhOpenQueryW,
+    };
+    use windows::Win32::System::ProcessStatus::{GetPerformanceInfo, PERFORMANCE_INFORMATION};
+    use windows::core::{PCWSTR, w};
+
+    let mut info = PERFORMANCE_INFORMATION {
+        cb: std::mem::size_of::<PERFORMANCE_INFORMATION>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: a structure of the size it says it is.
+    unsafe { GetPerformanceInfo(&mut info, info.cb) }.ok()?;
+    let page = info.PageSize as u64;
+
+    // The page lists, as Resource Monitor reads them.
+    let paths: [PCWSTR; 5] = [
+        w!("\\Memory\\Modified Page List Bytes"),
+        w!("\\Memory\\Standby Cache Core Bytes"),
+        w!("\\Memory\\Standby Cache Normal Priority Bytes"),
+        w!("\\Memory\\Standby Cache Reserve Bytes"),
+        w!("\\Memory\\Free & Zero Page List Bytes"),
+    ];
+    let mut values = [0u64; 5];
+    // SAFETY: a query opened, read once and closed here, with counters added to it.
+    unsafe {
+        let mut query = PDH_HQUERY::default();
+        if PdhOpenQueryW(None, 0, &mut query) == 0 {
+            let mut counters = [PDH_HCOUNTER::default(); 5];
+            for (path, counter) in paths.iter().zip(counters.iter_mut()) {
+                let _ = PdhAddEnglishCounterW(query, *path, 0, counter);
+            }
+            if PdhCollectQueryData(query) == 0 {
+                for (counter, value) in counters.iter().zip(values.iter_mut()) {
+                    let mut out = PDH_FMT_COUNTERVALUE::default();
+                    if PdhGetFormattedCounterValue(*counter, PDH_FMT_LARGE, None, &mut out) == 0 {
+                        *value = out.Anonymous.largeValue.max(0) as u64;
+                    }
+                }
+            }
+            PdhCloseQuery(query);
+        }
+    }
+    let total = info.PhysicalTotal as u64 * page;
+    let available = info.PhysicalAvailable as u64 * page;
+    Some(MemoryBreakdown {
+        total,
+        in_use: total.saturating_sub(available),
+        modified: values[0],
+        standby: values[1] + values[2] + values[3],
+        free: values[4],
+        committed: info.CommitTotal as u64 * page,
+        commit_limit: info.CommitLimit as u64 * page,
+        paged_pool: info.KernelPaged as u64 * page,
+        nonpaged_pool: info.KernelNonpaged as u64 * page,
+    })
+}
+
+/// macOS fills this in from host_statistics64 (to come).
+#[cfg(not(windows))]
+pub fn memory_breakdown() -> Option<MemoryBreakdown> {
+    None
 }
 
 /// Quits (or with `force`, kills) every process in a group. Apps are asked to quit the way

@@ -1,0 +1,140 @@
+/* The update window. Only it loads these rules. */
+
+/* ---- Update card ---- */
+
+html.update-page,
+html.update-page body,
+html.update-page #app {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: transparent;
+}
+
+.update-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-sizing: border-box;
+  height: 100%;
+  padding: 14px 14px 12px;
+  color: var(--fg);
+  /* Without the native blur (macOS) the card needs the denser tint to stay readable. */
+  background: var(--glass-strong);
+  border: 1px solid var(--stroke-strong);
+  border-radius: 12px;
+  box-shadow: inset 0 1px 0 var(--highlight);
+  font-size: 13px;
+  user-select: none;
+  cursor: default;
+}
+
+/* Windows blurs behind the card and clips it to 8px corners (window.rs). */
+[data-platform='windows'] .update-card {
+  background: var(--glass);
+  border-radius: 8px;
+}
+
+.update-head {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-width: 0;
+}
+
+.update-icon {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: var(--focus);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.update-card.failed .update-icon {
+  stroke: var(--notice);
+}
+
+.update-text {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.update-text span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.update-percent {
+  flex: none;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.update-bar {
+  height: 4px;
+  overflow: hidden;
+  background: var(--chip);
+  border-radius: 2px;
+}
+
+.update-bar span {
+  display: block;
+  height: 100%;
+  background: var(--focus);
+  border-radius: 2px;
+  transition: width 0.12s linear;
+}
+
+/* No size from the server yet: a sliver slides along instead. */
+.update-bar.unknown span {
+  animation: update-slide 1.2s ease-in-out infinite;
+}
+
+@keyframes update-slide {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(340%);
+  }
+}
+
+.update-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: auto;
+}
+
+.update-actions button {
+  padding: 5px 12px;
+  font-size: 12px;
+  background: var(--chip);
+  border: 1px solid var(--stroke);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.update-actions button:hover {
+  background: var(--chip-hover);
+}
+
+.update-actions button.primary {
+  color: var(--active-fg);
+  background: var(--active);
+  border-color: transparent;
+}
+
+.update-actions button.primary:hover {
+  opacity: 0.9;
+}

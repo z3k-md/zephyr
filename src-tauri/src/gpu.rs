@@ -17,12 +17,21 @@ pub struct Gpu {
     /// the computer's memory (Apple silicon) or it can't be read.
     pub memory_used: u64,
     pub memory_total: u64,
+    /// The main GPU's temperature in °C, where its driver reports one.
+    #[serde(skip)]
+    pub temperature: Option<f32>,
 }
 
 #[cfg(windows)]
 mod platform {
     use std::collections::HashMap;
 
+    use windows::Wdk::Graphics::Direct3D::{
+        D3DKMT_ADAPTER_PERFDATA, D3DKMT_CLOSEADAPTER, D3DKMT_OPENADAPTERFROMLUID,
+        D3DKMT_QUERYADAPTERINFO, D3DKMTCloseAdapter, D3DKMTOpenAdapterFromLuid,
+        D3DKMTQueryAdapterInfo, KMTQAITYPE_ADAPTERPERFDATA,
+    };
+    use windows::Win32::Foundation::LUID;
     use windows::Win32::Graphics::Dxgi::{
         CreateDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE, IDXGIFactory1,
     };
@@ -43,6 +52,9 @@ mod platform {
         memory: PDH_HCOUNTER,
         /// The GPU with the most memory of its own, whose memory the reading shows.
         main: Option<Adapter>,
+        /// Each process's load from the last reading: its busiest engine, as Task Manager
+        /// shows it.
+        by_process: HashMap<u32, f32>,
     }
 
     struct Adapter {
@@ -50,6 +62,36 @@ mod platform {
         memory: u64,
         /// How the counters name it, lowercased: `luid_0x00000000_0x0000cd88`.
         luid: String,
+        /// The kernel graphics handle its temperature is read through, as Task Manager's is;
+        /// none where it couldn't be opened.
+        kmt: Option<u32>,
+    }
+
+    impl Drop for Adapter {
+        fn drop(&mut self) {
+            if let Some(handle) = self.kmt {
+                let close = D3DKMT_CLOSEADAPTER { hAdapter: handle };
+                // SAFETY: a handle this adapter opened and nothing else uses.
+                unsafe {
+                    let _ = D3DKMTCloseAdapter(&close);
+                }
+            }
+        }
+    }
+
+    /// The GPU's temperature as the driver reports it to Windows (in tenths of a degree),
+    /// for vendors that do; 0 means it doesn't.
+    fn temperature(handle: u32) -> Option<f32> {
+        let mut data = D3DKMT_ADAPTER_PERFDATA::default();
+        let mut query = D3DKMT_QUERYADAPTERINFO {
+            hAdapter: handle,
+            Type: KMTQAITYPE_ADAPTERPERFDATA,
+            pPrivateDriverData: (&mut data as *mut D3DKMT_ADAPTER_PERFDATA).cast(),
+            PrivateDriverDataSize: std::mem::size_of::<D3DKMT_ADAPTER_PERFDATA>() as u32,
+        };
+        // SAFETY: the query points at a perf-data structure of the size it says.
+        let status = unsafe { D3DKMTQueryAdapterInfo(&mut query) };
+        (status.is_ok() && data.Temperature > 0).then(|| data.Temperature as f32 / 10.0)
     }
 
     // SAFETY: PDH handles can be used from any thread, and the reader is only ever used
@@ -91,7 +133,13 @@ mod platform {
                 engines,
                 memory,
                 main: main_adapter(),
+                by_process: HashMap::new(),
             })
+        }
+
+        /// Each process's GPU load from the last reading, 0–100.
+        pub fn by_process(&self) -> HashMap<u32, f32> {
+            self.by_process.clone()
         }
 
         pub fn read(&mut self) -> Option<Gpu> {
@@ -102,9 +150,22 @@ mod platform {
             // An engine's load is the sum of what each process uses of it; the GPU's is its
             // busiest engine's.
             let mut engines: HashMap<String, f64> = HashMap::new();
+            let mut per_process: HashMap<(u32, String), f64> = HashMap::new();
             for (name, value) in values(self.engines) {
-                let engine = name.split_once("_luid_").map_or(&*name, |(_, rest)| rest);
+                let (owner, engine) = name.split_once("_luid_").unwrap_or(("", &name));
                 *engines.entry(engine.to_string()).or_default() += value;
+                if let Some(pid) = owner
+                    .strip_prefix("pid_")
+                    .and_then(|pid| pid.split('_').next())
+                    .and_then(|pid| pid.parse::<u32>().ok())
+                {
+                    *per_process.entry((pid, engine.to_string())).or_default() += value;
+                }
+            }
+            self.by_process.clear();
+            for ((pid, _), value) in per_process {
+                let busiest = self.by_process.entry(pid).or_default();
+                *busiest = busiest.max(value.min(100.0) as f32);
             }
             let usage = engines.values().copied().fold(0.0, f64::max).min(100.0) as f32;
             let mut gpu = Gpu {
@@ -118,6 +179,7 @@ mod platform {
                     .into_iter()
                     .find(|(name, _)| name.to_ascii_lowercase().starts_with(&main.luid))
                     .map_or(0, |(_, used)| used as u64);
+                gpu.temperature = main.kmt.and_then(temperature);
             }
             Some(gpu)
         }
@@ -187,6 +249,7 @@ mod platform {
         unsafe {
             let factory: IDXGIFactory1 = CreateDXGIFactory1().ok()?;
             let mut best: Option<Adapter> = None;
+            let mut best_luid = LUID::default();
             for index in 0.. {
                 let Ok(adapter) = factory.EnumAdapters1(index) else {
                     break;
@@ -209,7 +272,18 @@ mod platform {
                         "luid_0x{:08x}_0x{:08x}",
                         desc.AdapterLuid.HighPart as u32, desc.AdapterLuid.LowPart
                     ),
+                    kmt: None,
                 });
+                best_luid = desc.AdapterLuid;
+            }
+            if let Some(adapter) = best.as_mut() {
+                let mut open = D3DKMT_OPENADAPTERFROMLUID {
+                    AdapterLuid: best_luid,
+                    hAdapter: 0,
+                };
+                if D3DKMTOpenAdapterFromLuid(&mut open).is_ok() {
+                    adapter.kmt = Some(open.hAdapter);
+                }
             }
             best
         }
@@ -320,6 +394,7 @@ mod platform {
                         .unwrap_or(0)
                         .max(0) as u64,
                     memory_total: vram_total(service),
+                    temperature: None,
                 })
             } else {
                 None

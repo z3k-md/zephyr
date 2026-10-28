@@ -178,13 +178,9 @@ pub async fn public() -> Option<String> {
     {
         return Some(ip.clone());
     }
-    let client = reqwest::Client::builder()
-        .user_agent("Zephyr")
-        .timeout(Duration::from_secs(2))
-        .build()
-        .ok()?;
-    let text = client
+    let text = crate::util::http()
         .get("https://api.ipify.org")
+        .timeout(Duration::from_secs(2))
         .send()
         .await
         .ok()?

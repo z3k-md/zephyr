@@ -1,4 +1,5 @@
 <script setup lang="ts">
+  import './settings.css';
   import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
   import { getVersion } from '@tauri-apps/api/app';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
@@ -20,6 +21,8 @@
     saveBugCapture,
     saveShowStats,
     saveWatchConnection,
+    saveCpuTemp,
+    cpuTempStatus,
     speedTest,
     openOnboarding,
     hideSettings,
@@ -524,6 +527,52 @@
     if (snapshot.value) await save(saveShowStats(!snapshot.value.showStats));
   }
 
+  // Windows CPU temperature: turning it on or off waits on Windows' permission prompt; while
+  // Resources is open, the line under it says what the helper last read.
+  const cpuTempBusy = ref(false);
+  const cpuTempError = ref('');
+  const cpuTempNow = ref<number | null>(null);
+  async function toggleCpuTemp() {
+    if (!snapshot.value) return;
+    const next = !snapshot.value.cpuTemp;
+    cpuTempBusy.value = true;
+    cpuTempError.value = '';
+    try {
+      apply(await saveCpuTemp(next));
+    } catch (error) {
+      cpuTempError.value = errorMessage(error);
+    } finally {
+      cpuTempBusy.value = false;
+    }
+  }
+  let cpuTempTimer = 0;
+  watch(
+    () => active.value === 'resources' && !!snapshot.value?.cpuTemp,
+    (watching) => {
+      window.clearInterval(cpuTempTimer);
+      cpuTempTimer = 0;
+      if (!watching || isMac) return;
+      const check = () =>
+        void cpuTempStatus()
+          .then((status) => (cpuTempNow.value = status.celsius))
+          .catch(() => undefined);
+      check();
+      cpuTempTimer = window.setInterval(check, 2000);
+    },
+    { immediate: true }
+  );
+  onUnmounted(() => window.clearInterval(cpuTempTimer));
+  const cpuTempLine = computed(() => {
+    if (cpuTempBusy.value) return 'Waiting for Windows to ask for permission…';
+    if (cpuTempError.value) return cpuTempError.value;
+    if (!snapshot.value?.cpuTemp) {
+      return 'Off. Some anti-cheat and antivirus tools are wary of hardware drivers.';
+    }
+    return cpuTempNow.value !== null
+      ? `Reading ${Math.round(cpuTempNow.value)} °C`
+      : 'Starting the helper…';
+  });
+
   async function toggleWatch() {
     if (snapshot.value) await save(saveWatchConnection(!snapshot.value.watchConnection));
   }
@@ -789,7 +838,7 @@
               save(saveOpenBehavior(($event.target as HTMLSelectElement).value === 'return'))
             "
           >
-            <option value="return">Return to what I was doing</option>
+            <option value="return">Return to what I was doing, for 5 minutes</option>
             <option value="search">Always start at the search bar</option>
           </select>
         </label>
@@ -984,9 +1033,24 @@
             :disabled="busy"
             @change="toggleStats"
           />
-          Show CPU, GPU and memory at the bottom of the bar
+          Show CPU, GPU and memory in the status bar
           <InfoTip text="A click on them opens System Resources." />
         </label>
+        <template v-if="!isMac">
+          <label class="check">
+            <input
+              type="checkbox"
+              :checked="snapshot.cpuTemp"
+              :disabled="busy || cpuTempBusy"
+              @change="toggleCpuTemp"
+            />
+            Show CPU temperature
+            <InfoTip
+              text="Windows only lets a driver read the CPU's temperature. This installs PawnIO, a signed open-source driver, and a small Zephyr helper that runs as administrator to read it. Windows asks for permission once, and again to remove the helper when you turn it off."
+            />
+          </label>
+          <p class="hint-text cpu-temp-line">{{ cpuTempLine }}</p>
+        </template>
       </section>
 
       <section v-if="snapshot" v-show="!search && active === 'network'" id="section-network">

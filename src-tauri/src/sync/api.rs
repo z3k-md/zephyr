@@ -1,7 +1,6 @@
 //! The Supabase calls sync needs: Google sign-in (PKCE) and the `zephyr` schema over PostgREST.
 //! Requests go from Rust only; the webview never sees a token.
 
-use std::sync::OnceLock;
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -14,23 +13,13 @@ pub const URL: &str = "https://vlyelwpkjgrfjahoipko.supabase.co";
 pub const PUBLISHABLE_KEY: &str = "sb_publishable_xj27Hok09y4grU6NVALTKw_bglh7YvO";
 
 fn http() -> Result<&'static reqwest::Client, String> {
-    static CLIENT: OnceLock<Result<reqwest::Client, String>> = OnceLock::new();
-    CLIENT
-        .get_or_init(|| {
-            reqwest::Client::builder()
-                .connect_timeout(Duration::from_secs(8))
-                .timeout(Duration::from_secs(20))
-                .user_agent("Zephyr")
-                .build()
-                .map_err(|err| err.to_string())
-        })
-        .as_ref()
-        .map_err(Clone::clone)
+    Ok(crate::util::http())
 }
 
 async fn send(request: reqwest::RequestBuilder) -> Result<Value, String> {
     let response = request
         .header("apikey", PUBLISHABLE_KEY)
+        .timeout(Duration::from_secs(20))
         .send()
         .await
         .map_err(|err| {

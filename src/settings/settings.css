@@ -1,0 +1,1411 @@
+/* Settings and first-run setup. Only their windows load these rules; the shared theme and
+   controls are in styles.css. */
+
+/* ---- Sync ---- */
+
+.recovery-key {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 0;
+}
+
+.recovery-key code,
+.device-words {
+  padding: 8px 12px;
+  border: 1px solid var(--stroke-strong);
+  border-radius: 8px;
+  background: var(--panel);
+  font:
+    14px/1.5 ui-monospace,
+    'SF Mono',
+    Menlo,
+    Consolas,
+    monospace;
+  letter-spacing: 0.04em;
+  user-select: all;
+}
+
+.device-words {
+  display: inline-block;
+  font-size: 16px;
+}
+
+/* ---- Settings ---- */
+
+/* A toolbar across the top (title, search, window buttons) over a sidebar of pages beside
+   the page itself. The window never scrolls; the page scrolls inside, and the sidebar stays
+   put. Below 640 px the sidebar is a rail of icons. */
+.settings {
+  display: grid;
+  grid-template-rows: 50px minmax(0, 1fr);
+  grid-template-columns: 212px minmax(0, 1fr);
+  height: 100vh;
+  background: var(--bg-solid);
+}
+
+/* Lighter glass over the window's own, with an edge like a pane divider; it runs up behind
+   the title. */
+.settings-side {
+  grid-row: 1 / -1;
+  grid-column: 1;
+  background: var(--side);
+  box-shadow:
+    inset -1px 0 0 rgba(0, 0, 0, 0.35),
+    inset -2px 0 0 rgba(255, 255, 255, 0.05);
+}
+
+/* The toolbar: a drag strip (double-click maximizes) whose title spans the sidebar, so the
+   search starts where the page's title does. */
+.settings-titlebar {
+  display: flex;
+  grid-row: 1;
+  grid-column: 1 / -1;
+  align-items: center;
+  min-width: 0;
+  /* Over the sidebar's glass, which comes later in the page. */
+  position: relative;
+  z-index: 1;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.settings-title {
+  flex: none;
+  box-sizing: border-box;
+  width: 212px;
+  padding-left: 16px;
+  color: var(--fg);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+/* macOS keeps its traffic lights at the left of the toolbar. */
+[data-platform='macos'] .settings-title {
+  padding-left: 76px;
+}
+
+.settings-find {
+  position: relative;
+  flex: none;
+  width: 248px;
+  margin-left: 32px;
+}
+
+.settings-find-icon {
+  position: absolute;
+  top: 50%;
+  left: 9px;
+  width: 13px;
+  height: 13px;
+  transform: translateY(-50%);
+  fill: none;
+  stroke: var(--faint);
+  stroke-width: 2;
+  stroke-linecap: round;
+  pointer-events: none;
+}
+
+.settings-search {
+  box-sizing: border-box;
+  width: 100%;
+  height: 30px;
+  padding: 0 52px 0 28px;
+  border: 1px solid var(--stroke-strong);
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.18);
+  outline: none;
+  font-size: 13px;
+}
+
+.settings-search:focus {
+  border-color: var(--focus);
+}
+
+.settings-find-keys {
+  position: absolute;
+  top: 50%;
+  right: 7px;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.settings-search:focus ~ .settings-find-keys {
+  display: none;
+}
+
+/* A bug capture running, or a snapshot just taken, after the search. */
+.capture-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 16px;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.capture-note.recording::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #ef4444;
+  box-shadow: 0 0 6px rgba(239, 68, 68, 0.8);
+}
+
+.window-buttons {
+  display: flex;
+  align-self: flex-start;
+  margin-left: auto;
+}
+
+.window-buttons button {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 50px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: default;
+}
+
+.window-buttons button:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--fg);
+}
+
+.window-buttons button.close:hover {
+  background: #c42b1c;
+  color: #fff;
+}
+
+.window-buttons svg {
+  width: 10px;
+  height: 10px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+
+.settings-nav {
+  display: flex;
+  grid-row: 2;
+  grid-column: 1;
+  flex-direction: column;
+  gap: 1px;
+  min-height: 0;
+  padding: 6px 12px 12px;
+  overflow: hidden;
+}
+
+.settings-row {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+  height: 30px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 13.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.settings-row:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.settings-row.chosen {
+  background: var(--active);
+  color: var(--active-fg);
+}
+
+.settings-row.quiet:not(.chosen) {
+  color: var(--muted);
+}
+
+.settings-row:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.settings-row svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.settings-row span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.settings .settings-group {
+  margin: 16px 9px 6px;
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* About and Dev, at the bottom under a hairline. */
+.settings-pinned {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-top: auto;
+  padding-top: 8px;
+  border-top: 1px solid var(--stroke);
+}
+
+.settings-pane {
+  grid-row: 2;
+  grid-column: 2;
+  overflow-y: auto;
+  padding: 0 32px 48px;
+}
+
+/* The page reads from its left edge, under the search. */
+.settings-pane > * {
+  max-width: 600px;
+  margin-inline: 0;
+}
+
+@media (max-width: 639px) {
+  .settings {
+    grid-template-columns: 56px minmax(0, 1fr);
+  }
+
+  .settings-title {
+    width: 56px;
+    padding: 0;
+    color: transparent;
+  }
+
+  [data-platform='macos'] .settings-title {
+    width: 76px;
+    padding: 0;
+  }
+
+  .settings-find {
+    flex: 0 1 248px;
+    min-width: 120px;
+  }
+
+  .settings-nav {
+    align-items: center;
+    padding: 6px 0 12px;
+  }
+
+  .settings-row {
+    justify-content: center;
+    width: 36px;
+    height: 32px;
+    padding: 0;
+  }
+
+  .settings-row span {
+    display: none;
+  }
+
+  /* The Utilities header becomes a hairline. */
+  .settings .settings-group {
+    width: 28px;
+    height: 0;
+    margin: 8px 0;
+    overflow: hidden;
+    border-top: 1px solid var(--stroke);
+  }
+
+  .settings-pinned {
+    align-items: center;
+    width: 36px;
+  }
+
+  .capture-note {
+    display: none;
+  }
+}
+
+.results-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.results-list button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  height: 30px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.results-list button.selected {
+  background: var(--select);
+}
+
+.field,
+.check {
+  display: flex;
+  gap: 12px;
+}
+
+.settings h1,
+.settings h2,
+.settings h3 {
+  font-weight: 600;
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+.settings h1 {
+  font-size: 22px;
+}
+
+.settings h2 {
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 30px;
+  margin-bottom: 18px;
+}
+
+.settings h3 {
+  font-size: 14px;
+}
+
+.lede {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.settings section {
+  max-width: 680px;
+}
+
+.settings section h3 {
+  margin-top: 24px;
+  margin-bottom: 4px;
+  padding-top: 14px;
+  border-top: 1px solid var(--stroke);
+}
+
+.lede code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--chip);
+  color: var(--fg);
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.settings section > .lede {
+  margin-bottom: 8px;
+}
+
+/* Briefly marks the setting a search jumped to. */
+.settings .revealed {
+  border-radius: 8px;
+  animation: reveal 1.6s ease-out;
+}
+
+@keyframes reveal {
+  from {
+    background: color-mix(in srgb, var(--focus) 22%, transparent);
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--focus) 22%, transparent);
+  }
+  to {
+    background: transparent;
+    box-shadow: 0 0 0 6px transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings .revealed {
+    animation: none;
+  }
+}
+
+.field {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 18px 0;
+  font-size: 13.5px;
+}
+
+.field > span:first-child {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+/* A label with a small info mark beside it; the mark's tooltip says what the setting does. */
+.field-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.info-dot {
+  display: inline-flex;
+  color: var(--faint);
+  cursor: help;
+}
+
+.info-dot:hover {
+  color: var(--fg);
+}
+
+.info-dot svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.field input,
+.field select,
+.recorder {
+  box-sizing: border-box;
+  width: min(100%, 520px);
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 7px;
+  border: 1px solid var(--stroke-strong);
+  background: rgba(255, 255, 255, 0.05);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  font-size: 13.5px;
+  text-align: left;
+  transition:
+    border-color 0.12s,
+    background-color 0.12s;
+}
+
+.field select {
+  max-width: 360px;
+}
+
+/* Keycaps sit 3 px in from every edge of the field. */
+.recorder {
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding: 3px;
+}
+
+/* Words line up with the keycaps' own text. */
+.recorder-prompt,
+.recorder-empty {
+  padding: 0 7px;
+}
+
+.recorder-prompt {
+  color: var(--muted);
+}
+
+.recorder-keys {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* A recorded shortcut shows as keycaps, like the bar's hints. */
+.recorder .kbd {
+  height: 22px;
+  min-width: 22px;
+  padding: 0 7px;
+  font-size: 12px;
+}
+
+.recorder .keys {
+  gap: 4px;
+}
+
+/* Listening: a ring that breathes, until the keys are let go. */
+.recorder.listening {
+  border-color: var(--focus);
+}
+
+.recorder.listening::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border: 2px solid var(--focus);
+  border-radius: 10px;
+  pointer-events: none;
+  animation: recorder-listen 1.2s ease-in-out infinite;
+}
+
+@keyframes recorder-listen {
+  0%,
+  100% {
+    opacity: 0.15;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+/* The modifiers held so far, with a waiting cap for the key still to come. */
+.recorder-waiting {
+  opacity: 0.45;
+  animation: recorder-listen 1.2s ease-in-out infinite;
+}
+
+/* Bound: the caps snap into place. */
+.recorder.snapped .recorder-keys {
+  animation: recorder-snap 0.3s cubic-bezier(0.2, 0.9, 0.3, 1.3);
+}
+
+@keyframes recorder-snap {
+  0% {
+    transform: scale(1.12);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .recorder.listening::after,
+  .recorder-waiting,
+  .recorder.snapped .recorder-keys {
+    animation: none;
+  }
+
+  .recorder.listening::after {
+    opacity: 0.4;
+  }
+}
+
+/* A one-of choice as joined buttons (Run at boot: Off, On, High-priority). */
+/* The choice, with its ⓘ beside it; an error goes on its own line under them. */
+.boot-choice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  max-width: 440px;
+}
+
+.boot-choice .notice {
+  flex-basis: 100%;
+}
+
+.segments {
+  display: inline-flex;
+  align-self: flex-start;
+  padding: 3px;
+  border: 1px solid var(--stroke-strong);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.segment {
+  padding: 5px 14px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.segment:hover {
+  color: var(--fg);
+}
+
+.segment.chosen {
+  background: var(--select);
+  color: var(--fg);
+}
+
+/* Dropdowns drop the native chrome for the glass field look, with their own chevron. */
+.settings select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 34px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23b9b3cc' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m7 10 5 5 5-5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 16px;
+  cursor: pointer;
+}
+
+.field input:hover,
+.settings select:hover,
+.recorder:hover {
+  border-color: rgba(255, 255, 255, 0.2);
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+.settings select:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.field input:focus,
+.field select:focus {
+  border-color: var(--focus);
+  outline: none;
+}
+
+/* First-run setup: a step train on top, one step in the middle, and a footer that is
+   always on screen. The window is fixed; only the middle scrolls (without a bar). */
+.settings.onboarding {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  padding: 0;
+  overflow: hidden;
+}
+
+.train {
+  flex: none;
+  padding: 16px 22px 10px;
+  border-bottom: 1px solid var(--stroke);
+}
+
+.train ol {
+  display: flex;
+  justify-content: space-between;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.train li {
+  position: relative;
+  flex: 1;
+  display: flex;
+  justify-content: center;
+}
+
+/* The track between dots. */
+.train li + li::before {
+  content: '';
+  position: absolute;
+  top: 11px;
+  right: calc(50% + 16px);
+  left: calc(-50% + 16px);
+  height: 1px;
+  background: var(--stroke-strong);
+}
+
+.train li.done + li::before,
+.train li.current::before {
+  background: var(--focus);
+}
+
+.train button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--faint);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.train button:disabled {
+  cursor: default;
+}
+
+.train li.done button,
+.train li.current button {
+  color: var(--fg);
+}
+
+.train-dot {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--stroke-strong);
+  border-radius: 50%;
+  background: var(--panel);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.train li.current .train-dot {
+  border-color: transparent;
+  background: var(--focus);
+  color: #fff;
+}
+
+.train li.done .train-dot {
+  border-color: var(--focus);
+  color: var(--focus);
+}
+
+.train-dot svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.onboarding-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.onboarding-body::-webkit-scrollbar {
+  display: none;
+}
+
+/* Each step is a title and its one control, centered in the window. */
+.onboarding-step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  min-height: 100%;
+  box-sizing: border-box;
+  padding: 22px 28px;
+  text-align: center;
+}
+
+.onboarding-step h1 {
+  margin: 0;
+  font-size: 21px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/* Setup centers the choice and its note. */
+.onboarding-step .boot-choice {
+  justify-content: center;
+}
+
+.onboarding-step .segments {
+  align-self: center;
+}
+
+.onboarding-foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 22px;
+  border-top: 1px solid var(--stroke);
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.onboarding-foot .spacer {
+  flex: 1;
+}
+
+.onboarding-foot button:not(.link-button) {
+  min-width: 84px;
+  padding: 6px 14px;
+  border: 1px solid var(--stroke-strong);
+  border-radius: 7px;
+  background: var(--chip);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.onboarding-foot button.primary {
+  border-color: transparent;
+  background: var(--active);
+  color: var(--active-fg);
+}
+
+.recorder.big {
+  width: auto;
+  min-width: 220px;
+  padding: 12px 18px;
+  font-size: 17px;
+  text-align: center;
+}
+
+.recorder.big .keys {
+  gap: 6px;
+}
+
+.recorder.big .kbd {
+  height: 30px;
+  min-width: 30px;
+  padding: 0 10px 1px;
+  border-radius: 7px;
+  font-size: 15px;
+}
+
+/* After the modifiers held so far, while the rest of the shortcut is still to come. */
+.recorder-more {
+  margin-left: 6px;
+  color: var(--muted);
+}
+
+/* Six themes in two rows of three, with short swatches, so the step fits. */
+.themes.compact {
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  width: 100%;
+  margin-top: 0;
+}
+
+.themes.compact .theme-swatch {
+  height: 46px;
+  padding: 7px;
+}
+
+.link-button {
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.link-button:hover {
+  color: var(--fg);
+}
+
+/* Steps slide sideways, the way they're going. */
+.slide-forward-enter-active,
+.slide-forward-leave-active,
+.slide-back-enter-active,
+.slide-back-leave-active {
+  transition:
+    transform 150ms ease,
+    opacity 150ms ease;
+}
+
+.slide-forward-enter-from,
+.slide-back-leave-to {
+  transform: translateX(24px);
+  opacity: 0;
+}
+
+.slide-forward-leave-to,
+.slide-back-enter-from {
+  transform: translateX(-24px);
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .slide-forward-enter-active,
+  .slide-forward-leave-active,
+  .slide-back-enter-active,
+  .slide-back-leave-active {
+    transition: none;
+  }
+}
+
+/* Settings › Permissions: a row per permission with a status dot and its Allow button. */
+.permissions {
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.permission {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 0;
+  border-top: 1px solid var(--stroke);
+}
+
+.permission-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.permission-dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+
+.permission-dot.granted {
+  background: #4ade80;
+  box-shadow: 0 0 8px rgba(74, 222, 128, 0.5);
+}
+
+.permission-dot.denied {
+  background: var(--notice);
+}
+
+/* Settings › Weather for: the city field and its matches under it. */
+.place-field {
+  position: relative;
+  display: flex;
+  gap: 6px;
+  width: min(100%, 520px);
+}
+
+.place-field input {
+  flex: 1;
+  min-width: 0;
+}
+
+.select-menu.place-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+}
+
+.place-list small {
+  overflow: hidden;
+  color: var(--muted);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.place-list .active small {
+  color: inherit;
+  opacity: 0.8;
+}
+
+.check {
+  align-items: center;
+  margin: 20px 0;
+  font-size: 13.5px;
+  cursor: pointer;
+}
+
+/* Every settings checkbox is a switch. */
+.settings input[type='checkbox'] {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  flex: none;
+  width: 40px;
+  height: 24px;
+  margin: 0;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.14);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  cursor: pointer;
+  transition: background-color 0.16s;
+}
+
+.settings input[type='checkbox']::before {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #f4f2fa;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  transition: transform 0.16s ease;
+}
+
+.settings input[type='checkbox']:checked {
+  background: var(--focus);
+  box-shadow: none;
+}
+
+.settings input[type='checkbox']:checked::before {
+  transform: translateX(16px);
+}
+
+.settings input[type='checkbox']:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.settings input[type='checkbox']:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings input[type='checkbox'],
+  .settings input[type='checkbox']::before {
+    transition: none;
+  }
+}
+
+.field.inline {
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.field.inline input {
+  flex: 1;
+  min-width: 220px;
+}
+
+/* ---- Settings › Launch groups ---- */
+
+.launch-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0 0 14px;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--stroke);
+  border-radius: 12px;
+}
+
+.launch-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.launch-group-head .spacer {
+  flex: 1;
+}
+
+.launch-group-name,
+.launch-link input,
+.app-picker-field {
+  min-height: 34px;
+  box-sizing: border-box;
+  padding: 7px 12px;
+  border: 1px solid var(--stroke-strong);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 13px;
+  transition:
+    border-color 0.12s,
+    background-color 0.12s;
+}
+
+.launch-group-name {
+  width: 220px;
+  font-weight: 600;
+}
+
+.launch-group-name:focus,
+.launch-link input:focus,
+.app-picker-field:focus-within {
+  border-color: var(--focus);
+  outline: none;
+}
+
+.launch-group-head .recorder {
+  width: auto;
+  min-width: 120px;
+  color: var(--muted);
+}
+
+.launch-items {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.launch-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  padding: 0 6px 0 4px;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: grab;
+}
+
+.launch-item:hover,
+.launch-item:focus-visible {
+  background: rgba(255, 255, 255, 0.05);
+  outline: none;
+}
+
+.launch-item:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--focus);
+}
+
+.launch-item.dragging {
+  opacity: 0.4;
+}
+
+.launch-item.over {
+  box-shadow: inset 0 2px 0 var(--focus);
+}
+
+.launch-grip {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: var(--faint);
+  stroke-width: 2.6;
+  stroke-linecap: round;
+}
+
+.launch-item-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.launch-item-remove {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.launch-item:hover .launch-item-remove,
+.launch-item:focus-within .launch-item-remove {
+  opacity: 1;
+}
+
+.launch-item-remove:hover {
+  color: var(--fg);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.launch-item-remove svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.app-picker {
+  position: relative;
+}
+
+.app-picker-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.app-picker-field input {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  color: inherit;
+  background: none;
+  border: 0;
+  outline: none;
+}
+
+.app-picker-mark {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.select-menu.app-picker-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+}
+
+.app-picker-list .item-icon {
+  flex: none;
+}
+
+.launch-link {
+  display: flex;
+  gap: 6px;
+}
+
+.launch-link input {
+  flex: 1;
+}
+
+.launch-more {
+  display: flex;
+  gap: 4px;
+  margin-left: -10px;
+}
+
+.folders {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 8px;
+}
+
+.folders li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--stroke);
+  font-size: 13px;
+}
+
+.folders .path {
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, 'SF Mono', 'Cascadia Mono', Consolas, monospace;
+  font-size: 12px;
+}
+
+.folders button {
+  border: 1px solid var(--stroke);
+  background: var(--chip);
+  border-radius: 6px;
+  padding: 3px 9px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.folders button:hover {
+  background: var(--chip-hover);
+}
+
+.status {
+  margin: 12px 0 0;
+  font-size: 13px;
+}
+
+.settings .notice {
+  margin: 12px 0 0;
+}
+
+/* Settings > Appearance: a small preview of each palette, the chosen one outlined. */
+.themes {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(116px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.theme {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--stroke);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.theme:hover {
+  border-color: var(--stroke-strong);
+  color: var(--fg);
+}
+
+.theme.chosen {
+  border-color: var(--focus);
+  color: var(--fg);
+}
+
+.theme-swatch {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  height: 64px;
+  padding: 8px;
+  border: 1px solid var(--stroke);
+  border-radius: 6px;
+}
+
+.theme-row {
+  height: 8px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.theme-dot {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+/* ---- Settings › Shortcuts ---- */
+
+.binding {
+  margin: 12px 0;
+  padding: 12px 14px;
+  border: 1px solid var(--stroke);
+  border-radius: 10px;
+  background: var(--panel);
+}
+
+.binding-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.binding-head .binding-remove {
+  margin-left: auto;
+}
+
+.binding-fields .field {
+  margin: 10px 0;
+}
+
+.binding-hotkey {
+  display: flex;
+  gap: 6px;
+  width: min(100%, 520px);
+}
+
+.binding-hotkey .recorder {
+  flex: 1;
+}

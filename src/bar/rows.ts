@@ -21,12 +21,13 @@ export interface Group {
 
 const SECTION_TITLES: Record<string, string> = {
   apps: 'Apps',
-  answer: 'Answer',
+  answer: 'Answers',
   recent: 'Recent',
   files: 'Files',
   settings: 'Settings',
   notes: 'Notes',
-  jump: 'Commands',
+  views: 'Views',
+  commands: 'Commands',
   shell: 'Shell',
   power: 'Power',
   bookmarks: 'Bookmarks',
@@ -41,7 +42,24 @@ export function rowKey(row: Suggestion): string {
     const use = row.portUse;
     return `${row.kind}-${use.protocol}-${use.port}-${use.pid}-${use.state}`;
   }
-  return `${row.kind}-${row.target}-${row.path ?? row.noteId ?? row.label}`;
+  // A window or an app id tells apart rows that share a label (two windows titled alike).
+  const identity = row.window ?? row.appId ?? row.path ?? row.noteId ?? row.label;
+  return `${row.kind}-${row.target}-${identity}`;
+}
+
+// What the bar's parts are called: answers are cards inline in the list, views take over
+// the bar, commands are one-shot actions, and the status bar is the footer and the chips
+// in the search row. Utilities is the umbrella name for the features Zephyr ships.
+const VIEWS = ['back', 'clip', 'notes', 'resources', 'network', 'shell', 'typing'];
+
+/** What a binding's target is, as Settings › Shortcuts names it. */
+export function targetKind(target: string): string {
+  if (target.startsWith('app:')) return 'App';
+  if (target.startsWith('bookmark:')) return 'Bookmark';
+  if (target.startsWith('setting:')) return 'Settings page';
+  if (target.startsWith('scope:')) return 'Search';
+  if (target.startsWith('view:') && VIEWS.includes(target.slice(5))) return 'View';
+  return 'Command';
 }
 
 function view(id: string, label: string, icon: string, extra: Partial<Suggestion>): Suggestion {
@@ -51,13 +69,13 @@ function view(id: string, label: string, icon: string, extra: Partial<Suggestion
     query: '',
     target: id,
     kind: 'view',
-    section: 'jump',
+    section: VIEWS.includes(id) ? 'views' : 'commands',
     icon,
     ...extra,
   };
 }
 
-/** Rows on the empty bar that jump straight into a view. */
+/** Rows on the empty bar that open a view (or type in a question with an answer). */
 function jumpRows(ctx: RowCtx): Suggestion[] {
   const rows: Suggestion[] = [];
   const settings = ctx.snapshot;

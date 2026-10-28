@@ -271,12 +271,16 @@ pub fn start(dir: PathBuf, settings: ClipboardSettings) {
         history.dir = dir;
         history.settings = settings;
     }
-    if enabled {
-        unlock();
-    }
+    // The keychain read and the history's decryption happen on the watcher's own thread, so
+    // startup doesn't wait on them; nothing is recorded until the key is there anyway.
     std::thread::Builder::new()
         .name("clipboard".into())
-        .spawn(watch)
+        .spawn(move || {
+            if enabled {
+                unlock();
+            }
+            watch();
+        })
         .map_err(|err| log::error!("couldn't start clipboard history: {err}"))
         .ok();
 }
@@ -673,58 +677,68 @@ fn watch() {
     loop {
         std::thread::sleep(POLL);
         ticks = ticks.wrapping_add(1);
-        // The keychain refuses while the Mac is asleep or locked; try again every ~30 s, but
-        // never re-ask after the user declined.
-        if ticks.is_multiple_of(75)
-            && history().lock().is_ok_and(|state| {
-                state.settings.enabled
-                    && state.cipher.is_none()
-                    && state
-                        .problem
-                        .as_deref()
-                        .is_some_and(|problem| problem.contains("UI"))
-            })
-        {
-            unlock();
-        }
-        let current = platform.change_count();
-        if current == last {
-            continue;
-        }
-        last = current;
-        {
-            let Ok(mut state) = history().lock() else {
-                continue;
-            };
-            if !state.settings.enabled || state.cipher.is_none() {
-                continue;
-            }
-            if state.own_write.take() == Some(current) {
-                continue;
-            }
-        }
+        // macOS: each check's pasteboard objects are let go before the next, rather than
+        // piling up for the life of the thread.
+        #[cfg(target_os = "macos")]
+        objc2::rc::autoreleasepool(|_| check(platform, &mut last, ticks));
+        #[cfg(not(target_os = "macos"))]
+        check(platform, &mut last, ticks);
+    }
+}
 
-        // Reading can be slow for big images, so it happens outside the lock.
-        let Some(capture) = platform.read() else {
-            continue;
+/// One look at the clipboard: records what was copied since the last.
+fn check(platform: &dyn Platform, last: &mut i64, ticks: u32) {
+    // The keychain refuses while the Mac is asleep or locked; try again every ~30 s, but
+    // never re-ask after the user declined.
+    if ticks.is_multiple_of(75)
+        && history().lock().is_ok_and(|state| {
+            state.settings.enabled
+                && state.cipher.is_none()
+                && state
+                    .problem
+                    .as_deref()
+                    .is_some_and(|problem| problem.contains("UI"))
+        })
+    {
+        unlock();
+    }
+    let current = platform.change_count();
+    if current == *last {
+        return;
+    }
+    *last = current;
+    {
+        let Ok(mut state) = history().lock() else {
+            return;
         };
-        let Ok(mut history) = history().lock() else {
-            continue;
-        };
-        if history.ignores(capture.source.as_ref()) {
-            continue;
+        if !state.settings.enabled || state.cipher.is_none() {
+            return;
         }
-        let image = match &capture.content {
-            Content::Image { png, .. } if history.settings.recognize_text => Some(png.clone()),
-            _ => None,
-        };
-        let added = history.record(capture, now_secs());
-        history.save();
-        drop(history);
+        if state.own_write.take() == Some(current) {
+            return;
+        }
+    }
 
-        if let (Some(id), Some(png)) = (added, image) {
-            recognize_later(id, png);
-        }
+    // Reading can be slow for big images, so it happens outside the lock.
+    let Some(capture) = platform.read() else {
+        return;
+    };
+    let Ok(mut history) = history().lock() else {
+        return;
+    };
+    if history.ignores(capture.source.as_ref()) {
+        return;
+    }
+    let image = match &capture.content {
+        Content::Image { png, .. } if history.settings.recognize_text => Some(png.clone()),
+        _ => None,
+    };
+    let added = history.record(capture, now_secs());
+    history.save();
+    drop(history);
+
+    if let (Some(id), Some(png)) = (added, image) {
+        recognize_later(id, png);
     }
 }
 

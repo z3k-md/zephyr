@@ -70,12 +70,7 @@ pub async fn run(app: &AppHandle) -> Result<SpeedResult, String> {
 }
 
 async fn test(app: &AppHandle) -> Result<SpeedResult, String> {
-    let client = reqwest::Client::builder()
-        .user_agent("Zephyr")
-        .pool_max_idle_per_host(STREAMS)
-        .connect_timeout(Duration::from_secs(5))
-        .build()
-        .map_err(|err| err.to_string())?;
+    let client = crate::util::http().clone();
     super::mark(super::metrics::SPEED_TEST);
 
     let idle = pings(app, "ping", Duration::from_secs(2)).await;

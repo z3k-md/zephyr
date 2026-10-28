@@ -30,8 +30,19 @@ export function useNowPlaying() {
       }
       track.value = next;
     });
-    clock = window.setInterval(() => (now.value = Date.now()), 15000);
+    resume();
   });
+
+  // The clock only matters while the bar shows; the bar pauses it while hidden.
+  function pause() {
+    window.clearInterval(clock);
+    clock = 0;
+  }
+
+  function resume() {
+    now.value = Date.now();
+    if (!clock) clock = window.setInterval(() => (now.value = Date.now()), 15000);
+  }
 
   onUnmounted(() => {
     unlisten?.();
@@ -67,5 +78,5 @@ export function useNowPlaying() {
     await nowPlayingFocus().catch(() => false);
   }
 
-  return { track, shown, press, focus, tick: () => (now.value = Date.now()) };
+  return { track, shown, press, focus, pause, resume };
 }

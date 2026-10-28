@@ -1,6 +1,6 @@
 //! CPU and GPU temperatures in °C, for System Resources and the footer. macOS reads them from
 //! the System Management Controller through IOKit, which any app may do: no entitlement, no
-//! administrator rights. Elsewhere there's no reading yet (Windows needs a driver, opt-in).
+//! administrator rights. Windows reads them its own way (cputemp.rs, gpu.rs).
 
 /// The hottest CPU and GPU sensors right now; none for one that can't be read.
 pub fn read() -> (Option<f32>, Option<f32>) {

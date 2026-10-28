@@ -35,6 +35,9 @@ import type {
   NetworkHistory,
   NetworkSummary,
   SpeedResult,
+  ResourceDetail,
+  CoreHeat,
+  MemoryBreakdown,
 } from './types';
 
 export function getSnapshot(): Promise<Snapshot> {
@@ -651,4 +654,25 @@ export function speedTest(): Promise<SpeedResult> {
 
 export function speedTestCancel(): Promise<void> {
   return invoke('speed_test_cancel');
+}
+
+export function resourcesDetail(key: string, pids: number[]): Promise<ResourceDetail | null> {
+  return invoke<ResourceDetail | null>('resources_detail', { key, pids });
+}
+
+export function resourcesCores(): Promise<CoreHeat> {
+  return invoke<CoreHeat>('resources_cores');
+}
+
+export function resourcesMemory(): Promise<MemoryBreakdown | null> {
+  return invoke<MemoryBreakdown | null>('resources_memory');
+}
+
+/** Turns the Windows CPU temperature reading on or off; Windows asks for permission. */
+export function saveCpuTemp(enabled: boolean): Promise<Snapshot> {
+  return invoke<Snapshot>('save_cpu_temp', { enabled });
+}
+
+export function cpuTempStatus(): Promise<{ pawnio: boolean; celsius: number | null }> {
+  return invoke('cpu_temp_status');
 }

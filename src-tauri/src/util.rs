@@ -54,3 +54,16 @@ pub fn notify(app: &tauri::AppHandle, title: &str, body: &str) {
         log::error!("couldn't show a notification: {err}");
     }
 }
+
+/// The one HTTP client: suggestions, icons, weather, the public address, the speed test and
+/// sync share its connection pool and TLS setup. Each request sets its own time limit.
+pub fn http() -> &'static reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .user_agent("Zephyr")
+            .connect_timeout(std::time::Duration::from_secs(8))
+            .build()
+            .unwrap_or_default()
+    })
+}

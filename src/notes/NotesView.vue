@@ -1,4 +1,5 @@
 <script setup lang="ts">
+  import './notes.css';
   import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { EditorContent, useEditor } from '@tiptap/vue-3';

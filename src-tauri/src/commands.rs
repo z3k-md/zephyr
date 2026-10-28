@@ -39,7 +39,7 @@ fn record(app: &AppHandle, state: &AppState, what: &str, change: impl FnOnce(&mu
 
 #[tauri::command]
 pub fn get_snapshot(state: State<'_, AppState>) -> Result<Persisted, String> {
-    state.snapshot()
+    state.snapshot().map(|snapshot| Persisted::clone(&snapshot))
 }
 
 #[tauri::command]
@@ -106,8 +106,8 @@ fn launch(app: &AppHandle, state: &AppState, app_id: &str) -> Result<DispatchOut
         if let Some(front) = crate::running::of_app(&target, &windows).first()
             && crate::running::focus(front.handle)
         {
-            remember_launch(app, state, &target.id);
             window::hide_bar(app);
+            remember_launch(app, state, &target.id);
             log::info!("switched to {}", target.name);
             return Ok(DispatchOutcome::Launched { app_id: target.id });
         }
@@ -121,8 +121,9 @@ fn start(app: &AppHandle, state: &AppState, app_id: &str) -> Result<DispatchOutc
         .find(app_id)
         .ok_or_else(|| "That app is no longer installed.".to_string())?;
     apps::launch(&target)?;
-    remember_launch(app, state, &target.id);
+    // The bar goes first; saving the launch can wait the moment it takes.
     window::hide_bar(app);
+    remember_launch(app, state, &target.id);
     log::info!("launched {}", target.name);
     Ok(DispatchOutcome::Launched { app_id: target.id })
 }
@@ -137,8 +138,8 @@ fn start_private(
         .find(app_id)
         .ok_or_else(|| "That app is no longer installed.".to_string())?;
     apps::launch_private(&target)?;
-    remember_launch(app, state, &target.id);
     window::hide_bar(app);
+    remember_launch(app, state, &target.id);
     log::info!("opened a private window of {}", target.name);
     Ok(DispatchOutcome::Launched { app_id: target.id })
 }
@@ -246,10 +247,10 @@ fn open_file_path(
     app.opener()
         .open_path(path, None::<&str>)
         .map_err(|err| format!("Couldn't open it: {err}"))?;
+    window::hide_bar(app);
     record(app, state, "the open", |persisted| {
         persisted.record_file_open(path, now_secs())
     });
-    window::hide_bar(app);
     Ok(DispatchOutcome::FileOpened {
         path: path.to_string(),
     })
@@ -639,13 +640,13 @@ pub async fn dispatch(
     app.opener()
         .open_url(&url, None::<&str>)
         .map_err(|err| format!("Couldn't open it: {err}"))?;
+    window::hide_bar(&app);
     record(&app, &state, "history", |persisted| {
         persisted.record(&text, link, now_secs());
         if overrode_app && !link {
             persisted.record_app_override(&typed);
         }
     });
-    window::hide_bar(&app);
     log::info!("opened a {}", if link { "link" } else { "search" });
     Ok(DispatchOutcome::Opened)
 }
@@ -847,13 +848,18 @@ fn autolaunch(app: &AppHandle, enabled: bool) -> Result<(), String> {
 // Clipboard history
 
 #[tauri::command]
-pub fn clip_list(query: String, filter: String) -> clipboard::ClipList {
-    clipboard::list(&query, &filter, 300)
+pub async fn clip_list(query: String, filter: String) -> clipboard::ClipList {
+    // Off the main thread: decrypting and matching a long history takes a moment.
+    tauri::async_runtime::spawn_blocking(move || clipboard::list(&query, &filter, 300))
+        .await
+        .unwrap_or_else(|_| clipboard::list("", "", 0))
 }
 
 #[tauri::command]
-pub fn clip_detail(id: u64) -> Result<clipboard::ClipDetail, String> {
-    clipboard::detail(id)
+pub async fn clip_detail(id: u64) -> Result<clipboard::ClipDetail, String> {
+    tauri::async_runtime::spawn_blocking(move || clipboard::detail(id))
+        .await
+        .map_err(|err| err.to_string())?
 }
 
 /// Pastes into the app in front. Without Accessibility permission it copies instead and
@@ -925,8 +931,10 @@ pub fn save_clipboard_settings(
 // Notes
 
 #[tauri::command]
-pub fn notes_list(query: String) -> Vec<notes::NoteSummary> {
-    notes::list(&query)
+pub async fn notes_list(query: String) -> Vec<notes::NoteSummary> {
+    tauri::async_runtime::spawn_blocking(move || notes::list(&query))
+        .await
+        .unwrap_or_default()
 }
 
 #[tauri::command]
@@ -1195,7 +1203,7 @@ pub fn shell_run(
     dir: Option<String>,
     on_event: Channel<ShellEvent>,
 ) -> Result<(), String> {
-    let settings = state.snapshot()?.shell;
+    let settings = state.snapshot()?.shell.clone();
     shell::run(&settings, &command, dir.as_deref(), move |event| {
         let _ = on_event.send(event);
     })?;
@@ -1218,7 +1226,7 @@ pub fn shell_open_terminal(
     command: String,
     dir: Option<String>,
 ) -> Result<(), String> {
-    let settings = state.snapshot()?.shell;
+    let settings = state.snapshot()?.shell.clone();
     shell::open_in_terminal(&settings, &command, dir.as_deref())?;
     if !command.trim().is_empty() {
         let snapshot = state.update(|persisted| {
@@ -1235,7 +1243,7 @@ pub fn shell_open_terminal(
 /// hold up the main thread while Settings opens.
 #[tauri::command]
 pub async fn shell_info(state: State<'_, AppState>) -> Result<ShellInfo, String> {
-    let settings = state.snapshot()?.shell;
+    let settings = state.snapshot()?.shell.clone();
     tauri::async_runtime::spawn_blocking(move || shell::info(&settings))
         .await
         .map_err(|err| err.to_string())
@@ -1809,4 +1817,65 @@ pub fn network_addresses() -> Vec<NetworkAddress> {
             detail: address.detail,
         })
         .collect()
+}
+
+/// Show info for one Resources row.
+#[tauri::command]
+pub fn resources_detail(key: String, pids: Vec<u32>) -> Option<crate::resources::Detail> {
+    crate::resources::detail(&key, &pids)
+}
+
+/// The CPU drill-in: each logical processor over the last 15 minutes.
+#[tauri::command]
+pub fn resources_cores() -> crate::stats::CoreHeat {
+    crate::stats::core_heat()
+}
+
+/// The Memory drill-in.
+#[tauri::command]
+pub async fn resources_memory() -> Option<crate::resources::MemoryBreakdown> {
+    tauri::async_runtime::spawn_blocking(crate::resources::memory_breakdown)
+        .await
+        .ok()
+        .flatten()
+}
+
+/// Turns the Windows CPU temperature reading on or off. Either way Windows asks for
+/// permission once (cputemp.rs).
+#[tauri::command]
+pub async fn save_cpu_temp(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> Result<Persisted, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if enabled {
+            crate::cputemp::enable()
+        } else {
+            crate::cputemp::disable()
+        }
+    })
+    .await
+    .map_err(|err| err.to_string())??;
+    let snapshot = state.update(|persisted| {
+        persisted.cpu_temp = enabled;
+        Ok(())
+    })?;
+    publish(&app, snapshot)
+}
+
+/// Whether PawnIO is installed, and the helper's latest reading.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CpuTempStatus {
+    pawnio: bool,
+    celsius: Option<f32>,
+}
+
+#[tauri::command]
+pub fn cpu_temp_status() -> CpuTempStatus {
+    CpuTempStatus {
+        pawnio: crate::cputemp::pawnio_installed(),
+        celsius: crate::cputemp::read(),
+    }
 }

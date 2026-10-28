@@ -169,7 +169,7 @@ fn run(app: AppHandle) {
                 .state::<AppState>()
                 .snapshot()
                 .ok()
-                .and_then(|persisted| persisted.weather_place);
+                .and_then(|persisted| persisted.weather_place.clone());
             let result = tauri::async_runtime::block_on(fetch_for(chosen, &cache));
             if let Ok(mut guard) = shared.lock() {
                 guard.stale = false;
@@ -229,17 +229,11 @@ async fn fetch_for(
 /// One client for every request, so its connections (and their TLS) are reused: a city search
 /// that set up a new one each keystroke spent most of its time on the handshake.
 fn client() -> Result<reqwest::Client, String> {
-    static CLIENT: OnceLock<Result<reqwest::Client, String>> = OnceLock::new();
-    CLIENT
-        .get_or_init(|| {
-            reqwest::Client::builder()
-                .user_agent("Zephyr")
-                .timeout(Duration::from_secs(10))
-                .build()
-                .map_err(|err| err.to_string())
-        })
-        .clone()
+    Ok(crate::util::http().clone())
 }
+
+/// How long a weather request may take.
+const TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The forecast for one place: the weather now, the next 48 hours and seven days.
 async fn forecast(client: &reqwest::Client, place: Place) -> Result<Forecast, String> {
@@ -253,6 +247,7 @@ async fn forecast(client: &reqwest::Client, place: Place) -> Result<Forecast, St
     );
     let raw: Raw = client
         .get(url)
+        .timeout(TIMEOUT)
         .send()
         .await
         .and_then(|response| response.error_for_status())
@@ -275,6 +270,7 @@ async fn ip_place(client: &reqwest::Client) -> Result<Place, String> {
     }
     let located: Located = client
         .get("https://ipapi.co/json/")
+        .timeout(TIMEOUT)
         .send()
         .await
         .and_then(|response| response.error_for_status())
@@ -300,6 +296,7 @@ pub async fn warm() {
     if let Ok(client) = client() {
         let _ = client
             .head("https://geocoding-api.open-meteo.com/v1/search")
+            .timeout(TIMEOUT)
             .send()
             .await;
     }
@@ -343,6 +340,7 @@ pub async fn places(text: &str) -> Result<Vec<Place>, String> {
             "https://geocoding-api.open-meteo.com/v1/search?name={}&count=20&language=en",
             urlencoding::encode(text)
         ))
+        .timeout(TIMEOUT)
         .send()
         .await
         .and_then(|response| response.error_for_status())

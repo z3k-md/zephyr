@@ -95,6 +95,8 @@ pub struct Persisted {
     pub watch_connection: bool,
     /// The last speed test's result.
     pub last_speed: Option<crate::net::speed::SpeedResult>,
+    /// Windows: read the CPU's temperature through PawnIO and an elevated helper (cputemp.rs).
+    pub cpu_temp: bool,
 }
 
 /// The palettes Settings > Appearance offers; the first is the default.
@@ -238,6 +240,7 @@ impl Persisted {
             weather_unit: None,
             watch_connection: true,
             last_speed: None,
+            cpu_temp: false,
         }
     }
 
@@ -403,7 +406,8 @@ impl Persisted {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|err| err.to_string())?;
         }
-        let data = serde_json::to_vec_pretty(self).map_err(|err| err.to_string())?;
+        // Compact: the file is read by Zephyr, not people, and history makes it long.
+        let data = serde_json::to_vec(self).map_err(|err| err.to_string())?;
         let tmp = path.with_extension("json.tmp");
         fs::write(&tmp, &data).map_err(|err| err.to_string())?;
         // Rename replaces the old file, on Windows too. It can fail for a moment while
@@ -452,7 +456,8 @@ impl Persisted {
 }
 
 pub struct AppState {
-    inner: Mutex<Persisted>,
+    /// Shared, so a read (every keystroke takes one) is a reference count, not a deep copy.
+    inner: Mutex<std::sync::Arc<Persisted>>,
     path: PathBuf,
 }
 
@@ -460,12 +465,12 @@ impl AppState {
     pub fn load(path: PathBuf) -> Self {
         let persisted = Persisted::load(&path);
         Self {
-            inner: Mutex::new(persisted),
+            inner: Mutex::new(std::sync::Arc::new(persisted)),
             path,
         }
     }
 
-    pub fn snapshot(&self) -> Result<Persisted, String> {
+    pub fn snapshot(&self) -> Result<std::sync::Arc<Persisted>, String> {
         Ok(self.lock()?.clone())
     }
 
@@ -475,14 +480,14 @@ impl AppState {
     {
         let mut guard = self.lock()?;
         // Work on a copy so a failed mutation or save leaves memory matching disk.
-        let mut next = guard.clone();
+        let mut next = Persisted::clone(&guard);
         mutate(&mut next)?;
         next.save(&self.path)?;
-        *guard = next.clone();
+        *guard = std::sync::Arc::new(next.clone());
         Ok(next)
     }
 
-    fn lock(&self) -> Result<std::sync::MutexGuard<'_, Persisted>, String> {
+    fn lock(&self) -> Result<std::sync::MutexGuard<'_, std::sync::Arc<Persisted>>, String> {
         self.inner
             .lock()
             .map_err(|_| "Settings were left in a bad state. Restart Zephyr.".to_string())

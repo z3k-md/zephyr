@@ -28,8 +28,10 @@ pub struct Stats {
     /// None without a GPU that reports its load.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gpu: Option<crate::gpu::Gpu>,
-    /// °C, the hottest CPU and GPU sensors; none where they can't be read (only macOS so far).
+    /// The CPU and the GPU, in °C; none where they can't be read.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cpu_temp: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub gpu_temp: Option<f32>,
     /// Trouble on the line (slow, dropping, offline), for the footer's chip.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -59,6 +61,8 @@ struct Sampler {
     latest: Option<Stats>,
     /// The last 15 minutes of totals, with when each was read.
     history: std::collections::VecDeque<(Instant, Point)>,
+    /// Each logical processor's load (0–100) a second at a time, for the CPU drill-in.
+    cores: std::collections::VecDeque<(Instant, Vec<u8>)>,
     /// Dev builds: the app's own use and when it was read, which walks every process, so
     /// the footer's twice-a-second readings reuse it for a second.
     app: Option<(Instant, AppUsage)>,
@@ -208,6 +212,7 @@ impl Sampler {
             last: Instant::now(),
             latest: None,
             history: std::collections::VecDeque::new(),
+            cores: std::collections::VecDeque::new(),
             app: None,
             temps: None,
         }
@@ -249,12 +254,22 @@ fn record(sampler: &mut Sampler) -> Stats {
         None => (0, 0),
     };
     let (down, up) = throughput(&sampler.networks);
-    let (cpu_temp, gpu_temp) = match sampler.temps {
-        Some((at, temps)) if at.elapsed() < Duration::from_secs(2) => temps,
-        _ => {
-            let temps = crate::temps::read();
-            sampler.temps = Some((Instant::now(), temps));
-            temps
+    let gpu = sampler.gpu.as_mut().and_then(crate::gpu::Reader::read);
+    // Windows: the GPU's from its driver, the CPU's from the PawnIO helper (cputemp.rs).
+    // macOS: both from the SMC (temps.rs), read at most every two seconds.
+    let (cpu_temp, gpu_temp) = if cfg!(windows) {
+        (
+            crate::cputemp::read(),
+            gpu.as_ref().and_then(|gpu| gpu.temperature),
+        )
+    } else {
+        match sampler.temps {
+            Some((at, temps)) if at.elapsed() < Duration::from_secs(2) => temps,
+            _ => {
+                let temps = crate::temps::read();
+                sampler.temps = Some((Instant::now(), temps));
+                temps
+            }
         }
     };
     let stats = Stats {
@@ -265,7 +280,7 @@ fn record(sampler: &mut Sampler) -> Stats {
         disk_total,
         net_down: (down as f64 / elapsed) as u64,
         net_up: (up as f64 / elapsed) as u64,
-        gpu: sampler.gpu.as_mut().and_then(crate::gpu::Reader::read),
+        gpu,
         cpu_temp,
         gpu_temp,
         network: crate::net::alert(),
@@ -278,6 +293,13 @@ fn record(sampler: &mut Sampler) -> Stats {
     {
         sampler.history.pop_front();
     }
+    while sampler
+        .cores
+        .front()
+        .is_some_and(|(at, _)| at.elapsed() > WINDOW)
+    {
+        sampler.cores.pop_front();
+    }
     // Reads twice a second while the bar shows; the history keeps one a second. The slack
     // allows for the thread waking a little early.
     let due = sampler
@@ -285,6 +307,13 @@ fn record(sampler: &mut Sampler) -> Stats {
         .back()
         .is_none_or(|(at, _)| at.elapsed() + Duration::from_millis(50) >= EVERY);
     if due {
+        let per_core = sampler
+            .system
+            .cpus()
+            .iter()
+            .map(|cpu| cpu.cpu_usage().round().clamp(0.0, 100.0) as u8)
+            .collect();
+        sampler.cores.push_back((Instant::now(), per_core));
         sampler.history.push_back((
             Instant::now(),
             Point {
@@ -305,6 +334,75 @@ fn record(sampler: &mut Sampler) -> Stats {
     stats
 }
 
+/// The CPU drill-in's heatmap: each logical processor's average load in 90 stretches of ten
+/// seconds, oldest first, with none where there's no reading (before Zephyr started).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CoreHeat {
+    pub cores: usize,
+    /// `columns[time][core]`, 0–100.
+    pub columns: Vec<Option<Vec<u8>>>,
+    /// Each processor's latest load.
+    pub now: Vec<u8>,
+}
+
+pub fn core_heat() -> CoreHeat {
+    const COLUMNS: usize = 90;
+    let span = WINDOW.as_secs_f32() / COLUMNS as f32;
+    let Ok(guard) = SAMPLER.lock() else {
+        return CoreHeat {
+            cores: 0,
+            columns: Vec::new(),
+            now: Vec::new(),
+        };
+    };
+    let Some(sampler) = guard.as_ref() else {
+        return CoreHeat {
+            cores: 0,
+            columns: Vec::new(),
+            now: Vec::new(),
+        };
+    };
+    let cores = sampler.system.cpus().len();
+    let mut sums = vec![(vec![0u32; cores], 0u32); COLUMNS];
+    for (at, loads) in &sampler.cores {
+        let age = at.elapsed().as_secs_f32();
+        let column = COLUMNS as isize - 1 - (age / span) as isize;
+        if column < 0 || loads.len() != cores {
+            continue;
+        }
+        let (total, count) = &mut sums[column as usize];
+        for (sum, load) in total.iter_mut().zip(loads) {
+            *sum += u32::from(*load);
+        }
+        *count += 1;
+    }
+    CoreHeat {
+        cores,
+        columns: sums
+            .into_iter()
+            .map(|(total, count)| {
+                (count > 0).then(|| total.iter().map(|sum| (sum / count) as u8).collect())
+            })
+            .collect(),
+        now: sampler
+            .cores
+            .back()
+            .map(|(_, loads)| loads.clone())
+            .unwrap_or_default(),
+    }
+}
+
+/// Windows: each process's GPU load (its busiest engine), 0–100. Empty elsewhere.
+pub fn gpu_by_process() -> std::collections::HashMap<u32, f32> {
+    #[cfg(windows)]
+    if let Ok(guard) = SAMPLER.lock()
+        && let Some(reader) = guard.as_ref().and_then(|sampler| sampler.gpu.as_ref())
+    {
+        return reader.by_process();
+    }
+    std::collections::HashMap::new()
+}
 /// Bytes moved since the last refresh on one interface: the one the internet goes through,
 /// or without the monitor the busiest real one. Summing them all counts a VPN's traffic twice
 /// (the tunnel and the link under it) and counts loopback as network.

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+  import './update.css';
   import { computed, onMounted, onUnmounted, ref } from 'vue';
   import { getVersion } from '@tauri-apps/api/app';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';

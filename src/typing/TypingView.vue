@@ -192,6 +192,9 @@
   function onKey(event: KeyboardEvent) {
     if (event.key === 'Escape') {
       event.preventDefault();
+      // A test left half done is dropped, so it can't finish (and be saved) unseen.
+      window.clearInterval(ticker);
+      if (startedAt.value && !result.value) restart();
       emit('exit');
       return;
     }

@@ -553,6 +553,10 @@ pub fn set_bar_height(app: &AppHandle, height: f64, width: Option<f64>) -> Resul
     // The limits are in CSS pixels; clamping after scaling cut a Retina bar off at half height.
     let height = (height.clamp(48.0, 720.0) * scale).round() as u32;
     let current = window.outer_size().map_err(|err| err.to_string())?;
+    // The page reports its height as it lays out, mostly unchanged; a resize then is wasted.
+    if current.width == width && current.height == height {
+        return Ok(());
+    }
     if current.width != width
         && let Ok(position) = window.outer_position()
     {

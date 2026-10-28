@@ -1,5 +1,15 @@
 <script setup lang="ts">
-  import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
+  import {
+    computed,
+    defineAsyncComponent,
+    nextTick,
+    onMounted,
+    onUnmounted,
+    reactive,
+    ref,
+    shallowRef,
+    watch,
+  } from 'vue';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import {
     dispatch,
@@ -43,13 +53,11 @@
     weatherAt,
     resourcesQuit,
   } from '../api';
-  import ClipboardView from './ClipboardView.vue';
   import ResourcesView from './ResourcesView.vue';
   import NetworkView from './NetworkView.vue';
   import NetworkCard from './NetworkCard.vue';
   import PortCard from './PortCard.vue';
   import { useNetworkSummary } from './network';
-  import TypingView from '../typing/TypingView.vue';
   import DeviceCard from './DeviceCard.vue';
   import ResultList from './ResultList.vue';
   import FooterWeather from './FooterWeather.vue';
@@ -62,11 +70,9 @@
   import NowPlayingStrip from './NowPlayingStrip.vue';
   import { dragOut } from './dragOut';
   import { GLYPHS } from './glyphs';
-  import FilePreviewPane from './FilePreviewPane.vue';
   import { useNowPlaying } from './nowPlaying';
   import { useFooterStats } from './footerStats';
   import { bindingForAlias, bindingTarget, buildRows, groups, rowKey, type RowCtx } from './rows';
-  import ShellView from '../shell/ShellView.vue';
   import {
     isSnapshot,
     type Binding,
@@ -79,10 +85,32 @@
     type Forecast,
     type PortUse,
   } from '../types';
+  // Views used now and then load on demand, and are fetched in the background on the first
+  // summon, so startup parses less and opening one later doesn't wait.
+  import type ClipboardViewComponent from './ClipboardView.vue';
+  import type TypingViewComponent from '../typing/TypingView.vue';
+  import type ShellViewComponent from '../shell/ShellView.vue';
+  const loadClipboard = () => import('./ClipboardView.vue');
+  const loadTyping = () => import('../typing/TypingView.vue');
+  const loadShell = () => import('../shell/ShellView.vue');
+  const loadPreview = () => import('./FilePreviewPane.vue');
+  const ClipboardView = defineAsyncComponent(loadClipboard);
+  const TypingView = defineAsyncComponent(loadTyping);
+  const ShellView = defineAsyncComponent(loadShell);
+  const FilePreviewPane = defineAsyncComponent(loadPreview);
+  let prefetched = false;
+  function prefetchViews() {
+    if (prefetched) return;
+    prefetched = true;
+    for (const load of [loadClipboard, loadTyping, loadShell, loadPreview]) {
+      void load().catch(() => (prefetched = false));
+    }
+  }
 
   const root = ref<HTMLElement | null>(null);
   const inputEl = ref<HTMLInputElement | null>(null);
-  const snapshot = ref<Snapshot | null>(null);
+  // Replaced whole on every change, never edited in place, so neither needs deep tracking.
+  const snapshot = shallowRef<Snapshot | null>(null);
   const query = ref('');
   // A search narrowed to one kind of result (files, bookmarks, settings, apps). It shows as a
   // label before the text, and is sent to Rust as the bang it stands for, which still works
@@ -110,7 +138,7 @@
   }
   // The last suggest reply and the text it was for; the rows are built from it, so command
   // rows and job counts stay current without asking again.
-  const lastResponse = ref<SuggestResponse | null>(null);
+  const lastResponse = shallowRef<SuggestResponse | null>(null);
   const lastQuery = ref('');
   const mode = ref<'search' | 'recent'>('recent');
   const notice = ref<string | null>(null);
@@ -135,13 +163,13 @@
   const shellMode = computed(() => view.value === 'shell');
   // Shell commands, from > or !sh; a command never runs on unscoped Enter.
   const shellQuery = ref('');
-  const shellView = ref<InstanceType<typeof ShellView> | null>(null);
+  const shellView = ref<InstanceType<typeof ShellViewComponent> | null>(null);
   const SHELL_PREFIX = /^\s*(?:>|!(?:sh|shell)(?:\s|$))\s*/i;
   const clipQuery = ref('');
   const resourcesView = ref<InstanceType<typeof ResourcesView> | null>(null);
   const networkView = ref<InstanceType<typeof NetworkView> | null>(null);
-  const clipView = ref<InstanceType<typeof ClipboardView> | null>(null);
-  const typingView = ref<InstanceType<typeof TypingView> | null>(null);
+  const clipView = ref<InstanceType<typeof ClipboardViewComponent> | null>(null);
+  const typingView = ref<InstanceType<typeof TypingViewComponent> | null>(null);
   // Other computers asking to join sync; checked when the bar opens and every minute.
   const devicesWaiting = ref<SyncPending[]>([]);
   let devicePoll = 0;
@@ -190,7 +218,7 @@
   const powerRow = ref<PowerPreview | null>(null);
   const confirmArm = ref('');
   const clock = ref(Date.now());
-  window.setInterval(() => (clock.value = Date.now()), 15000);
+  let clockTimer = window.setInterval(() => (clock.value = Date.now()), 15000);
 
   function untilText(at: number): string {
     const left = Math.max(0, at - Math.floor(clock.value / 1000));
@@ -331,6 +359,14 @@
   // Type-ahead: the rest of what Enter would act on, drawn faintly after the cursor. Enter
   // still sends only what was typed; Right arrow or End takes the completion.
   const caretAtEnd = ref(true);
+  // Past searches, most used first, sorted once per history change rather than per key.
+  const searchHistory = computed(() =>
+    [...(snapshot.value?.history ?? [])]
+      .filter((entry) => entry.destinationId === 'google')
+      .sort((a, b) => b.uses - a.uses || b.lastUsed - a.lastUsed)
+      .map((entry) => entry.query)
+  );
+
   const ghost = computed(() => {
     const typed = query.value;
     if (!typed.trim() || !caretAtEnd.value) return '';
@@ -343,10 +379,7 @@
     } else if (target?.kind === 'history' || target?.kind === 'remote') {
       candidates = [target.query];
     } else {
-      const history = [...(snapshot.value?.history ?? [])]
-        .filter((entry) => entry.destinationId === 'google')
-        .sort((a, b) => b.uses - a.uses || b.lastUsed - a.lastUsed)
-        .map((entry) => entry.query);
+      const history = searchHistory.value;
       const remote = items.value
         .filter((item) => item.kind === 'history' || item.kind === 'remote')
         .map((item) => item.query);
@@ -672,7 +705,9 @@
         void updateWaiting()
           .then((version) => (updateReady.value = version))
           .catch(() => undefined);
-        media.tick();
+        resumeTimers();
+        prefetchViews();
+        sentHeight = 0;
         // Opens the connection to the suggestion service before the first keystroke.
         void warmSuggestions().catch(() => undefined);
         void loadDevices();
@@ -722,6 +757,7 @@
     unlistens.push(
       await listen('bar-hidden', () => {
         hiddenAt = performance.now();
+        pauseTimers();
         hiddenAtWall = Date.now();
         resourcesView.value?.stop();
         networkView.value?.stop();
@@ -743,7 +779,7 @@
       })
     );
     void loadDevices();
-    devicePoll = window.setInterval(() => void loadDevices(), 60000);
+    devicePoll = window.setInterval(() => void loadDevices(), DEVICE_POLL_MS);
     unlistens.push(await listen('clipboard-shown', () => openClip('')));
     // A hotkey the user gave a mode or scoped search (Settings > Shortcuts).
     unlistens.push(
@@ -768,15 +804,7 @@
     window.addEventListener('keydown', trackModifiers, true);
     window.addEventListener('keyup', trackModifiers, true);
     window.addEventListener('keyup', onKeyUp, true);
-    window.addEventListener('blur', () => {
-      movable.value = false;
-      closeOnEscapeUp = false;
-      // Alt+Tab away: the Alt reached the bar, its release didn't.
-      window.clearTimeout(numbersTimer);
-      numbersTimer = 0;
-      showNumbers.value = false;
-      altAlone = false;
-    });
+    window.addEventListener('blur', onBlur);
     // A drop lands outside the page's key events, so the pointer corrects what's held.
     window.addEventListener('mousemove', trackModifiers, true);
     if (root.value) {
@@ -799,8 +827,39 @@
     pageReady();
   });
 
+  /** Alt+Tab away: the Alt reached the bar, its release didn't. */
+  function onBlur() {
+    movable.value = false;
+    closeOnEscapeUp = false;
+    window.clearTimeout(numbersTimer);
+    numbersTimer = 0;
+    showNumbers.value = false;
+    altAlone = false;
+  }
+
+  // Timers that only matter while the bar shows: the countdown clock, the check for computers
+  // asking to join sync, and what's-playing's clock. They stop while it's hidden.
+  const DEVICE_POLL_MS = 60000;
+  function pauseTimers() {
+    window.clearInterval(clockTimer);
+    window.clearInterval(devicePoll);
+    window.clearInterval(clockTimer);
+    window.removeEventListener('blur', onBlur);
+    clockTimer = 0;
+    devicePoll = 0;
+    media.pause();
+  }
+
+  function resumeTimers() {
+    clock.value = Date.now();
+    if (!clockTimer) clockTimer = window.setInterval(() => (clock.value = Date.now()), 15000);
+    if (!devicePoll) devicePoll = window.setInterval(() => void loadDevices(), DEVICE_POLL_MS);
+    media.resume();
+  }
   onUnmounted(() => {
     window.clearInterval(devicePoll);
+    window.clearInterval(clockTimer);
+    window.removeEventListener('blur', onBlur);
     window.removeEventListener('keydown', onKey, true);
     window.removeEventListener('keydown', trackModifiers, true);
     window.removeEventListener('keyup', trackModifiers, true);
@@ -1023,22 +1082,35 @@
 
   // Every view is the bar's one fixed size, so the window (and its blur) always matches the
   // panel exactly. Views used to widen the window without widening the panel.
+  // The last height sent, so an unchanged layout doesn't cross to Rust again; forgotten on
+  // each summon, in case the window was resized meanwhile.
+  let sentHeight = 0;
   function syncHeight() {
     if (!root.value) return;
     const rect = root.value.getBoundingClientRect();
     const height = Math.ceil(rect.height);
+    if (height === sentHeight) return;
+    sentHeight = height;
     trace('size', { height, width: Math.ceil(rect.width) });
-    void setBarHeight(height).catch(() => undefined);
+    void setBarHeight(height).catch(() => (sentHeight = 0));
   }
 
   // Local results (apps, history) land on the keystroke; remote suggestions follow after a
+  /** Text that could be a power command (power.rs WORDS, three letters in), so other text
+   *  skips asking. */
+  const POWER_WORD =
+    /^!?\s*(?:(?:cancel|abort|stop)\s+)?(?:res|reb|boo|fir|bio|uef|shu|pow|tur|sle|sus|loc|sig|log)/i;
   // pause and only append, so the row Enter would take never shifts under the user.
+  /** The generation whose local reply said the network pass would add nothing. */
+  let remoteSkip = 0;
   function scheduleSuggest() {
     window.clearTimeout(suggestTimer);
     const current = ++generation;
     remoteApplied = false;
     void loadSuggestions(current, false);
     suggestTimer = window.setTimeout(() => {
+      // The local pass already said the network has nothing to add for this text.
+      if (remoteSkip === current) return;
       void loadSuggestions(current, true);
     }, 120);
   }
@@ -1062,10 +1134,17 @@
       trace('fetch', { text: typed, remote: includeRemote, generation: current });
       const [answer, power] = await Promise.all([
         suggest(typed, includeRemote),
-        includeRemote ? Promise.resolve(powerRow.value) : powerPreview(typed).catch(() => null),
+        includeRemote
+          ? Promise.resolve(powerRow.value)
+          : POWER_WORD.test(typed)
+            ? powerPreview(typed).catch(() => null)
+            : Promise.resolve(null),
       ]);
       let response = answer;
-      if (!includeRemote && current === generation) powerRow.value = power;
+      if (!includeRemote && current === generation) {
+        powerRow.value = power;
+        remoteSkip = answer.remote === false ? current : 0;
+      }
       const stale = current !== generation || (!includeRemote && remoteApplied);
       trace('fetched', {
         text: typed,
@@ -1086,7 +1165,9 @@
         );
         if (remembered.size > 200) remembered.delete(remembered.keys().next().value ?? '');
       } else {
-        const carried = remembered.get(key) ?? stillMatching(typed);
+        // Not when no web suggestions will follow (an app named outright, a link).
+        const carried =
+          answer.remote === false ? [] : (remembered.get(key) ?? stillMatching(typed));
         if (carried.length) response = { ...response, items: [...response.items, ...carried] };
       }
       // Keep the row the user moved to selected when late results reshuffle the list.
@@ -1107,16 +1188,18 @@
         pendingMove = 0;
         moveSelection(delta);
       }
-      trace('results', {
-        text: typed,
-        remote: includeRemote,
-        selected: selected.value,
-        rows: items.value.map((item) => ({
-          section: item.section,
-          kind: item.kind,
-          label: item.label,
-        })),
-      });
+      // The row list is only built when a capture is recording.
+      if (capturing.value)
+        trace('results', {
+          text: typed,
+          remote: includeRemote,
+          selected: selected.value,
+          rows: items.value.map((item) => ({
+            section: item.section,
+            kind: item.kind,
+            label: item.label,
+          })),
+        });
       await nextTick();
       syncHeight();
     } catch (error) {

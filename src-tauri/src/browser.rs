@@ -86,7 +86,7 @@ fn serve(stream: TcpStream) {
     };
     let _ = socket
         .get_mut()
-        .set_read_timeout(Some(Duration::from_millis(50)));
+        .set_read_timeout(Some(Duration::from_millis(250)));
     let (outbox, inbox) = mpsc::channel();
     let id = NEXT.fetch_add(1, Ordering::SeqCst);
     if let Ok(mut clients) = clients().lock() {

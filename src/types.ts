@@ -44,6 +44,8 @@ export interface Snapshot {
   /** Whether the connection monitor pings the router and 1.1.1.1 once a second. */
   watchConnection: boolean;
   lastSpeed: SpeedResult | null;
+  /** Windows: the CPU temperature helper (PawnIO) is turned on. */
+  cpuTemp: boolean;
 }
 
 export type WeatherUnit = 'c' | 'f';
@@ -275,6 +277,8 @@ export interface SuggestResponse {
   /** Where free text goes: 'web' for a Google search, or 'url'. */
   target: string | null;
   text: string;
+  /** Whether the network pass would add anything; when not, the bar skips it. */
+  remote?: boolean;
 }
 
 export type DispatchOutcome =
@@ -400,9 +404,9 @@ export interface SystemStats {
   netUp: number;
   /** Absent without a GPU that reports its load. */
   gpu?: GpuStats;
-  /** °C, the hottest CPU and GPU sensors; null where they can't be read. */
-  cpuTemp: number | null;
-  gpuTemp: number | null;
+  /** The CPU and the GPU, in °C; absent where they can't be read. */
+  cpuTemp?: number | null;
+  gpuTemp?: number | null;
   /** Trouble on the line, for the footer's chip. */
   network?: NetworkAlert;
   /** Dev builds: the app's own use, webview helpers included. */
@@ -423,6 +427,8 @@ export interface ResourceRow {
   memory: number | null;
   /** Bytes read and written per second. */
   disk: number | null;
+  /** Windows: its busiest GPU engine, 0–100; null elsewhere. */
+  gpu?: number | null;
   user: string;
   path: string;
   command: string;
@@ -449,15 +455,17 @@ export interface ResourcePoint {
 export interface ResourceSnapshot {
   totals: SystemStats;
   cores: number;
-  /** The last minute, a point a second, oldest first. */
+  /** The last 15 minutes, a point a second, oldest first. */
   history: ResourcePoint[];
   rows: ResourceRow[];
   processes: number;
   /** Seconds since the computer started. */
   uptime: number;
+  /** Absent without a battery. */
+  battery?: Battery;
 }
 
-export type ResourceSort = 'cpu' | 'memory' | 'disk' | 'name';
+export type ResourceSort = 'cpu' | 'memory' | 'disk' | 'gpu' | 'name';
 
 /** Things opened together from one row or hotkey ("Coding", "Gaming"). */
 export interface LaunchGroup {
@@ -578,4 +586,46 @@ export interface PortUse {
   command: string;
   path: string;
   icon: string;
+}
+
+export interface Battery {
+  /** 0–100. */
+  percent: number;
+  state: 'charging' | 'discharging' | 'full' | 'unknown';
+  /** Until empty or full, where the system estimates it. */
+  secondsLeft: number | null;
+}
+
+/** Show info for one Resources row. */
+export interface ResourceDetail {
+  key: string;
+  pid: number;
+  parent: string;
+  /** Seconds since 1970. */
+  started: number;
+  read: number;
+  written: number;
+  /** Oldest first: seconds ago, CPU %, memory bytes. */
+  history: [number, number, number][];
+}
+
+/** The CPU drill-in: each logical processor's load in 90 ten-second stretches. */
+export interface CoreHeat {
+  cores: number;
+  /** columns[time][core], 0–100; null before Zephyr was reading. */
+  columns: (number[] | null)[];
+  now: number[];
+}
+
+/** The Memory drill-in (Windows). */
+export interface MemoryBreakdown {
+  total: number;
+  inUse: number;
+  modified: number;
+  standby: number;
+  free: number;
+  committed: number;
+  commitLimit: number;
+  pagedPool: number;
+  nonpagedPool: number;
 }

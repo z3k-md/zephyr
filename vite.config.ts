@@ -1,6 +1,5 @@
 import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
-import tailwindcss from '@tailwindcss/vite';
 
 declare const process: { env: { TAURI_DEV_HOST?: string }; versions: { bun?: string } };
 
@@ -8,7 +7,7 @@ const host = process.env.TAURI_DEV_HOST;
 
 // https://vitejs.dev/config/
 export default defineConfig(async () => ({
-  plugins: [vue(), tailwindcss()],
+  plugins: [vue()],
 
   // `bun run vite` runs Vite under Node when Node is on PATH and under Bun when it isn't (Git
   // Bash). The two resolve Vite's own files to different paths, which changes the dep cache's

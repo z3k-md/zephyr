@@ -1,6 +1,6 @@
 <script setup lang="ts">
   import { vFit } from '../fit';
-  import { computed, nextTick, onMounted, ref, watch } from 'vue';
+  import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
   import {
     clipClear,
     clipCopy,
@@ -116,10 +116,14 @@
     inputEl.value?.focus();
   });
 
+  // Typing settles for a moment before the list is asked for again.
+  let refreshTimer = 0;
   watch([query, filter], () => {
     selected.value = 0;
-    void refresh();
+    window.clearTimeout(refreshTimer);
+    refreshTimer = window.setTimeout(() => void refresh(), 60);
   });
+  onUnmounted(() => window.clearTimeout(refreshTimer));
 
   // Typing goes back to the search once a type is picked, not to the dropdown.
   watch(filter, () => void nextTick(() => inputEl.value?.focus()));
@@ -135,10 +139,14 @@
     inputEl.value?.focus();
   }
 
-  watch(current, () => {
-    confirmClear.value = false;
-    void loadDetail();
-  });
+  // By id: a refreshed list hands back new objects for the same items.
+  watch(
+    () => current.value?.id,
+    () => {
+      confirmClear.value = false;
+      void loadDetail();
+    }
+  );
 
   async function refresh() {
     const ticket = ++generation;
@@ -150,7 +158,6 @@
       enabled.value = response.enabled;
       if (selected.value >= items.value.length)
         selected.value = Math.max(0, items.value.length - 1);
-      await loadDetail();
     } catch (error) {
       problem.value = errorMessage(error);
     }

@@ -1,0 +1,326 @@
+/* The notes window. Only it loads these rules. */
+
+/* ---- Notes ---- */
+
+.notes {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--bg-solid);
+}
+
+.notes-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--stroke);
+}
+
+.notes-title {
+  min-width: 0;
+  overflow: hidden;
+  padding: 4px 6px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.notes-title:hover,
+.notes-actions button:hover {
+  background: var(--chip-hover);
+}
+
+.notes-title span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.notes-actions {
+  display: flex;
+  flex: none;
+  gap: 4px;
+}
+
+.notes-actions button {
+  padding: 3px 8px;
+  border: 1px solid var(--stroke);
+  border-radius: 6px;
+  background: var(--chip);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.notes-actions button.on {
+  border-color: var(--stroke-strong);
+  background: var(--select);
+}
+
+.notes-actions button.danger {
+  color: var(--notice);
+  border-color: var(--notice);
+}
+
+.notes-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--stroke);
+}
+
+.notes-toolbar select,
+.notes-toolbar button {
+  height: 26px;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.notes-toolbar select {
+  border-color: var(--stroke);
+  background: var(--chip);
+}
+
+.notes-toolbar button:hover {
+  background: var(--chip-hover);
+}
+
+.notes-toolbar button.on {
+  border-color: var(--stroke-strong);
+  background: var(--select);
+}
+
+.notes-toolbar .notes-swatch {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--stroke-strong);
+  border-radius: 50%;
+}
+
+.notes-sep {
+  width: 1px;
+  height: 18px;
+  margin: 0 3px;
+  background: var(--stroke-strong);
+}
+
+.notes-editor {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.notes-doc {
+  min-height: 100%;
+  padding: 14px 18px;
+  outline: none;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.notes-doc p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  color: var(--faint);
+  pointer-events: none;
+}
+
+.notes-doc h1 {
+  font-size: 22px;
+  margin: 10px 0 6px;
+}
+
+.notes-doc h2 {
+  font-size: 18px;
+  margin: 10px 0 4px;
+}
+
+.notes-doc h3 {
+  font-size: 15px;
+  margin: 8px 0 4px;
+}
+
+.notes-doc p {
+  margin: 4px 0;
+}
+
+.notes-doc ul,
+.notes-doc ol {
+  margin: 4px 0;
+  padding-left: 22px;
+}
+
+/* Tailwind's reset takes every list's markers away; notes want them back. */
+.notes-doc ul {
+  list-style: disc;
+}
+
+.notes-doc ul ul {
+  list-style: circle;
+}
+
+.notes-doc ol {
+  list-style: decimal;
+}
+
+.notes-doc li::marker {
+  color: var(--muted);
+}
+
+.notes-doc ul[data-type='taskList'] {
+  padding-left: 2px;
+  list-style: none;
+}
+
+.notes-doc ul[data-type='taskList'] li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.notes-doc ul[data-type='taskList'] li > label {
+  margin-top: 3px;
+}
+
+.notes-doc ul[data-type='taskList'] li[data-checked='true'] > div {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.notes-doc mark {
+  border-radius: 3px;
+  padding: 0 2px;
+  color: inherit;
+}
+
+.notes-doc code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--chip);
+  font:
+    12.5px ui-monospace,
+    'SF Mono',
+    Menlo,
+    Consolas,
+    monospace;
+}
+
+.notes-doc pre {
+  overflow-x: auto;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.notes-doc pre code {
+  padding: 0;
+  background: none;
+}
+
+.notes-doc blockquote {
+  margin: 6px 0;
+  padding-left: 12px;
+  border-left: 3px solid var(--stroke-strong);
+  color: var(--muted);
+}
+
+.notes-doc a {
+  color: var(--focus);
+}
+
+.notes-doc hr {
+  border: none;
+  border-top: 1px solid var(--stroke-strong);
+}
+
+.notes-browser {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.notes-search {
+  margin: 10px;
+  padding: 7px 10px;
+  border: 1px solid var(--stroke-strong);
+  border-radius: 8px;
+  background: var(--panel);
+  outline: none;
+}
+
+.notes-list {
+  flex: 1;
+  margin: 0;
+  padding: 0 6px 6px;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.notes-list li {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.notes-list li.selected {
+  background: var(--select);
+}
+
+.notes-list li.current strong::after {
+  content: ' •';
+  color: var(--muted);
+}
+
+.notes-list strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.notes-list span {
+  grid-column: 1;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.notes-list time {
+  grid-column: 2;
+  grid-row: 1;
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.notes-list .notes-empty {
+  display: block;
+  color: var(--muted);
+}
+
+.notes-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 12px;
+  border-top: 1px solid var(--stroke);
+  color: var(--muted);
+  font-size: 11px;
+}

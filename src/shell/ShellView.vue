@@ -184,6 +184,7 @@
       return;
     }
     const current = ++generation;
+    pending = '';
     // The line clears for the next command; the output's header shows this one.
     text.value = '';
     await nextTick();
@@ -206,9 +207,12 @@
           target.id = event.id;
           target.shell = event.shell;
         } else if (event.kind === 'output') {
-          target.output = (target.output + event.text).slice(-OUTPUT_LIMIT);
-          void follow();
+          // Chunks arrive faster than frames; they're added (and the output cleaned and
+          // redrawn) once a frame.
+          pending += event.text;
+          if (!frame) frame = requestAnimationFrame(() => flush(target));
         } else if (event.kind === 'exit') {
+          flush(target);
           target.code = event.code;
           target.millis = event.millis;
           cwd.value = endedIn(target.output) ?? cwd.value;
@@ -225,6 +229,17 @@
         target.output = errorMessage(error);
       }
     }
+  }
+
+  let pending = '';
+  let frame = 0;
+  function flush(target: Run) {
+    cancelAnimationFrame(frame);
+    frame = 0;
+    if (!pending) return;
+    target.output = (target.output + pending).slice(-OUTPUT_LIMIT);
+    pending = '';
+    void follow();
   }
 
   // Keep the newest output in view unless the user scrolled up to read.

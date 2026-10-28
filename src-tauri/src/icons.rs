@@ -49,17 +49,18 @@ pub async fn site_icon(url: &str) -> Option<String> {
     if let Some(saved) = cached.as_ref().and_then(|path| std::fs::read(path).ok()) {
         return Some(String::from_utf8_lossy(&saved).into_owned());
     }
-    let client = reqwest::Client::builder()
-        .user_agent("Zephyr")
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-        .ok()?;
+    let client = crate::util::http();
     let sources = [
         format!("https://www.google.com/s2/favicons?domain={host}&sz=64"),
         format!("https://{host}/favicon.ico"),
     ];
     for source in sources {
-        let Ok(response) = client.get(&source).send().await else {
+        let Ok(response) = client
+            .get(&source)
+            .timeout(std::time::Duration::from_secs(5))
+            .send()
+            .await
+        else {
             continue;
         };
         if !response.status().is_success() {

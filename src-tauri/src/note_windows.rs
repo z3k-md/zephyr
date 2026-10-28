@@ -286,7 +286,7 @@ fn forget(app: &AppHandle, id: &str) {
 fn saved(app: &AppHandle) -> Vec<NoteWindow> {
     app.try_state::<AppState>()
         .and_then(|state| state.snapshot().ok())
-        .map(|snapshot| snapshot.note_windows)
+        .map(|snapshot| snapshot.note_windows.clone())
         .unwrap_or_default()
 }
 

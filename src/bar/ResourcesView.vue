@@ -9,16 +9,30 @@
   import { isMac, isModifierKey } from '../keys';
   import Keys from '../components/Keys.vue';
   import KeyHints from '../components/KeyHints.vue';
+  import ResourceDetailPane from './ResourceDetail.vue';
+  import ResourceDrill from './ResourceDrill.vue';
   import {
     errorMessage,
     resourcesClosed,
+    resourcesCores,
+    resourcesDetail,
+    resourcesMemory,
     resourcesQuit,
     resourcesRelaunch,
     resourcesReveal,
     resourcesSnapshot,
     resourcesSwitch,
   } from '../api';
-  import type { ResourcePoint, ResourceRow, ResourceSnapshot, ResourceSort } from '../types';
+  import type {
+    Battery,
+    CoreHeat,
+    MemoryBreakdown,
+    ResourceDetail,
+    ResourcePoint,
+    ResourceRow,
+    ResourceSnapshot,
+    ResourceSort,
+  } from '../types';
 
   // System Resources: the machine's CPU, memory, GPU and network over the last 15 minutes, and the
   // apps using them, live. Rows are apps (helpers counted in) or command-line programs; Enter
@@ -32,17 +46,31 @@
     keys?: string;
     /** The menu stays open after it runs. */
     keepOpen?: boolean;
+    /** Why it can't be done here; shown greyed with the reason. */
+    disabled?: string;
     run: () => unknown;
   }
 
   const SORTS: { id: ResourceSort; label: string }[] = [
     { id: 'cpu', label: 'CPU' },
     { id: 'memory', label: 'Memory' },
-    { id: 'disk', label: 'Disk' },
+    // The third column: per-process GPU on Windows, which counts it; disk I/O on macOS,
+    // where per-process GPU needs root.
+    isMac ? { id: 'disk', label: 'Disk' } : { id: 'gpu', label: 'GPU' },
     { id: 'name', label: 'Name' },
   ];
   const COLUMNS = [SORTS[3], SORTS[0], SORTS[1], SORTS[2]];
-  const RATES = [1000, 2000, 5000];
+  const RATES = [500, 1000, 2000];
+  const RATE_KEY = 'zephyr.resources.rate';
+  /** The refresh rate picked in ⌘K, remembered in this window's storage. */
+  function savedRate(): number {
+    try {
+      const saved = Number(localStorage.getItem(RATE_KEY));
+      return RATES.includes(saved) ? saved : 1000;
+    } catch {
+      return 1000;
+    }
+  }
   /** After a key or the pointer moves the selection, the order holds this long. */
   const HOLD_MS = 2000;
   /** Seconds of history the sparklines span (stats.rs keeps this much). */
@@ -50,8 +78,9 @@
 
   const LIST_HINTS = [
     { keys: 'enter', label: 'switch' },
-    { keys: 'mod+backspace', label: 'quit' },
-    { keys: 'mod+alt+backspace', label: 'force' },
+    { keys: isMac ? 'mod+backspace' : 'delete', label: 'quit' },
+
+    { keys: 'shift+space', label: 'info' },
     { keys: 'tab', label: 'sort' },
     { keys: 'mod+k', label: 'actions' },
   ];
@@ -78,8 +107,17 @@
   const actionsOpen = ref(false);
   const actionIndex = ref(0);
   const actionsShown = ref(Infinity);
-  const rate = ref(1000);
+  const rate = ref(savedRate());
+  /** Show info for the selected row, and the tiles' drill-ins in place of the list. */
+  const detailOpen = ref(false);
+  const detail = ref<ResourceDetail | null>(null);
+  const drill = ref<'cpu' | 'memory' | null>(null);
+  const heat = ref<CoreHeat | null>(null);
+  const memoryParts = ref<MemoryBreakdown | null>(null);
   const live = ref(false);
+
+  /** How long the last tick took, start to finish, for the footer's tooltip. */
+  const tickMs = ref(0);
 
   let timer = 0;
   let generation = 0;
@@ -98,6 +136,11 @@
   });
 
   onUnmounted(stop);
+
+  // Show info follows the selection.
+  watch(selectedKey, () => {
+    detail.value = null;
+  });
 
   watch([filter, sort], () => {
     heldUntil = 0;
@@ -132,10 +175,21 @@
     const ticket = ++generation;
     if (schedule) window.clearTimeout(timer);
     try {
+      const started = performance.now();
       const next = await resourcesSnapshot(sort.value, filter.value, 60);
       if (ticket !== generation) return;
       data.value = next;
       apply(next.rows);
+      // Only what's on screen is asked for.
+      const row = current.value;
+      if (detailOpen.value && row) {
+        detail.value = await resourcesDetail(row.key, row.pids).catch(() => null);
+      }
+      if (drill.value === 'cpu') heat.value = await resourcesCores().catch(() => null);
+      if (drill.value === 'memory') {
+        memoryParts.value = await resourcesMemory().catch(() => null);
+      }
+      tickMs.value = Math.round(performance.now() - started);
     } catch (error) {
       notice.value = errorMessage(error);
     } finally {
@@ -185,9 +239,8 @@
   async function switchTo(row = current.value) {
     if (!row) return;
     try {
-      if (!(await resourcesSwitch(row.pids))) {
-        notice.value = `${row.name} has no windows to show.`;
-      }
+      // A process with no window shows its info instead.
+      if (!(await resourcesSwitch(row.pids))) openDetail();
     } catch (error) {
       notice.value = errorMessage(error);
     }
@@ -243,34 +296,59 @@
     }
   }
 
+  const QUIT_KEYS = isMac ? 'mod+backspace' : 'delete';
+  const FORCE_KEYS = isMac ? 'mod+alt+backspace' : 'shift+delete';
+  /** Finder and the Dock come back by themselves on a Mac; Explorer is restarted. */
+  const RELAUNCH = isMac ? 'Relaunch' : 'Restart';
+
   const actions = computed<Action[]>(() => {
     const row = current.value;
     if (!row) return [];
+    const noPath = row.locked ? 'Needs administrator rights' : 'Not known';
     const list: Action[] = [
       { label: `Switch to ${row.name}`, keys: 'enter', run: () => switchTo(row) },
-    ];
-    list.push(
+      { label: 'Show info', keys: 'shift+space', run: () => openDetail() },
       row.relaunch
-        ? { label: `Relaunch ${row.name}`, keys: 'mod+backspace', run: () => quit(row, false) }
-        : { label: `Quit ${row.name}`, keys: 'mod+backspace', run: () => quit(row, false) }
-    );
-    if (!row.protected) {
-      list.push({ label: 'Force Quit', keys: 'mod+alt+backspace', run: () => quit(row, true) });
-    }
-    if (row.path) list.push({ label: `Show in ${finder}`, run: () => reveal() });
-    list.push({ label: `Search the web for ${row.name}`, run: () => emit('search', row.name) });
-    list.push({
-      label: row.pids.length > 1 ? 'Copy process IDs' : 'Copy process ID',
-      run: () => copy(row.pids.join(' '), row.pids.length > 1 ? 'process IDs' : 'process ID'),
-    });
-    if (row.path) list.push({ label: 'Copy path', run: () => copy(row.path, 'path') });
-    if (row.command) list.push({ label: 'Copy command', run: () => copy(row.command, 'command') });
+        ? { label: `${RELAUNCH} ${row.name}`, keys: QUIT_KEYS, run: () => quit(row, false) }
+        : { label: `Quit ${row.name}`, keys: QUIT_KEYS, run: () => quit(row, false) },
+      {
+        label: 'Force quit',
+        keys: FORCE_KEYS,
+        disabled: row.protected ? 'Keeps the system running' : undefined,
+        run: () => quit(row, true),
+      },
+      {
+        label: `Show in ${finder}`,
+        disabled: row.path ? undefined : noPath,
+        run: () => reveal(),
+      },
+      { label: `Search the web for ${row.name}`, run: () => emit('search', row.name) },
+      {
+        label: row.pids.length > 1 ? 'Copy process IDs' : 'Copy process ID',
+        run: () => copy(row.pids.join(' '), row.pids.length > 1 ? 'process IDs' : 'process ID'),
+      },
+      {
+        label: 'Copy path',
+        disabled: row.path ? undefined : noPath,
+        run: () => copy(row.path, 'path'),
+      },
+      {
+        label: 'Copy command',
+        disabled: row.command ? undefined : noPath,
+        run: () => copy(row.command, 'command'),
+      },
+    ];
     const nextRate = RATES[(RATES.indexOf(rate.value) + 1) % RATES.length];
     list.push({
       label: `Refresh every ${nextRate / 1000} s (now ${rate.value / 1000} s)`,
       keepOpen: true,
       run: () => {
         rate.value = nextRate;
+        try {
+          localStorage.setItem(RATE_KEY, String(nextRate));
+        } catch {
+          // Not remembered this time; it still applies now.
+        }
         void tick(true);
       },
     });
@@ -278,9 +356,24 @@
   });
 
   function runAction(action: Action | undefined) {
-    if (!action) return;
+    if (!action || action.disabled) return;
     if (!action.keepOpen) actionsOpen.value = false;
     void action.run();
+  }
+
+  function openDetail() {
+    if (!current.value) return;
+    drill.value = null;
+    detailOpen.value = true;
+    detail.value = null;
+    void tick(false);
+  }
+
+  /** The CPU or Memory tile: its drill-in in place of the list, or back to the list. */
+  function toggleDrill(kind: 'cpu' | 'memory') {
+    detailOpen.value = false;
+    drill.value = drill.value === kind ? null : kind;
+    if (drill.value) void tick(false);
   }
 
   /** Called by the bar for every key while System Resources is showing. */
@@ -314,9 +407,24 @@
       // Any other key closes the menu and does what it does in the list.
       actionsOpen.value = false;
     }
-    if (modifier && event.key === 'Backspace') {
+    if (modifier && event.key === 'Backspace' && isMac) {
       event.preventDefault();
       if (!event.repeat) askQuit(event.altKey);
+      return;
+    }
+    // Windows: Delete ends the task, as in Task Manager, unless it would delete typed text.
+    const input = inputEl.value;
+    const caretAtEnd = !input || input.selectionStart === filter.value.length;
+    if (!isMac && event.key === 'Delete' && !modifier && caretAtEnd) {
+      event.preventDefault();
+      if (!event.repeat) askQuit(event.shiftKey);
+      return;
+    }
+    if (event.key === ' ' && event.shiftKey && !modifier && !event.altKey) {
+      event.preventDefault();
+      if (event.repeat) return;
+      if (detailOpen.value) detailOpen.value = false;
+      else openDetail();
       return;
     }
     if (confirming.value) {
@@ -335,7 +443,9 @@
     }
     if (event.key === 'Escape') {
       event.preventDefault();
-      if (notice.value) notice.value = null;
+      if (detailOpen.value) detailOpen.value = false;
+      else if (drill.value) drill.value = null;
+      else if (notice.value) notice.value = null;
       else if (filter.value) filter.value = '';
       else emit('exit');
       return;
@@ -361,8 +471,26 @@
     }
   }
 
+  /** "54 °C": hardware temperatures are always Celsius, whatever unit the weather uses. */
+  function degrees(value: number | null | undefined): string {
+    return value == null ? '' : `${Math.round(value)} °C`;
+  }
+
   function percent(value: number): string {
     return value < 10 ? `${value.toFixed(1)}%` : `${Math.round(value)}%`;
+  }
+
+  /** "84%, 3:12 left", "Charging 61%", "Full". */
+  function batteryText(battery: Battery): string {
+    const percentText = `${Math.round(battery.percent)}%`;
+    const left = battery.secondsLeft
+      ? `${Math.floor(battery.secondsLeft / 3600)}:${String(Math.floor((battery.secondsLeft % 3600) / 60)).padStart(2, '0')}`
+      : '';
+    if (battery.state === 'full') return `Battery full`;
+    if (battery.state === 'charging') {
+      return `Charging ${percentText}${left ? `, ${left} to full` : ''}`;
+    }
+    return `Battery ${percentText}${left ? `, ${left} left` : ''}`;
   }
 
   function uptime(seconds: number): string {
@@ -403,12 +531,6 @@
     };
   }
 
-  /** "12% · 54°C": hardware temperatures are always in Celsius. Just the value with no
-   *  reading. */
-  function withTemp(value: string, celsius: number | null | undefined): string {
-    return celsius == null ? value : `${value} · ${Math.round(celsius)}°C`;
-  }
-
   const tiles = computed(() => {
     const snapshot = data.value;
     if (!snapshot) return null;
@@ -417,7 +539,8 @@
     const totals = snapshot.totals;
     return {
       cpu: {
-        value: withTemp(percent(totals.cpu), totals.cpuTemp),
+        value: percent(totals.cpu),
+        temp: degrees(totals.cpuTemp),
         spark: spark(history, (p) => p.cpu, 100),
       },
       memory: {
@@ -426,12 +549,9 @@
       },
       gpu: totals.gpu
         ? {
-            value: withTemp(
-              totals.gpu.memoryUsed
-                ? `${percent(totals.gpu.usage)} · ${bytes(totals.gpu.memoryUsed)}`
-                : percent(totals.gpu.usage),
-              totals.gpuTemp
-            ),
+            value: totals.gpu.memoryUsed
+              ? `${percent(totals.gpu.usage)} · ${bytes(totals.gpu.memoryUsed)}`
+              : percent(totals.gpu.usage),
             title: gpuTitle(
               totals.gpu.name,
               totals.gpu.usage,
@@ -439,6 +559,7 @@
               totals.gpu.memoryTotal
             ),
             spark: spark(history, (p) => p.gpu, 100),
+            temp: degrees(totals.gpuTemp),
           }
         : null,
       network: {
@@ -492,13 +613,17 @@
       <button
         type="button"
         class="res-tile"
-        :class="{ active: sort === 'cpu' }"
+        :class="{ active: drill === 'cpu' }"
+        v-tip="drill === 'cpu' ? 'Back to the list (Esc)' : 'Each processor'"
         @mousedown.prevent
-        @click="setSort('cpu')"
+        @click="toggleDrill('cpu')"
       >
         <span class="res-tile-head">
           <svg viewBox="0 0 24 24" aria-hidden="true" v-html="GLYPHS.cpu" />
           CPU
+          <span v-if="tiles.cpu.temp" class="res-temp" v-tip="'CPU temperature'">{{
+            tiles.cpu.temp
+          }}</span>
         </span>
         <span class="res-tile-value">{{ tiles.cpu.value }}</span>
         <svg
@@ -514,9 +639,10 @@
       <button
         type="button"
         class="res-tile"
-        :class="{ active: sort === 'memory' }"
+        :class="{ active: drill === 'memory' }"
+        v-tip="drill === 'memory' ? 'Back to the list (Esc)' : 'Where the memory is'"
         @mousedown.prevent
-        @click="setSort('memory')"
+        @click="toggleDrill('memory')"
       >
         <span class="res-tile-head">
           <svg viewBox="0 0 24 24" aria-hidden="true" v-html="GLYPHS.memory" />
@@ -537,6 +663,9 @@
         <span class="res-tile-head">
           <svg viewBox="0 0 24 24" aria-hidden="true" v-html="GLYPHS.gpu" />
           GPU
+          <span v-if="tiles.gpu.temp" class="res-temp" v-tip="'GPU temperature'">{{
+            tiles.gpu.temp
+          }}</span>
         </span>
         <span class="res-tile-value">{{ tiles.gpu.value }}</span>
         <svg
@@ -593,10 +722,23 @@
         @click="runAction(action)"
         @mousemove="actionIndex = index"
       >
-        <span class="label">{{ action.label }}</span>
-        <Keys v-if="action.keys" :keys="action.keys" />
+        <span class="label" :class="{ off: action.disabled }">{{ action.label }}</span>
+        <span v-if="action.disabled" class="res-why">{{ action.disabled }}</span>
+        <Keys v-else-if="action.keys" :keys="action.keys" />
       </li>
     </ul>
+
+    <ResourceDrill v-else-if="drill" :kind="drill" :heat="heat" :memory="memoryParts" />
+
+    <ResourceDetailPane
+      v-else-if="detailOpen && current"
+      :row="current"
+      :detail="detail"
+      @switch="switchTo(current)"
+      @quit="askQuit"
+      @reveal="reveal"
+      @close="detailOpen = false"
+    />
 
     <template v-else>
       <div class="res-columns" role="presentation">
@@ -659,7 +801,7 @@
           <span v-if="confirming?.key === row.key" class="res-confirm">
             {{
               row.relaunch && !confirming.force
-                ? `Relaunch ${row.name}?`
+                ? `${RELAUNCH} ${row.name}?`
                 : `${confirming.force ? 'Force quit' : 'Quit'} ${row.name}?`
             }}
             <KeyHints :hints="CONFIRM_HINTS" />
@@ -675,8 +817,13 @@
               <template v-else>—</template>
             </span>
             <span class="res-memory">{{ row.memory !== null ? bytes(row.memory) : '—' }}</span>
-            <span class="res-disk">
+            <span v-if="isMac" class="res-disk">
               {{ row.disk === null ? '—' : row.disk ? `${bytes(row.disk)}/s` : '0' }}
+            </span>
+            <span v-else class="res-disk res-gpu">
+              {{
+                row.gpu === null || row.gpu === undefined ? '—' : row.gpu ? percent(row.gpu) : '0'
+              }}
             </span>
           </template>
         </li>
@@ -685,9 +832,16 @@
 
     <footer class="footer">
       <KeyHints :hints="actionsOpen ? MENU_HINTS : LIST_HINTS" />
-      <span v-if="data" v-tip="`${data.processes} processes`">
-        {{ data.totals.diskTotal ? `${bytes(data.totals.diskFree)} free · ` : '' }}up
-        {{ uptime(data.uptime) }}
+      <span
+        v-if="data"
+        v-tip="
+          `${data.processes} processes
+Each refresh takes ${tickMs} ms`
+        "
+      >
+        <template v-if="data.battery">{{ batteryText(data.battery) }} · </template>
+        {{ data.totals.diskTotal ? `${bytes(data.totals.diskFree)} free` : '' }}
+        <template v-if="!data.battery">· up {{ uptime(data.uptime) }}</template>
       </span>
     </footer>
   </div>

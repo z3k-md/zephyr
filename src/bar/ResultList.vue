@@ -1,4 +1,5 @@
 <script setup lang="ts">
+  import { computed } from 'vue';
   import RowIcon from './RowIcon.vue';
   import Keys from '../components/Keys.vue';
   import KeyHints from '../components/KeyHints.vue';
@@ -7,7 +8,7 @@
   import { rowKey, type Group } from './rows';
   import type { Suggestion } from '../types';
 
-  defineProps<{
+  const props = defineProps<{
     groups: Group[];
     selected: number;
     /** While the run-a-row modifier is held: that modifier ("alt", "cmd"), which with a
@@ -24,6 +25,17 @@
   }>();
 
   const gesture = dragGesture((index) => emit('drag', index));
+
+  // Groups keyed by their title and how many came before with it, so a section keeps its
+  // element as rows above it come and go (its start index alone would shift).
+  const keyed = computed(() => {
+    const seen = new Map<string, number>();
+    return props.groups.map((group) => {
+      const count = seen.get(group.title) ?? 0;
+      seen.set(group.title, count + 1);
+      return { ...group, key: `${group.title}#${count}` };
+    });
+  });
 
   // A card (the network card, a port's process) renders in the bar (#card), as the
   // list's first row.
@@ -57,7 +69,7 @@
     aria-label="Results"
     v-fit="(count: number) => emit('fit', count)"
   >
-    <li v-for="group in groups" :key="group.start" role="presentation">
+    <li v-for="group in keyed" :key="group.key" role="presentation">
       <div v-if="group.title" :id="`head-${group.start}`" class="section-head">
         {{ group.title }}
       </div>

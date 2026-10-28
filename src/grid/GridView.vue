@@ -1,4 +1,5 @@
 <script setup lang="ts">
+  import './grid.css';
   import { computed, onMounted, onUnmounted, ref } from 'vue';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { useWindowListener } from '../windowEvents';

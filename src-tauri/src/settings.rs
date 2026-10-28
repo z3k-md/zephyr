@@ -513,7 +513,13 @@ const ZEPHYR: &[Setting] = &[
         "zephyr.resources",
         "Zephyr Resources",
         "resources",
-        &["footer stats", "cpu meter", "gpu", "system resources"],
+        &[
+            "footer stats",
+            "cpu meter",
+            "gpu",
+            "system resources",
+            "cpu temperature",
+        ],
     ),
     zephyr(
         "zephyr.sync",

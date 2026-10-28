@@ -6,6 +6,7 @@ mod browser;
 mod capture;
 mod clipboard;
 mod commands;
+mod cputemp;
 mod deeplink;
 mod files;
 mod gpu;
@@ -48,6 +49,16 @@ use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_global_shortcut::ShortcutState;
 
 use crate::state::AppState;
+
+/// Run instead of the app when started as the CPU temperature helper (cputemp.rs): returns
+/// whether it was, after the helper has finished.
+pub fn run_helper_if_asked() -> bool {
+    if !std::env::args().any(|arg| arg == cputemp::HELPER_ARG) {
+        return false;
+    }
+    cputemp::helper();
+    true
+}
 
 pub fn init_logging() {
     startup::begin();
@@ -135,6 +146,7 @@ pub fn run() {
             // connection watched unless Settings turned that off.
             net::set_enabled(snapshot.watch_connection);
             net::start();
+            cputemp::start(snapshot.cpu_temp);
             stats::start(app.handle().clone());
             // The settings catalog reads every System Settings pane's plist on macOS (most of a
             // second); built now, the first search doesn't wait on it.
@@ -215,7 +227,11 @@ pub fn run() {
                 window::draw_bar_unseen(app.handle());
             }
 
-            note_windows::restore(app.handle());
+            // Notes reopen after startup rather than holding it up.
+            let notes_app = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                note_windows::restore(&notes_app);
+            });
             register_links(app);
 
             startup::mark("setup finished");
@@ -262,6 +278,9 @@ pub fn run() {
             commands::resources_relaunch,
             commands::resources_switch,
             commands::resources_reveal,
+            commands::resources_detail,
+            commands::resources_cores,
+            commands::resources_memory,
             commands::save_show_stats,
             commands::search_apps,
             commands::weather,
@@ -275,6 +294,8 @@ pub fn run() {
             commands::network_public_ip,
             commands::network_addresses,
             commands::save_watch_connection,
+            commands::save_cpu_temp,
+            commands::cpu_temp_status,
             commands::speed_test,
             commands::speed_test_cancel,
             commands::open_onboarding,
