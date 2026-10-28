@@ -101,7 +101,13 @@ pub fn on_port(port: u16) -> Vec<PortUse> {
 pub fn listening() -> Vec<PortUse> {
     let sockets: Vec<Socket> = imp::sockets()
         .into_iter()
-        .filter(|socket| socket.pid != 0 && (socket.state == "LISTEN" || socket.protocol == "UDP"))
+        // A UDP socket with a remote end is a client's connection (QUIC on macOS), not a
+        // listener; Windows' UDP table never has one.
+        .filter(|socket| {
+            socket.pid != 0
+                && (socket.state == "LISTEN"
+                    || (socket.protocol == "UDP" && socket.remote.is_none()))
+        })
         .collect();
     let mut uses = described(dedupe(sockets, true));
     uses.sort_by_key(|item| (item.protocol != "TCP", item.port, item.pid));
