@@ -280,6 +280,100 @@ pub async fn add_envelope(
     .map(|_| ())
 }
 
+/// The server calls sync makes, so its logic can be tested against a fake server.
+pub trait Server: Send + Sync {
+    fn exchange_code(
+        &self,
+        code: &str,
+        verifier: &str,
+    ) -> impl Future<Output = Result<Tokens, String>> + Send;
+    fn refresh(&self, refresh_token: &str) -> impl Future<Output = Result<Tokens, String>> + Send;
+    fn logout(&self, access: &str) -> impl Future<Output = Result<(), String>> + Send;
+    fn devices(&self, access: &str) -> impl Future<Output = Result<Vec<Device>, String>> + Send;
+    fn add_device(
+        &self,
+        access: &str,
+        platform: &str,
+        name: &str,
+        public_key: &Key32,
+    ) -> impl Future<Output = Result<Device, String>> + Send;
+    fn update_device(
+        &self,
+        access: &str,
+        id: &str,
+        fields: &Value,
+    ) -> impl Future<Output = Result<(), String>> + Send;
+    fn envelopes(
+        &self,
+        access: &str,
+    ) -> impl Future<Output = Result<Vec<StoredEnvelope>, String>> + Send;
+    fn add_envelope(
+        &self,
+        access: &str,
+        key_gen: i32,
+        recipient_device_id: Option<&str>,
+        sender_device_id: &str,
+        envelope: &Envelope,
+    ) -> impl Future<Output = Result<(), String>> + Send;
+}
+
+/// The real Supabase project.
+pub struct Supabase;
+
+impl Server for Supabase {
+    async fn exchange_code(&self, code: &str, verifier: &str) -> Result<Tokens, String> {
+        exchange_code(code, verifier).await
+    }
+
+    async fn refresh(&self, refresh_token: &str) -> Result<Tokens, String> {
+        refresh(refresh_token).await
+    }
+
+    async fn logout(&self, access: &str) -> Result<(), String> {
+        logout(access).await
+    }
+
+    async fn devices(&self, access: &str) -> Result<Vec<Device>, String> {
+        devices(access).await
+    }
+
+    async fn add_device(
+        &self,
+        access: &str,
+        platform: &str,
+        name: &str,
+        public_key: &Key32,
+    ) -> Result<Device, String> {
+        add_device(access, platform, name, public_key).await
+    }
+
+    async fn update_device(&self, access: &str, id: &str, fields: &Value) -> Result<(), String> {
+        update_device(access, id, fields).await
+    }
+
+    async fn envelopes(&self, access: &str) -> Result<Vec<StoredEnvelope>, String> {
+        envelopes(access).await
+    }
+
+    async fn add_envelope(
+        &self,
+        access: &str,
+        key_gen: i32,
+        recipient_device_id: Option<&str>,
+        sender_device_id: &str,
+        envelope: &Envelope,
+    ) -> Result<(), String> {
+        add_envelope(
+            access,
+            key_gen,
+            recipient_device_id,
+            sender_device_id,
+            envelope,
+        )
+        .await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

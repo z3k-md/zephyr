@@ -53,7 +53,7 @@ data-encoding = "2"
 tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
 if-addrs = "0.15.0"
 socket2 = "0.6"
-tokio = { version = "1", features = ["time"] }
+tokio = { version = "1", features = ["sync", "time"] }
 sysinfo = { version = "0.39", default-features = false, features = ["system", "disk", "network", "user"] }
 tauri-plugin-drag = "2.1.1"
 # Resources: the battery, where there is one.
