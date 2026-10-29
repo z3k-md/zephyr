@@ -46,6 +46,7 @@
   import LaunchGroupsSection from './LaunchGroupsSection.vue';
   import { THEMES } from '../themes';
   import { isMac } from '../keys';
+  import { usePoll } from '../poll';
   import Keys from '../components/Keys.vue';
   import ShortcutRecorder from '../components/ShortcutRecorder.vue';
   import InfoTip from '../components/InfoTip.vue';
@@ -546,23 +547,15 @@
       cpuTempBusy.value = false;
     }
   }
-  let cpuTempTimer = 0;
-  watch(
-    () => active.value === 'resources' && !!snapshot.value?.cpuTemp,
-    (watching) => {
-      window.clearInterval(cpuTempTimer);
-      cpuTempTimer = 0;
-      if (!watching || isMac) return;
-      const check = () =>
-        void cpuTempStatus()
-          .then((status) => (cpuTempNow.value = status.celsius))
-          .catch(() => undefined);
-      check();
-      cpuTempTimer = window.setInterval(check, 2000);
-    },
-    { immediate: true }
+  // The reading every 2 seconds while its page shows; a closed Settings is only hidden.
+  usePoll(
+    () =>
+      cpuTempStatus()
+        .then((status) => (cpuTempNow.value = status.celsius))
+        .catch(() => undefined),
+    2000,
+    () => !isMac && active.value === 'resources' && !!snapshot.value?.cpuTemp
   );
-  onUnmounted(() => window.clearInterval(cpuTempTimer));
   const cpuTempLine = computed(() => {
     if (cpuTempBusy.value) return 'Waiting for Windows to ask for permission…';
     if (cpuTempError.value) return cpuTempError.value;

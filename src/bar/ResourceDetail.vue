@@ -2,7 +2,7 @@
   import { computed } from 'vue';
   import RowIcon from './RowIcon.vue';
   import Keys from '../components/Keys.vue';
-  import { bytes } from '../format';
+  import { ago, bytes, elapsed } from '../format';
   import { isMac } from '../keys';
   import type { ResourceDetail, ResourceRow } from '../types';
 
@@ -45,16 +45,10 @@
     };
   });
 
-  function ago(seconds: number): string {
-    if (seconds < 90) return `${Math.round(seconds)} s`;
-    if (seconds < 5400) return `${Math.round(seconds / 60)} min`;
-    return `${Math.round(seconds / 3600)} h`;
-  }
-
   const started = computed(() => {
     const at = props.detail?.started;
     if (!at) return '—';
-    return `${ago(Date.now() / 1000 - at)} ago`;
+    return ago(at);
   });
 
   const facts = computed(() => {
@@ -103,7 +97,7 @@
     <div class="res-detail-legend">
       <span><i class="cpu" />CPU {{ row.cpu === null ? '—' : `${row.cpu.toFixed(1)}%` }}</span>
       <span><i class="memory" />Memory {{ row.memory === null ? '—' : bytes(row.memory) }}</span>
-      <span v-if="chart" class="since">last {{ ago(chart.since) }}</span>
+      <span v-if="chart" class="since">last {{ elapsed(chart.since) }}</span>
     </div>
     <dl class="res-detail-facts">
       <div v-for="[label, value] in facts" :key="label">

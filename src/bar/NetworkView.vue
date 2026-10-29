@@ -4,8 +4,9 @@
   import { GLYPHS } from './glyphs';
   import { vTip } from '../tip';
   import { vFit } from '../fit';
-  import { bytes } from '../format';
+  import { bytes, elapsed } from '../format';
   import { isModifierKey } from '../keys';
+  import { usePoll } from '../poll';
   import KeyHints from '../components/KeyHints.vue';
   import {
     errorMessage,
@@ -24,7 +25,7 @@
     SpeedProgress,
     SpeedResult,
   } from '../types';
-  import { GRADE_NAMES, ago, lastTestLine, lossText, mbps, ms, speedLine } from './network';
+  import { GRADE_NAMES, lastTestLine, lossText, mbps, ms, speedLine } from './network';
 
   // The Network view: how the connection has been over the last 15 minutes. A verdict, this
   // computer's addresses, a chart of latency (median and p95), loss and throughput, and the
@@ -61,9 +62,11 @@
   const testRunning = ref(false);
   const result = ref<SpeedResult | null>(null);
 
-  let timer = 0;
-  let publicTimer = 0;
   let unlisten: UnlistenFn | null = null;
+
+  // The history every second and the public address every 30, while live.
+  const history = usePoll(tick, 1000, live);
+  const publicAddress = usePoll(loadPublic, 30000, live);
 
   onMounted(async () => {
     start();
@@ -79,34 +82,29 @@
 
   /** Refreshes while the bar shows; the bar stops it when it hides. */
   function start() {
-    live.value = true;
-    void tick();
     void loadAddresses();
-    window.clearInterval(publicTimer);
-    publicTimer = window.setInterval(() => void loadPublic(), 30000);
+    if (!live.value) {
+      live.value = true;
+      return;
+    }
+    history.restart();
+    publicAddress.restart();
   }
 
   function stop() {
     live.value = false;
-    window.clearTimeout(timer);
-    window.clearInterval(publicTimer);
-    timer = 0;
   }
 
   async function tick() {
-    window.clearTimeout(timer);
     try {
       data.value = await networkHistory();
     } catch (error) {
       notice.value = errorMessage(error);
-    } finally {
-      if (live.value) timer = window.setTimeout(() => void tick(), 1000);
     }
   }
 
   async function loadAddresses() {
     addresses.value = await networkAddresses().catch(() => []);
-    await loadPublic();
   }
 
   async function loadPublic() {
@@ -279,7 +277,7 @@
     const bucket = buckets.value[index];
     if (!bucket) return null;
     const seconds = (buckets.value.length - index) * 5;
-    const parts = [ago(seconds)];
+    const parts = [`${elapsed(seconds)} ago`];
     if (bucket.median === null) {
       parts.push(bucket.flags & 16 ? 'offline' : bucket.sent ? 'no replies' : 'not measured');
     } else {

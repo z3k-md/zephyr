@@ -25,6 +25,7 @@
   } from '../api';
   import type { NoteSummary } from '../types';
   import { renderMarkdown } from './markdown';
+  import { ago } from '../format';
   import SelectMenu from '../components/SelectMenu.vue';
   import { MOD_KEY as mod } from '../keys';
   import Keys from '../components/Keys.vue';
@@ -426,14 +427,6 @@
       else if (search.value.trim()) void createFromSearch();
     }
   }
-
-  function ago(seconds: number): string {
-    const diff = Math.max(0, Date.now() / 1000 - seconds);
-    if (diff < 60) return 'just now';
-    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-    return new Date(seconds * 1000).toLocaleDateString();
-  }
 </script>
 
 <template>
@@ -483,7 +476,7 @@
         >
           <strong>{{ note.title }}</strong>
           <span>{{ note.snippet || 'No more text' }}</span>
-          <time>{{ ago(note.updated) }}</time>
+          <time>{{ ago(note.updated, 'recent') }}</time>
         </li>
         <li v-if="!notes.length" class="notes-empty" @click="createFromSearch">
           <template v-if="search.trim()">

@@ -7,6 +7,7 @@
   import { bytes } from '../format';
   import { gpuTitle } from './footerStats';
   import { isMac, isModifierKey } from '../keys';
+  import { useLater, usePoll } from '../poll';
   import Keys from '../components/Keys.vue';
   import KeyHints from '../components/KeyHints.vue';
   import ResourceDetailPane from './ResourceDetail.vue';
@@ -120,9 +121,11 @@
   /** How long the last tick took, start to finish, for the footer's tooltip. */
   const tickMs = ref(0);
 
-  let timer = 0;
   let generation = 0;
   let heldUntil = 0;
+  const later = useLater();
+  // Ticks at the picked rate while live.
+  const poll = usePoll(tick, rate, live);
 
   const selectedIndex = computed(() => {
     const index = rows.value.findIndex((row) => row.key === selectedKey.value);
@@ -146,20 +149,18 @@
   watch([filter, sort], () => {
     heldUntil = 0;
     confirming.value = null;
-    void tick(false);
+    void tick();
   });
 
   /** Ticks while the bar shows; the bar stops it when it hides. */
   function start() {
-    live.value = true;
-    void tick(true);
+    if (live.value) poll.restart();
+    else live.value = true;
   }
 
   /** The backend lets the process table go once nothing has asked for it in a while. */
   function stop() {
     live.value = false;
-    window.clearTimeout(timer);
-    timer = 0;
     void resourcesClosed().catch(() => undefined);
   }
 
@@ -172,9 +173,8 @@
     }
   });
 
-  async function tick(schedule: boolean) {
+  async function tick() {
     const ticket = ++generation;
-    if (schedule) window.clearTimeout(timer);
     try {
       const started = performance.now();
       // Only the rows that can show, and a few to spare for scrolling the selection.
@@ -195,8 +195,6 @@
       tickMs.value = Math.round(performance.now() - started);
     } catch (error) {
       notice.value = errorMessage(error);
-    } finally {
-      if (schedule && live.value) timer = window.setTimeout(() => void tick(true), rate.value);
     }
   }
 
@@ -274,7 +272,7 @@
         notice.value = `${force ? 'Force quit' : 'Quit'} ${row.name}.`;
       }
       heldUntil = 0;
-      window.setTimeout(() => void tick(false), 400);
+      later(tick, 400);
     } catch (error) {
       notice.value = errorMessage(error);
     }
@@ -360,7 +358,7 @@
         } catch {
           // Not remembered this time; it still applies now.
         }
-        void tick(true);
+        poll.restart();
       },
     });
     return list;
@@ -377,14 +375,14 @@
     drill.value = null;
     detailOpen.value = true;
     detail.value = null;
-    void tick(false);
+    void tick();
   }
 
   /** The CPU or Memory tile: its drill-in in place of the list, or back to the list. */
   function toggleDrill(kind: 'cpu' | 'memory') {
     detailOpen.value = false;
     drill.value = drill.value === kind ? null : kind;
-    if (drill.value) void tick(false);
+    if (drill.value) void tick();
   }
 
   /** Called by the bar for every key while System Resources is showing. */

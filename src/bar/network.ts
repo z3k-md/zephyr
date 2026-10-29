@@ -1,8 +1,10 @@
 // The connection monitor as the bar shows it: numbers in words, the sparkline, and a
 // summary that refreshes once a second while something on screen shows it.
 
-import { onUnmounted, ref, watch, type Ref } from 'vue';
+import { ref, type Ref } from 'vue';
 import { networkSummary } from '../api';
+import { usePoll } from '../poll';
+import { ago } from '../format';
 import type { NetworkGrade, NetworkSummary, SpeedResult } from '../types';
 
 export const GRADE_NAMES: Record<NetworkGrade, string> = {
@@ -40,14 +42,6 @@ export function note(summary: NetworkSummary): string {
   return rest || (summary.grade === 'good' ? 'Steady, no drops' : summary.verdict);
 }
 
-/** "2 min ago", "40 s ago". */
-export function ago(seconds: number): string {
-  const whole = Math.max(0, Math.round(seconds));
-  if (whole < 90) return `${whole} s ago`;
-  if (whole < 90 * 60) return `${Math.round(whole / 60)} min ago`;
-  return `${Math.round(whole / 3600)} h ago`;
-}
-
 /** "412↓ / 38↑ Mb/s, bloat B". */
 export function speedLine(result: SpeedResult): string {
   return `${mbps(result.downMbps)}↓ / ${mbps(result.upMbps)}↑ Mb/s, bloat ${result.bloat}`;
@@ -60,7 +54,7 @@ export function mbps(value: number): string {
 /** "Last test 12 min ago: 412↓ / 38↑ Mb/s, bloat B". */
 export function lastTestLine(result: SpeedResult | null | undefined): string {
   if (!result) return '';
-  return `Last test ${ago((Date.now() - result.at) / 1000)}: ${speedLine(result)}`;
+  return `Last test ${ago(result.at / 1000)}: ${speedLine(result)}`;
 }
 
 /**
@@ -86,7 +80,6 @@ export function sparkPath(values: (number | null)[], width: number, height: numb
 /** The summary, fetched now and every second while `active` holds. */
 export function useNetworkSummary(active: Ref<boolean>) {
   const summary = ref<NetworkSummary | null>(null);
-  let timer = 0;
   async function load() {
     try {
       summary.value = await networkSummary();
@@ -94,20 +87,7 @@ export function useNetworkSummary(active: Ref<boolean>) {
       summary.value = null;
     }
   }
-  function stop() {
-    window.clearInterval(timer);
-    timer = 0;
-  }
-  watch(
-    active,
-    (on) => {
-      stop();
-      if (!on) return;
-      void load();
-      timer = window.setInterval(() => void load(), 1000);
-    },
-    { immediate: true }
-  );
-  onUnmounted(stop);
+  // Paused with the bar: hidden, nothing shows it.
+  usePoll(load, 1000, active);
   return summary;
 }

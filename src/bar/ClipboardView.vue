@@ -13,7 +13,7 @@
   } from '../api';
   import type { ClipDetail, ClipKind, ClipSummary } from '../types';
   import { dragGesture, dragOut } from './dragOut';
-  import { bytes, dateTime } from '../format';
+  import { ago, bytes, dateTime } from '../format';
   import { isMac } from '../keys';
   import SelectMenu from '../components/SelectMenu.vue';
   import Keys from '../components/Keys.vue';
@@ -339,14 +339,6 @@
     return { text: '¶', link: '↗', color: '●', image: '▣', files: '▤' }[kind];
   }
 
-  function ago(seconds: number): string {
-    const diff = Math.max(0, Date.now() / 1000 - seconds);
-    if (diff < 60) return 'now';
-    if (diff < 3600) return `${Math.floor(diff / 60)}m`;
-    if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
-    return `${Math.floor(diff / 86400)}d`;
-  }
-
   defineExpose({ onKey, refresh, reopen });
 </script>
 
@@ -416,7 +408,7 @@
               >{{ kindIcon(item.kind) }}</span
             >
             <span class="label">{{ item.title }}</span>
-            <span class="hint">{{ item.pinned ? '📌' : ago(item.lastCopied) }}</span>
+            <span class="hint">{{ item.pinned ? '📌' : ago(item.lastCopied, 'short') }}</span>
           </li>
         </template>
       </ul>

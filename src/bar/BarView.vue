@@ -68,6 +68,9 @@
   import { vFit } from '../fit';
   import { vTip } from '../tip';
   import { isMac } from '../keys';
+  import { barShown } from '../visibility';
+  import { clock } from '../format';
+  import { useLater } from '../poll';
   import NowPlayingStrip from './NowPlayingStrip.vue';
   import { dragOut } from './dragOut';
   import { GLYPHS } from './glyphs';
@@ -204,6 +207,8 @@
   let pendingMove = 0;
   let suggestTimer = 0;
   let unlistens: UnlistenFn[] = [];
+  // A list caught up a moment after a quit or close; dropped if the bar goes first.
+  const later = useLater();
   let observer: ResizeObserver | null = null;
 
   const rowCtx = computed<RowCtx>(() => ({
@@ -218,8 +223,6 @@
   // second.
   const powerRow = ref<PowerPreview | null>(null);
   const confirmArm = ref('');
-  const clock = ref(Date.now());
-  let clockTimer = window.setInterval(() => (clock.value = Date.now()), 15000);
 
   function untilText(at: number): string {
     const left = Math.max(0, at - Math.floor(clock.value / 1000));
@@ -647,7 +650,7 @@
     try {
       await resourcesQuit(portName(use), [use.pid], force);
       notice.value = `${force ? 'Force quit' : 'Quit'} ${portName(use)}.`;
-      window.setTimeout(scheduleSuggest, 400);
+      later(scheduleSuggest, 400);
     } catch (error) {
       notice.value = errorMessage(error);
     }
@@ -703,6 +706,7 @@
 
     unlistens.push(
       await listen('bar-shown', () => {
+        barShown.value = true;
         void updateWaiting()
           .then((version) => (updateReady.value = version))
           .catch(() => undefined);
@@ -757,6 +761,7 @@
     );
     unlistens.push(
       await listen('bar-hidden', () => {
+        barShown.value = false;
         hiddenAt = performance.now();
         pauseTimers();
         hiddenAtWall = Date.now();
@@ -837,28 +842,23 @@
     altAlone = false;
   }
 
-  // Timers that only matter while the bar shows: the countdown clock, the check for computers
-  // asking to join sync, and what's-playing's clock. They stop while it's hidden.
+  // Timers that only matter while the bar shows: the check for computers asking to join sync,
+  // and what's-playing's clock. They stop while it's hidden, as does the countdown's clock.
   const DEVICE_POLL_MS = 60000;
   let timersRunning = true;
   function pauseTimers() {
     timersRunning = false;
-    window.clearInterval(clockTimer);
-    clockTimer = 0;
     pollDevices();
     media.pause();
   }
 
   function resumeTimers() {
-    clock.value = Date.now();
-    if (!clockTimer) clockTimer = window.setInterval(() => (clock.value = Date.now()), 15000);
     timersRunning = true;
     pollDevices();
     media.resume();
   }
   onUnmounted(() => {
     window.clearInterval(devicePoll);
-    window.clearInterval(clockTimer);
     window.removeEventListener('blur', onBlur);
     window.removeEventListener('keydown', onKey, true);
     window.removeEventListener('keydown', trackModifiers, true);
@@ -867,6 +867,8 @@
     window.removeEventListener('mousemove', trackModifiers, true);
     observer?.disconnect();
     window.clearTimeout(suggestTimer);
+    window.clearTimeout(weatherTimer);
+    window.clearTimeout(numbersTimer);
     for (const unlisten of unlistens) unlisten();
   });
 
@@ -1892,7 +1894,7 @@
     try {
       await windowClose(handle);
       notice.value = 'Asked the window to close';
-      window.setTimeout(scheduleSuggest, 400);
+      later(scheduleSuggest, 400);
     } catch (error) {
       notice.value = errorMessage(error);
     }
@@ -1902,7 +1904,7 @@
     try {
       await appQuit(appId);
       notice.value = `Asked ${name} to quit`;
-      window.setTimeout(scheduleSuggest, 400);
+      later(scheduleSuggest, 400);
     } catch (error) {
       notice.value = errorMessage(error);
     }
