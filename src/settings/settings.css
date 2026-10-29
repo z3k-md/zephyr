@@ -1,6 +1,53 @@
 /* Settings and first-run setup. Only their windows load these rules; the shared theme and
    controls are in styles.css. */
 
+/* ---- Buttons ---- */
+
+/* A field's button and the shortcut recorder look like the shared buttons (styles.css). */
+.recorder,
+.field > button,
+.speed-field > button {
+  border: 1px solid var(--stroke);
+  background: var(--chip);
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background-color 80ms ease;
+}
+
+/* Settings' page buttons match its 30 px fields. */
+.settings :is(.field > button:not(.recorder), .speed-field > button, section > button, .primary) {
+  height: 30px;
+  padding: 0 12px;
+  font-size: 13.5px;
+}
+
+/* ---- Network ---- */
+
+.speed-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 18px 0;
+}
+
+.speed-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 13.5px;
+}
+
+.speed-text b {
+  font-weight: 500;
+}
+
+.speed-text .hint-text {
+  font-size: 12.5px;
+}
+
 /* ---- Sync ---- */
 
 .recovery-key {
@@ -496,7 +543,7 @@
   padding: 0 10px;
   border-radius: 7px;
   border: 1px solid var(--stroke-strong);
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--panel);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
   font-size: 13.5px;
   text-align: left;
@@ -1018,7 +1065,7 @@
   margin: 0;
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.14);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 0 0 1px var(--stroke);
   cursor: pointer;
   transition: background-color 0.16s;
 }
@@ -1104,7 +1151,7 @@
   padding: 7px 12px;
   border: 1px solid var(--stroke-strong);
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--panel);
   font-size: 13px;
   transition:
     border-color 0.12s,
@@ -1150,7 +1197,7 @@
 
 .launch-item:hover,
 .launch-item:focus-visible {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--panel);
   outline: none;
 }
 
@@ -1292,6 +1339,7 @@
 
 .status {
   margin: 12px 0 0;
+  color: var(--muted);
   font-size: 13px;
 }
 
@@ -1420,7 +1468,7 @@
   padding: 0 12px;
   border: 1px solid var(--stroke-strong);
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--panel);
   color: var(--fg);
   font: inherit;
   font-size: 13px;

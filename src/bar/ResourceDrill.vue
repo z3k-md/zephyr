@@ -50,14 +50,14 @@
       memory.wired !== undefined
         ? [
             { label: 'App memory', value: memory.inUse, color: 'rgba(255, 255, 255, 0.78)' },
-            { label: 'Wired', value: memory.wired, color: '#f0b443' },
+            { label: 'Wired', value: memory.wired, color: 'var(--warn)' },
             { label: 'Compressed', value: memory.compressed ?? 0, color: '#d98a5f' },
             { label: 'Cached files', value: memory.standby, color: 'rgba(255, 255, 255, 0.32)' },
             { label: 'Free', value: memory.free, color: 'rgba(255, 255, 255, 0.1)' },
           ]
         : [
             { label: 'In use', value: memory.inUse, color: 'rgba(255, 255, 255, 0.78)' },
-            { label: 'Modified', value: memory.modified, color: '#f0b443' },
+            { label: 'Modified', value: memory.modified, color: 'var(--warn)' },
             { label: 'Standby', value: memory.standby, color: 'rgba(255, 255, 255, 0.32)' },
             { label: 'Free', value: memory.free, color: 'rgba(255, 255, 255, 0.1)' },
           ];

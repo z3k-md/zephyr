@@ -1,4 +1,5 @@
 <script setup lang="ts">
+  import './bar.css';
   import {
     computed,
     defineAsyncComponent,

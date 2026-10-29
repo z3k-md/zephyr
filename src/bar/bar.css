@@ -1,0 +1,2604 @@
+/* The bar's own styles: its views, cards and footer. styles.css has the theme and what
+   every window shares. */
+
+/* ---- Bar ---- */
+.bar {
+  width: 680px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--stroke-strong);
+  /* Matches the native corner radius the blur is clipped to (tauri.conf.json). */
+  border-radius: 16px;
+  box-shadow:
+    inset 0 1px 0 var(--highlight),
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.04);
+  overflow: hidden;
+  /* One fixed size, like Raycast: results scroll inside it and the window never resizes
+     as you type. Each view fills the space and keeps its footer at the bottom. */
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: var(--bar-height);
+}
+
+:root {
+  --bar-height: 480px;
+}
+
+/* Lists never scroll; they show the rows that fit (v-fit in fit.ts). */
+.bar > .results,
+.bar-body > .results {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* With no footer, the results take the rest of the bar. */
+.bar > .results.sectioned,
+.bar-body > .results.sectioned {
+  max-height: none;
+}
+
+/* Under the field: the results, and the weather card over them. */
+.bar-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* Weather glyphs: strokes like the rest, the sun warm and rain or snow cool. */
+.status-icon,
+.weather-card svg:not(.weather-line) {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+:root {
+  --wx-sun: #ffc861;
+  --wx-wet: #7db4ff;
+}
+
+.wx-sun {
+  color: var(--wx-sun);
+}
+
+.wx-wet {
+  color: var(--wx-wet);
+}
+
+/* ---- Weather card ("weather", "forecast") ---- */
+.weather-card {
+  display: grid;
+  flex: none;
+  grid-template-columns: minmax(0, 1fr) 210px;
+  gap: 16px;
+  margin: 8px 8px 2px;
+  padding: 12px 14px;
+  background: var(--panel);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 12px;
+}
+
+.weather-now {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.weather-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.weather-head .key-hints {
+  cursor: pointer;
+  font-weight: 400;
+}
+
+.weather-place {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.weather-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.weather-big {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  color: var(--fg);
+}
+
+.weather-temp {
+  font-size: 30px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+
+.weather-detail {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.weather-detail b {
+  color: var(--fg);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.weather-hours {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  padding-top: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.weather-line {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 20px;
+  overflow: visible;
+}
+
+.weather-line polyline {
+  fill: none;
+  stroke: var(--focus);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+  opacity: 0.8;
+}
+
+.weather-hour {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  font-size: 12px;
+}
+
+.weather-hour-temp {
+  margin-top: 10px;
+}
+
+.weather-hour svg {
+  width: 16px;
+  height: 16px;
+  color: var(--fg);
+}
+
+.weather-hour small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.weather-days {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  margin: 0;
+  padding: 0 0 0 14px;
+  list-style: none;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  border-left: 1px solid var(--stroke);
+}
+
+.weather-days li {
+  display: grid;
+  grid-template-columns: 34px 16px 30px minmax(0, 1fr) 30px;
+  align-items: center;
+  gap: 6px;
+}
+
+.weather-days svg {
+  width: 16px;
+  height: 16px;
+  color: var(--fg);
+}
+
+.weather-day,
+.weather-low {
+  color: var(--muted);
+}
+
+.weather-low,
+.weather-high {
+  text-align: right;
+}
+
+.weather-range {
+  position: relative;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+}
+
+.weather-range span {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: linear-gradient(90deg, var(--wx-wet), var(--wx-sun));
+  border-radius: 2px;
+}
+
+.shell > .footer,
+.clip > .footer,
+.resources > .footer,
+.typing > .footer {
+  flex: none;
+  margin-top: auto;
+}
+
+.shell,
+.clip,
+.resources,
+.typing {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.shell > .results {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-y: hidden;
+}
+
+.capture-dot {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  z-index: 2;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ef4444;
+  box-shadow: 0 0 6px rgba(239, 68, 68, 0.8);
+  pointer-events: none;
+}
+
+/* Windows clips the Acrylic blur to its own 8px rounded corners (window.rs). */
+[data-platform='windows'] .bar {
+  border-radius: 8px;
+}
+
+.input-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 12px 12px 18px;
+}
+
+.mark {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+}
+
+.query {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  font-size: 18px;
+  letter-spacing: -0.01em;
+  padding: 4px 0;
+}
+
+.query-wrap {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+}
+
+/* Type-ahead completion, laid over the input in the same font so it lines up after the text. */
+.query.ghost {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  line-height: normal;
+  color: var(--faint);
+  white-space: pre;
+  pointer-events: none;
+}
+
+.ghost-typed {
+  color: transparent;
+}
+
+.query:focus-visible {
+  outline: none;
+}
+
+.query::placeholder {
+  color: var(--faint);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--stroke);
+  background: transparent;
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 3px 7px 3px 9px;
+  font-size: 12px;
+  cursor: pointer;
+  transition:
+    background-color 80ms ease,
+    color 80ms ease;
+}
+
+.chip:hover {
+  background: var(--chip);
+  color: var(--fg);
+}
+
+.chip.active {
+  background: var(--active);
+  border-color: transparent;
+  color: var(--active-fg);
+  font-weight: 500;
+}
+
+/* A scoped search (Files, Bookmarks, Settings, Apps), in front of the text; Backspace on
+   empty text or Esc removes it. */
+.scope-label {
+  flex: none;
+  margin-right: 8px;
+  padding: 3px 9px;
+  border-color: transparent;
+  background: var(--select);
+  color: var(--fg);
+  cursor: default;
+}
+
+.chip kbd {
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 400;
+  opacity: 0.6;
+}
+
+.results {
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  border-top: 1px solid var(--stroke);
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 38px;
+  padding: 8px 12px 8px 42px;
+  border-radius: 8px;
+  cursor: pointer;
+  position: relative;
+}
+
+/* Long text panes inside the bar scroll, but never show a scrollbar. */
+.results,
+.clip-list,
+.shell-output {
+  scrollbar-width: none;
+}
+
+.results::-webkit-scrollbar,
+.clip-list::-webkit-scrollbar,
+.shell-output::-webkit-scrollbar {
+  display: none;
+}
+
+.item.selected {
+  background: var(--select);
+}
+
+/* Sectioned results (layout A): a titled group per kind, an icon in the gutter, and the
+   accessory (hint or keycaps) on the right. */
+.results.sectioned {
+  --row-h: 40px;
+  max-height: var(--list-max, 420px);
+  overflow: hidden;
+  padding: 4px 6px 6px;
+}
+
+.results.sectioned ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.section-head {
+  padding: 10px 10px 4px;
+  color: var(--faint);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+/* A row's hotkey keeps its space but shows only when the row is hovered or selected. */
+.item .row-hotkey {
+  opacity: 0;
+  transition: opacity 80ms ease;
+}
+
+.item:hover .row-hotkey,
+.item.selected .row-hotkey {
+  opacity: 1;
+}
+
+.results.sectioned .item {
+  justify-content: flex-start;
+  gap: 12px;
+  min-height: var(--row-h);
+  padding: 6px 10px;
+}
+
+.results.sectioned .item-text {
+  display: flex;
+  flex: 1;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.item-text .label {
+  flex: none;
+  max-width: 70%;
+}
+
+.item-sub {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.item-acc {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 3px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* Alt+1..9 (⌘1..9) badges while the key is held. */
+.item-acc .row-number .kbd {
+  color: var(--fg);
+  border-color: var(--focus);
+  box-shadow: inset 0 -1px 0 var(--focus);
+}
+
+/* A launch group's apps, small, before its hint. */
+.row-icons {
+  display: inline-flex;
+  gap: 3px;
+  margin-right: 6px;
+}
+
+.item-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: var(--icon);
+  height: var(--icon);
+  color: var(--muted);
+}
+
+.item.selected .item-icon {
+  color: var(--fg);
+}
+
+.item-icon .app-image {
+  width: 100%;
+  height: 100%;
+  border-radius: 4px;
+  object-fit: contain;
+}
+
+.item-icon .glyph {
+  width: 100%;
+  height: 100%;
+}
+
+.item-icon .monogram {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  border-radius: 5px;
+  color: #fff;
+  font-size: calc(var(--icon) * 0.55);
+  font-weight: 600;
+}
+
+.item.is-answer {
+  min-height: 52px;
+}
+
+.item.is-answer .label {
+  font-size: 20px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 16px 11px var(--gutter);
+  font-size: 12px;
+  background: rgba(0, 0, 0, 0.18);
+  border-top: 1px solid var(--stroke);
+}
+
+.caret {
+  display: inline-block;
+  width: 7px;
+  height: 14px;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: var(--muted);
+  animation: blink 1s steps(2, start) infinite;
+}
+
+@keyframes blink {
+  to {
+    visibility: hidden;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .caret {
+    animation: none;
+  }
+}
+
+.clip-filter {
+  flex: none;
+  padding: 4px 8px;
+  border: 1px solid var(--stroke-strong);
+  border-radius: 6px;
+  background: var(--chip);
+  font-size: 12px;
+}
+
+.clip-body {
+  display: grid;
+  grid-template-columns: 290px 1fr;
+  flex: 1 1 auto;
+  min-height: 0;
+  border-top: 1px solid var(--stroke);
+}
+
+.clip-list {
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  overflow-y: hidden;
+  border-right: 1px solid var(--stroke);
+}
+
+.clip-group {
+  padding: 8px 10px 4px;
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.clip-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.clip-item.selected {
+  background: var(--select);
+}
+
+.clip-item .label {
+  flex: 1;
+}
+
+.clip-icon {
+  flex: none;
+  width: 16px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.clip-preview {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* Lists never scroll: v-fit shows the actions that fit. */
+.clip-actions {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  border-top: none;
+}
+
+.clip-content {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px 16px;
+}
+
+.clip-text {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font:
+    12.5px/1.55 ui-monospace,
+    'SF Mono',
+    Menlo,
+    Consolas,
+    monospace;
+  user-select: text;
+}
+
+.clip-image {
+  display: block;
+  max-width: 100%;
+  max-height: 240px;
+  margin: 0 auto;
+  border-radius: 6px;
+  background: repeating-conic-gradient(#2a2a2e 0% 25%, #1f1f22 0% 50%) 50% / 16px 16px;
+}
+
+.clip-swatch {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.clip-swatch span {
+  width: 72px;
+  height: 72px;
+  border: 1px solid var(--stroke-strong);
+  border-radius: 12px;
+}
+
+.clip-files {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.clip-ocr {
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.clip-ocr summary {
+  cursor: pointer;
+  margin-bottom: 6px;
+}
+
+.clip-meta {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 14px;
+  margin: 0;
+  padding: 10px 16px 12px;
+  border-top: 1px solid var(--stroke);
+  font-size: 12px;
+}
+
+.clip-meta dt {
+  color: var(--muted);
+}
+
+.clip-meta dd {
+  margin: 0;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- Typing test ---- */
+.typing {
+  padding: 14px 22px 10px;
+}
+
+.typing-modes {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.typing-best {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.typing-live {
+  display: flex;
+  gap: 14px;
+  margin: 18px 2px 6px;
+  color: var(--focus);
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+}
+
+.typing-wpm {
+  color: var(--muted);
+}
+
+.typing-words {
+  position: relative;
+  height: 108px;
+  overflow: hidden;
+  font:
+    24px/36px ui-monospace,
+    'SF Mono',
+    Menlo,
+    Consolas,
+    monospace;
+}
+
+.typing-lines {
+  position: relative;
+  transition: transform 120ms ease;
+}
+
+.typing-lines .word {
+  display: inline-block;
+  margin-right: 0.6em;
+}
+
+.typing-lines .word.error {
+  text-decoration: underline wavy rgba(255, 107, 107, 0.6);
+  text-underline-offset: 6px;
+}
+
+.letter {
+  color: var(--faint);
+}
+
+.letter.correct {
+  color: var(--fg);
+}
+
+.letter.wrong {
+  color: #ff6b6b;
+}
+
+.letter.missed {
+  color: var(--faint);
+}
+
+.letter.extra {
+  color: #a3423f;
+}
+
+.typing-caret {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 2px;
+  height: 30px;
+  margin-top: 3px;
+  border-radius: 1px;
+  background: var(--focus);
+  transition: transform 90ms ease-out;
+}
+
+.typing-caret.blink {
+  animation: blink 1s steps(2, start) infinite;
+}
+
+.typing-hint {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  margin: 10px 0 4px;
+  color: var(--faint);
+  font-size: 12px;
+}
+
+/* Quiet keycaps, so the hint doesn't pull the eye off the words being typed. */
+.typing-hint .kbd {
+  color: var(--muted);
+}
+
+.typing-result {
+  padding-top: 10px;
+}
+
+.typing-big {
+  display: flex;
+  align-items: flex-end;
+  gap: 36px;
+}
+
+.typing-big div {
+  display: flex;
+  flex-direction: column;
+}
+
+.typing-big strong {
+  color: var(--focus);
+  font-size: 54px;
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.typing-label,
+.typing-stats dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.typing-pb {
+  margin-bottom: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--focus) 18%, transparent);
+  color: var(--focus);
+  font-size: 12px;
+}
+
+.typing-chart {
+  width: 100%;
+  height: 64px;
+  margin: 14px 0 8px;
+}
+
+.typing-chart polyline {
+  fill: none;
+  stroke: var(--focus);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.typing-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin: 0;
+}
+
+.typing-stats dd {
+  margin: 2px 0 0;
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .typing-caret,
+  .typing-lines {
+    transition: none;
+  }
+}
+
+textarea.query {
+  resize: none;
+  max-height: 140px;
+  field-sizing: content;
+  line-height: 1.4;
+}
+
+/* The bar's slim footer: CPU, memory, disk and network, in fixed-width digits so the
+   numbers don't jitter as they change. */
+.stats {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 18px;
+  height: 38px;
+  box-sizing: border-box;
+  padding: 0 16px;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  background: rgba(0, 0, 0, 0.14);
+  border-top: 1px solid var(--stroke);
+}
+
+/* The meters; a click opens System Resources. */
+.meters {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 14px;
+  cursor: pointer;
+}
+
+.meters:hover {
+  color: var(--fg);
+}
+
+/* ---- The weather at the footer's right (FooterWeather.vue) ---- */
+.footer-weather {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin-left: auto;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.footer-weather b {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.footer-weather:hover b {
+  text-decoration: underline;
+  text-decoration-color: var(--stroke-strong);
+  text-underline-offset: 2px;
+}
+
+.status-icon {
+  flex: none;
+  width: 17px;
+  height: 17px;
+  color: var(--fg);
+}
+
+.status-condition {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.status-condition.wet {
+  color: var(--wx-wet);
+}
+
+.stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.stat svg {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* CPU and memory as small meters. The fill is scaled rather than sized, and the value sits
+   in a fixed slot, so nothing beside them moves as the numbers change. */
+.meter {
+  position: relative;
+  display: inline-block;
+  width: 28px;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.meter-fill {
+  position: absolute;
+  inset: 0;
+  border-radius: 2px;
+  background: var(--active);
+  transform-origin: left center;
+  transition:
+    transform 450ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    background-color 300ms;
+}
+
+.meter-fill.hot {
+  background: var(--notice);
+}
+
+.stat-value {
+  display: inline-block;
+  width: 4ch;
+  color: #c9c9ce;
+  text-align: right;
+}
+
+/* The system disk shows only when it's nearly full. */
+.stat-low {
+  gap: 5px;
+  color: var(--notice);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .meter-fill {
+    transition: none;
+  }
+}
+
+/* Settings, at the right end of the search bar. */
+/* An update put off with Later: a small pill beside Settings that installs it. */
+.bar-update {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 10px 0 8px;
+  border: 1px solid var(--stroke-strong);
+  border-radius: 13px;
+  background: var(--select);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.bar-update:hover {
+  border-color: var(--focus);
+}
+
+.bar-update svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.bar-settings {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  /* A 30px target whose 18px glyph sits 18px from the edge, mirroring the search icon. */
+  width: 30px;
+  height: 30px;
+  margin: 0 0 0 4px;
+  padding: 0;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.bar-settings:hover {
+  color: var(--fg);
+  background: var(--chip-hover);
+}
+
+.bar-settings:active {
+  background: var(--stroke-strong);
+}
+
+.bar-settings svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Ctrl held on the bar: a move cursor everywhere and a hint in the footer. */
+.bar.moving,
+.bar.moving * {
+  cursor: move !important;
+}
+
+.move-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--fg);
+}
+
+.move-hint svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: var(--focus);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* What's playing, at the end of the search field: one card whose hover lights the cover,
+   the title and the buttons together. It gives way to the typed text. */
+.now-playing {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  max-width: 280px;
+  margin: -6px 0;
+  padding: 4px 4px 4px 5px;
+  border-radius: 9px;
+  color: var(--muted);
+  cursor: default;
+  transition: background-color 80ms ease;
+}
+
+.now-playing:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.now-playing button {
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  background: none;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.now-playing-title {
+  gap: 8px;
+  min-width: 0;
+  margin-right: 4px;
+}
+
+.now-playing-title:hover {
+  color: var(--fg);
+}
+
+.now-playing .now-playing-control {
+  flex: none;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  color: var(--fg);
+}
+
+.now-playing .now-playing-control:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.now-playing-cover {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  object-fit: cover;
+  border-radius: 5px;
+}
+
+.now-playing-cover.glyph {
+  width: 18px;
+  height: 18px;
+  margin: 4px;
+}
+
+.now-playing-cover.glyph,
+.now-playing-control svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.now-playing-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  text-align: left;
+}
+
+.now-playing-song,
+.now-playing-artist {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.now-playing-song {
+  color: var(--fg);
+  font-size: 12.5px;
+  line-height: 15px;
+}
+
+.now-playing-artist {
+  font-size: 11px;
+  line-height: 14px;
+}
+
+.now-playing-control svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* ---- Shell ---- */
+.shell-mark {
+  flex: none;
+  width: 20px;
+  color: var(--focus);
+  font-size: 16px;
+  text-align: center;
+}
+
+.shell-input,
+.shell-command,
+.shell-output {
+  font-family: ui-monospace, 'SF Mono', Menlo, 'Cascadia Mono', Consolas, monospace;
+}
+
+.shell-input {
+  font-size: 14px;
+}
+
+.shell-command {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shell-run {
+  border-top: 1px solid var(--stroke);
+}
+
+/* The command this output is from; the input line has already cleared for the next one. */
+.shell-ran {
+  margin: 0;
+  padding: 10px 18px 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shell-output {
+  max-height: 340px;
+  margin: 0;
+  padding: 10px 18px;
+  overflow: auto;
+  font-size: 12.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.shell-status {
+  margin: 0;
+  padding: 0 18px 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.shell-run.done .shell-status {
+  color: var(--ok);
+}
+
+.shell-run.failed .shell-status,
+.shell-run.error .shell-status {
+  color: var(--notice);
+}
+
+.shell-cwd {
+  overflow: hidden;
+  max-width: 260px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.approval {
+  margin: 8px;
+  padding: 10px 12px;
+  border: 1px solid rgba(251, 191, 36, 0.35);
+  border-radius: 12px;
+  background: rgba(251, 191, 36, 0.08);
+}
+
+.approval-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.approval-badge {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--warn);
+  color: #1a1408;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.approval-summary {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.approval-words {
+  margin: 6px 0 8px;
+  color: var(--muted);
+  font:
+    13px ui-monospace,
+    'SF Mono',
+    Menlo,
+    Consolas,
+    monospace;
+}
+
+.approval-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.approval-actions button {
+  padding: 4px 10px;
+  border: 1px solid var(--stroke-strong);
+  border-radius: 8px;
+  background: var(--chip);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.approval-actions button.primary {
+  background: rgba(251, 191, 36, 0.22);
+}
+
+.approval-actions .keys {
+  margin-left: 6px;
+}
+
+/* ---- File preview (Shift+Space on a file) ---- */
+.bar.previewing > .results,
+.bar.previewing > .bar-body > .results {
+  padding-right: calc(52% + 6px);
+}
+
+.file-preview {
+  position: absolute;
+  right: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  width: 52%;
+  min-height: 0;
+  border-left: 1px solid var(--stroke);
+  border-top: 1px solid var(--stroke);
+  background: var(--glass-strong);
+}
+
+.file-preview-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 10px 14px 8px;
+  font-size: 13px;
+}
+
+.file-preview-head strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-preview-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 14px 10px;
+}
+
+.file-preview-body img {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  margin: 0 auto;
+  object-fit: contain;
+  border-radius: 6px;
+}
+
+.file-preview-body pre {
+  margin: 0;
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--fg);
+}
+
+.file-preview-info {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 6px;
+}
+
+.file-preview-info dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 12px;
+  margin: 0;
+  font-size: 12.5px;
+}
+
+.file-preview-info dt {
+  color: var(--muted);
+}
+
+.file-preview-info dd {
+  margin: 0;
+}
+
+.file-preview-path {
+  word-break: break-all;
+}
+
+.file-preview-foot {
+  padding: 6px 14px 8px;
+  font-size: 11.5px;
+}
+
+/* System Resources: three live tiles over a sortable list of apps. Numbers use fixed-width
+   digits so they don't jitter as they change. */
+.resources {
+  font-variant-numeric: tabular-nums;
+}
+
+.res-live {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+
+.res-live.on {
+  background: var(--ok);
+  box-shadow: 0 0 6px rgba(52, 211, 153, 0.7);
+  animation: res-pulse 2s ease-in-out infinite;
+}
+
+@keyframes res-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .res-live.on {
+    animation: none;
+  }
+}
+
+.res-tiles {
+  display: grid;
+  /* Three tiles, or four with a GPU. */
+  grid-auto-columns: minmax(0, 1fr);
+  grid-auto-flow: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--stroke);
+}
+
+.res-tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  padding: 8px 10px 30px;
+  overflow: hidden;
+  border: 1px solid var(--stroke);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+}
+
+button.res-tile {
+  cursor: pointer;
+}
+
+button.res-tile:hover {
+  background: var(--chip-hover);
+}
+
+.res-tile.active {
+  border-color: var(--stroke-strong);
+  box-shadow: inset 0 0 0 1px var(--select);
+}
+
+.res-tile-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.res-tile-head svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.res-tile-value {
+  overflow: hidden;
+  font-size: 13.5px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.res-spark {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 28px;
+}
+
+.res-spark .line {
+  fill: none;
+  stroke: var(--res-color);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.res-spark .area {
+  fill: var(--res-color);
+  opacity: 0.16;
+}
+
+.res-spark.cpu {
+  --res-color: #60a5fa;
+}
+
+.res-spark.memory {
+  --res-color: #c084fc;
+}
+
+.res-spark.gpu {
+  --res-color: #fbbf24;
+}
+
+.res-spark.network {
+  --res-color: #34d399;
+}
+
+.res-columns,
+.res-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 104px 80px 84px;
+  align-items: center;
+  gap: 8px;
+}
+
+.res-columns {
+  padding: 6px 24px 4px 18px;
+  border-top: 1px solid var(--stroke);
+}
+
+.res-columns button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--faint);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-align: right;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.res-columns .res-col-name {
+  padding-left: 30px;
+  text-align: left;
+}
+
+.res-columns button.active,
+.res-columns button:hover {
+  color: var(--fg);
+}
+
+.res-list {
+  flex: 0 1 auto;
+  min-height: 0;
+  margin: 0;
+  padding: 0 6px 6px;
+  overflow: hidden;
+  list-style: none;
+}
+
+.res-row {
+  min-height: 36px;
+  padding: 4px 18px 4px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: default;
+}
+
+.res-row.selected {
+  background: var(--select);
+}
+
+.res-row.confirming {
+  background: rgba(239, 68, 68, 0.16);
+  box-shadow: inset 0 0 0 1px rgba(239, 68, 68, 0.45);
+}
+
+.res-row.locked .res-cpu,
+.res-row.locked .res-memory,
+.res-row.locked .res-disk {
+  color: var(--faint);
+}
+
+.res-name {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.res-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.res-sub {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.res-count {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 0 5px;
+  border-radius: 6px;
+  background: var(--chip);
+  color: var(--muted);
+  font-size: 10.5px;
+  vertical-align: 1px;
+}
+
+.res-cpu,
+.res-memory,
+.res-disk {
+  color: var(--fg);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.res-disk {
+  color: var(--muted);
+}
+
+.res-cpu {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.res-bar {
+  display: inline-block;
+  width: 32px;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--chip);
+}
+
+.res-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: #60a5fa;
+}
+
+.res-confirm {
+  grid-column: 2 / -1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+  color: #fca5a5;
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+.res-actions {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.resources > .notice {
+  margin: 0;
+  padding: 6px 16px 6px var(--gutter);
+  border-top: 1px solid var(--stroke);
+}
+
+/* ---- The connection monitor: the network card, the Network view, the footer's chip ---- */
+.net-pill {
+  flex: none;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--chip);
+  color: var(--fg);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.net-pill.good {
+  background: rgba(56, 201, 138, 0.2);
+  color: var(--ok);
+}
+
+.net-pill.fair {
+  background: rgba(240, 180, 67, 0.2);
+  color: var(--warn);
+}
+
+.net-pill.poor {
+  background: rgba(255, 97, 89, 0.2);
+  color: var(--bad);
+}
+
+/* The card is the list's first row: 96 px, the selection fill when it's the one in hand. */
+.results.sectioned .item.is-card {
+  min-height: 96px;
+  margin-top: 2px;
+  padding: 0 14px;
+}
+
+.net-card {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+  height: 96px;
+}
+
+.net-card-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.net-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.net-card-head .key-hints {
+  margin-left: auto;
+}
+
+.net-card-big {
+  overflow: hidden;
+  font-size: 21px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.net-card-sub {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.net-card.selected .net-card-sub,
+.net-card.selected .net-card-head {
+  color: color-mix(in srgb, var(--fg) 82%, transparent);
+}
+
+.net-card-spark {
+  flex: none;
+}
+
+.net-card-spark path {
+  fill: none;
+  stroke: var(--fg);
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.net-card-spark .lost {
+  fill: rgba(255, 97, 89, 0.35);
+}
+
+/* The Network view. */
+.network {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.network > .footer {
+  flex: none;
+  margin-top: auto;
+}
+
+.network .input-row .chip svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.net-title {
+  flex: 1;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.net-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 16px 6px;
+  border-top: 1px solid var(--stroke);
+}
+
+.net-head .net-pill {
+  margin-top: 1px;
+}
+
+.net-verdict {
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.net-addr {
+  display: flex;
+  gap: 6px;
+  padding: 2px 16px 8px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.net-chip {
+  flex: none;
+  padding: 2px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--chip);
+  color: var(--muted);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.net-chip:hover {
+  background: var(--chip-hover);
+}
+
+.net-chip b {
+  color: var(--fg);
+  font-weight: 500;
+}
+
+.net-chip.more {
+  cursor: default;
+}
+
+.net-chart {
+  position: relative;
+  flex: none;
+  padding: 0 8px;
+}
+
+.net-chart svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.01));
+}
+
+.net-grid {
+  stroke: rgba(255, 255, 255, 0.07);
+  stroke-dasharray: 2 4;
+}
+
+.net-axis {
+  fill: var(--muted);
+  font-size: 10px;
+}
+
+.net-axis.faint {
+  fill: var(--faint);
+}
+
+/* Latency in the theme's accent: a soft fill under the median, the slow end (p95) as a
+   faint band above it, and the latest reading as a dot. */
+.net-stop {
+  stop-color: var(--focus);
+}
+
+.net-stop-up {
+  stop-color: #b48cff;
+}
+
+.net-area {
+  fill: url(#net-fill);
+}
+
+.net-band {
+  fill: var(--focus);
+  opacity: 0.14;
+}
+
+.net-now {
+  fill: var(--focus);
+  stroke: rgba(0, 0, 0, 0.35);
+  stroke-width: 1;
+}
+
+.net-now-halo {
+  fill: var(--focus);
+  opacity: 0.22;
+  animation: net-now-pulse 2s ease-in-out infinite;
+}
+
+@keyframes net-now-pulse {
+  50% {
+    opacity: 0.06;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .net-now-halo {
+    animation: none;
+  }
+}
+
+.net-line {
+  fill: none;
+  stroke: var(--focus);
+  stroke-width: 1.8;
+  stroke-linejoin: round;
+}
+
+.net-loss {
+  fill: var(--bad);
+}
+
+.net-drop {
+  fill: rgba(255, 97, 89, 0.2);
+}
+
+.net-gap {
+  fill: rgba(255, 255, 255, 0.04);
+}
+
+.net-change {
+  stroke: rgba(255, 255, 255, 0.35);
+  stroke-dasharray: 3 3;
+}
+
+.net-test {
+  stroke: var(--warn);
+  stroke-dasharray: 2 2;
+}
+
+.net-down {
+  fill: url(#net-down-fill);
+}
+
+.net-up {
+  fill: url(#net-up-fill);
+}
+
+.net-cursor {
+  stroke: rgba(255, 255, 255, 0.35);
+}
+
+.net-tip {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  padding: 3px 8px;
+  border: 1px solid var(--stroke-strong);
+  border-radius: 6px;
+  background: var(--glass-strong);
+  font-size: 11px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.net-hops {
+  display: grid;
+  grid-template-columns: 1.7fr repeat(5, 0.75fr);
+  padding: 4px 16px 6px;
+  font-size: 12.5px;
+}
+
+.net-hops > div {
+  display: flex;
+  align-items: center;
+  height: 27px;
+  border-bottom: 1px solid var(--stroke);
+}
+
+.net-hops > div:nth-last-child(-n + 6) {
+  border-bottom: 0;
+}
+
+.net-hops .h {
+  height: 20px;
+  color: var(--faint);
+  font-size: 10.5px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.net-hops .name {
+  gap: 8px;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.net-hops .name small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+}
+
+/* The router's address opens its sign-in page. */
+.net-hops .name .net-router-link {
+  overflow: hidden;
+  color: var(--focus);
+  font-size: 11.5px;
+  text-decoration: none;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.net-hops .name .net-router-link:hover {
+  text-decoration: underline;
+}
+
+.net-hops .num {
+  justify-content: flex-end;
+}
+
+/* The latest reading stands out from the window's statistics. */
+.net-hops .now {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.net-hops .warn {
+  color: var(--warn);
+}
+
+.net-hops .bad {
+  color: var(--bad);
+}
+
+.net-speed {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 6px 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--stroke);
+  border-radius: 10px;
+  background: var(--panel);
+}
+
+.net-speed-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.net-speed-bar {
+  position: relative;
+  flex: 1;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.net-speed-bar span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 2px;
+  background: var(--active);
+  transition: width 240ms linear;
+}
+
+.net-speed-main {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.net-speed-main b {
+  color: var(--fg);
+  font-size: 24px;
+  font-weight: 600;
+}
+
+.net-speed-main span {
+  margin-left: auto;
+}
+
+/* The footer's chip: amber while the line is slow or dropping, red offline. */
+.net-alert {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 7px;
+  border-radius: 5px;
+  background: var(--warn);
+  color: #1a1406;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.net-alert.offline {
+  background: var(--bad);
+  color: #fff;
+}
+
+.net-alert svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* "port 3000": the process with the port open, as the first row. */
+.port-card {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+  height: 96px;
+}
+
+.port-card > .item-icon {
+  flex: none;
+}
+
+.port-card-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.port-card .net-card-big {
+  font-size: 19px;
+}
+
+.port-card-command {
+  overflow: hidden;
+  color: var(--faint);
+  font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.port-card.selected .port-card-command {
+  color: color-mix(in srgb, var(--fg) 60%, transparent);
+}
+
+/* A tile's temperature, at the right of its heading. */
+.res-temp {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* A ⌘K item that can't run here says why. */
+.actions .label.off {
+  color: var(--faint);
+}
+
+.action-why {
+  flex: none;
+  color: var(--faint);
+  font-size: 11.5px;
+}
+
+/* Show info: one row's graph, facts and actions, in place of the list. */
+.res-detail {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  padding: 8px 16px 10px;
+  border-top: 1px solid var(--stroke);
+  font-variant-numeric: tabular-nums;
+}
+
+.res-detail-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.res-detail-title {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.res-detail-title b {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.res-detail-title span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.res-detail-chart {
+  width: 100%;
+  height: 96px;
+}
+
+.res-detail-chart .grid {
+  stroke: rgba(255, 255, 255, 0.07);
+  stroke-dasharray: 2 3;
+}
+
+.res-detail-chart .cpu {
+  fill: none;
+  stroke: var(--info);
+  stroke-width: 1.6;
+  vector-effect: non-scaling-stroke;
+}
+
+.res-detail-chart .cpu-area {
+  fill: rgba(91, 156, 255, 0.18);
+}
+
+.res-detail-chart .memory {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.55);
+  stroke-width: 1.3;
+  stroke-dasharray: 4 3;
+  vector-effect: non-scaling-stroke;
+}
+
+.res-detail-empty {
+  display: grid;
+  place-items: center;
+  height: 96px;
+  margin: 0;
+  color: var(--faint);
+  font-size: 12.5px;
+}
+
+.res-detail-legend {
+  display: flex;
+  gap: 16px;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.res-detail-legend i {
+  display: inline-block;
+  width: 12px;
+  height: 2px;
+  margin-right: 5px;
+  vertical-align: middle;
+  background: var(--info);
+}
+
+.res-detail-legend i.memory {
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.res-detail-legend .since {
+  margin-left: auto;
+}
+
+.res-detail-facts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 20px;
+  margin: 0;
+  font-size: 12px;
+}
+
+.res-detail-facts div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 3px;
+  border-bottom: 1px solid var(--stroke);
+}
+
+.res-detail-facts dt {
+  color: var(--muted);
+}
+
+.res-detail-facts dd {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.res-detail-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: auto;
+}
+
+.res-detail-actions button {
+  padding: 5px 10px;
+  border: 1px solid var(--stroke);
+  border-radius: 6px;
+  background: var(--chip);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.res-detail-actions button.primary {
+  border-color: transparent;
+  background: var(--active);
+  color: var(--active-fg);
+}
+
+.res-detail-actions button:disabled {
+  color: var(--faint);
+  cursor: default;
+}
+
+/* The CPU and Memory tiles' drill-ins. */
+.res-drill {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  padding: 8px 16px 10px;
+  border-top: 1px solid var(--stroke);
+  font-variant-numeric: tabular-nums;
+}
+
+.res-drill-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.res-drill-head span,
+.res-drill-note {
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.res-drill-note {
+  margin: 0;
+}
+
+.res-heat {
+  width: 100%;
+}
+
+.res-heat .label {
+  fill: var(--faint);
+  font-size: 9px;
+}
+
+.res-drill-now {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.res-drill-now span {
+  min-width: 2ch;
+  color: var(--fg);
+  text-align: right;
+}
+
+.res-drill-now span.hot {
+  color: #ff7a5a;
+}
+
+.res-stack {
+  display: flex;
+  gap: 1px;
+  height: 12px;
+  overflow: hidden;
+  border-radius: 3px;
+}
+
+.res-legend {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 20px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.res-legend li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.res-legend i {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+}
+
+.res-legend b {
+  margin-left: auto;
+  color: var(--fg);
+  font-weight: 500;
+}
+
+.res-legend-more {
+  padding-top: 6px;
+  border-top: 1px solid var(--stroke);
+}
+
+.res-heat-wrap {
+  position: relative;
+  display: flex;
+  flex: none;
+  gap: 6px;
+}
+
+.res-heat-labels {
+  position: relative;
+  flex: none;
+  width: 16px;
+}
+
+.res-heat-labels span {
+  position: absolute;
+  right: 0;
+  color: var(--faint);
+  font-size: 9px;
+}
+
+.res-heat-wrap .res-heat {
+  flex: 1;
+  height: 100%;
+}
