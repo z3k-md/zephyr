@@ -91,11 +91,12 @@ pub async fn site_icon(url: &str) -> Option<String> {
     None
 }
 
-/// Writes through a temp file, so a crash or a second thread caching the same icon never
-/// leaves half a file that later reads as the icon.
+/// Writes through a synced temp file, so a crash or a second thread caching the same icon
+/// never leaves half a file that later reads as the icon. Unlike `util::write_atomic` the
+/// temp file is this write's own, since two lookups of one icon can save it at once.
 fn write_atomic(path: &Path, data: &[u8]) {
     let tmp = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4().simple()));
-    if std::fs::write(&tmp, data)
+    if crate::util::write_synced(&tmp, data)
         .and_then(|()| std::fs::rename(&tmp, path))
         .is_err()
     {
