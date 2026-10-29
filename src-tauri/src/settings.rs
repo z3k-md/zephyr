@@ -400,17 +400,13 @@ pub fn open_system(
         Target::System(file) => {
             let root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
             let path = std::path::PathBuf::from(root).join("System32").join(file);
-            std::process::Command::new("explorer.exe")
-                .arg(path)
-                .spawn()
-                .map(|_| ())
+            crate::util::spawn_detached(std::process::Command::new("explorer.exe").arg(path))
                 .map_err(|err| err.to_string())
         }
-        Target::Command(program, args) => std::process::Command::new(program)
-            .args(args)
-            .spawn()
-            .map(|_| ())
-            .map_err(|err| err.to_string()),
+        Target::Command(program, args) => {
+            crate::util::spawn_detached(std::process::Command::new(program).args(args))
+                .map_err(|err| err.to_string())
+        }
         Target::Zephyr(_) => unreachable!("Zephyr settings open in Zephyr's window"),
     }
 }

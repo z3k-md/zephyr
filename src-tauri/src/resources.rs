@@ -759,8 +759,7 @@ pub fn relaunch(name: &str, pids: &[u32]) -> Result<(), String> {
             quit_one(*pid, true);
         }
         std::thread::sleep(std::time::Duration::from_millis(500));
-        std::process::Command::new("explorer.exe")
-            .spawn()
+        crate::util::spawn_detached(&mut std::process::Command::new("explorer.exe"))
             .map_err(|err| format!("Couldn't start Explorer again: {err}"))?;
     }
     Ok(())

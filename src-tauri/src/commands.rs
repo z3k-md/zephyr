@@ -1811,18 +1811,13 @@ pub fn quick_look(state: State<'_, AppState>, path: String) -> Result<(), String
     known_file(&state, &path)?;
     #[cfg(target_os = "macos")]
     {
-        std::process::Command::new("qlmanage")
-            .args(["-p", &path])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .map(|mut child| {
-                // Waited on in the background so the closed preview doesn't linger as a zombie.
-                std::thread::spawn(move || {
-                    let _ = child.wait();
-                });
-            })
-            .map_err(|err| err.to_string())
+        crate::util::spawn_detached(
+            std::process::Command::new("qlmanage")
+                .args(["-p", &path])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null()),
+        )
+        .map_err(|err| err.to_string())
     }
     #[cfg(not(target_os = "macos"))]
     {

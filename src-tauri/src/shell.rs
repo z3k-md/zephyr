@@ -526,10 +526,7 @@ pub fn open_in_terminal(
                 process
             }
         };
-        process
-            .env("CHERE_INVOKING", "1")
-            .spawn()
-            .map(|_| ())
+        crate::util::spawn_detached(process.env("CHERE_INVOKING", "1"))
             .map_err(|err| format!("Couldn't open a terminal: {err}"))
     }
     #[cfg(target_os = "macos")]
@@ -554,10 +551,7 @@ pub fn open_in_terminal(
         .map_err(|err| err.to_string())?;
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700))
             .map_err(|err| err.to_string())?;
-        Command::new("open")
-            .arg(&script)
-            .spawn()
-            .map(|_| ())
+        crate::util::spawn_detached(Command::new("open").arg(&script))
             .map_err(|err| format!("Couldn't open Terminal: {err}"))
     }
     #[cfg(not(any(target_os = "macos", windows)))]

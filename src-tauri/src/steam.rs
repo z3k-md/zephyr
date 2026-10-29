@@ -57,15 +57,12 @@ pub fn launch(app_id: &str, name: &str) -> Result<(), String> {
     }
     let link = format!("steam://rungameid/{app_id}");
     #[cfg(windows)]
-    let opened = std::process::Command::new("explorer.exe")
-        .arg(&link)
-        .spawn();
+    let opener = "explorer.exe";
     #[cfg(target_os = "macos")]
-    let opened = std::process::Command::new("open").arg(&link).spawn();
+    let opener = "open";
     #[cfg(not(any(windows, target_os = "macos")))]
-    let opened = std::process::Command::new("xdg-open").arg(&link).spawn();
-    opened
-        .map(|_| ())
+    let opener = "xdg-open";
+    crate::util::spawn_detached(std::process::Command::new(opener).arg(&link))
         .map_err(|err| format!("Couldn't open {name} through Steam: {err}"))
 }
 

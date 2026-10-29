@@ -230,10 +230,10 @@ pub fn focus_app(source_app: &str) -> bool {
     if source_app.is_empty() {
         return false;
     }
-    std::process::Command::new("explorer.exe")
-        .arg(format!("shell:AppsFolder\\{source_app}"))
-        .spawn()
-        .is_ok()
+    crate::util::spawn_detached(
+        std::process::Command::new("explorer.exe").arg(format!("shell:AppsFolder\\{source_app}")),
+    )
+    .is_ok()
 }
 
 fn focus_program(exe: &str) -> bool {

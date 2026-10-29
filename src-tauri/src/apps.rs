@@ -654,17 +654,17 @@ fn launch_private_native(app: &App, mode: PrivateMode) -> Result<(), String> {
     if !output.status.success() || program.is_empty() || program.contains('/') {
         return Err("its program wasn't found".into());
     }
-    std::process::Command::new(
-        std::path::Path::new(&app.id)
-            .join("Contents/MacOS")
-            .join(program),
+    crate::util::spawn_detached(
+        std::process::Command::new(
+            std::path::Path::new(&app.id)
+                .join("Contents/MacOS")
+                .join(program),
+        )
+        .arg(mode.flag)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null()),
     )
-    .arg(mode.flag)
-    .stdin(std::process::Stdio::null())
-    .stdout(std::process::Stdio::null())
-    .stderr(std::process::Stdio::null())
-    .spawn()
-    .map(|_| ())
     .map_err(|err| err.to_string())
 }
 
@@ -672,11 +672,10 @@ fn launch_private_native(app: &App, mode: PrivateMode) -> Result<(), String> {
 fn launch_private_native(_app: &App, mode: PrivateMode) -> Result<(), String> {
     let exe = mode.windows_exe.ok_or("it isn't registered with Windows")?;
     // `start` finds the browser through App Paths, where installers register it.
-    crate::util::hidden_command("cmd")
-        .args(["/C", "start", "", exe, mode.flag])
-        .spawn()
-        .map(|_| ())
-        .map_err(|err| err.to_string())
+    crate::util::spawn_detached(
+        crate::util::hidden_command("cmd").args(["/C", "start", "", exe, mode.flag]),
+    )
+    .map_err(|err| err.to_string())
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
@@ -694,19 +693,15 @@ pub fn launch(app: &App) -> Result<(), String> {
 
 #[cfg(windows)]
 fn launch_native(app: &App) -> Result<(), String> {
-    std::process::Command::new("explorer.exe")
-        .arg(format!("shell:AppsFolder\\{}", app.id))
-        .spawn()
-        .map(|_| ())
-        .map_err(|err| format!("Couldn't open {}: {err}", app.name))
+    crate::util::spawn_detached(
+        std::process::Command::new("explorer.exe").arg(format!("shell:AppsFolder\\{}", app.id)),
+    )
+    .map_err(|err| format!("Couldn't open {}: {err}", app.name))
 }
 
 #[cfg(target_os = "macos")]
 fn launch_native(app: &App) -> Result<(), String> {
-    std::process::Command::new("open")
-        .arg(&app.id)
-        .spawn()
-        .map(|_| ())
+    crate::util::spawn_detached(std::process::Command::new("open").arg(&app.id))
         .map_err(|err| format!("Couldn't open {}: {err}", app.name))
 }
 
