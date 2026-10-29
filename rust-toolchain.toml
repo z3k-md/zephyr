@@ -1,4 +1,7 @@
 # One compiler for local builds, Checks and Release. Dependabot proposes bumps.
+# rust-version in src-tauri/Cargo.toml moves with it: the resolver picks dependencies that
+# build on rust-version, and nothing checks an older compiler. scripts/versions.test.mjs fails
+# Checks when the two differ.
 [toolchain]
 channel = "1.99.1"
 components = ["clippy", "rustfmt", "rust-src"] # rust-src for editors
