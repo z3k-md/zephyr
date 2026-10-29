@@ -449,7 +449,7 @@ impl Budget {
         let wanted = text.len();
         let left = self
             .left
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
                 Some(left.saturating_sub(wanted))
             })
             .unwrap_or(0);
