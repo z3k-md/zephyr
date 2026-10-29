@@ -47,6 +47,7 @@
   import { THEMES } from '../themes';
   import { isMac } from '../keys';
   import { usePoll } from '../poll';
+  import { useWindowListener } from '../windowEvents';
   import Keys from '../components/Keys.vue';
   import ShortcutRecorder from '../components/ShortcutRecorder.vue';
   import InfoTip from '../components/InfoTip.vue';
@@ -107,6 +108,9 @@
     return current.scanning ? `Indexing… ${count} items so far` : `${count} items indexed`;
   });
 
+  useWindowListener('keydown', onShortcutKey, true);
+  useWindowListener('keydown', onEscape);
+
   onMounted(async () => {
     await refresh();
     pageReady();
@@ -130,15 +134,11 @@
     );
     const section = new URLSearchParams(window.location.search).get('section');
     if (section) void revealSection(section);
-    window.addEventListener('keydown', onShortcutKey, true);
-    window.addEventListener('keydown', onEscape);
     void pollFileStatus();
   });
 
   onUnmounted(() => {
     window.clearTimeout(statusTimer);
-    window.removeEventListener('keydown', onShortcutKey, true);
-    window.removeEventListener('keydown', onEscape);
     for (const unlisten of unlistens) unlisten();
   });
 

@@ -17,6 +17,7 @@
   import Keys from '../components/Keys.vue';
   import { captureShortcut, heldModifiers, isModifierKey, SHORTCUT_HELP } from '../keys';
   import { isSnapshot, type Snapshot } from '../types';
+  import { useWindowListener } from '../windowEvents';
 
   // First-run setup: three quick choices, each already set to a good default, so any step
   // can be skipped. Finishing or skipping marks it done for good.
@@ -41,6 +42,9 @@
   const nextButton = ref<HTMLButtonElement | null>(null);
   let unlisten: UnlistenFn | null = null;
 
+  useWindowListener('keydown', onKey, true);
+  useWindowListener('keyup', onKeyUp, true);
+
   onMounted(async () => {
     try {
       snapshot.value = await getSnapshot();
@@ -51,15 +55,9 @@
     unlisten = await listen<unknown>('state-changed', (event) => {
       if (isSnapshot(event.payload)) snapshot.value = event.payload;
     });
-    window.addEventListener('keydown', onKey, true);
-    window.addEventListener('keyup', onKeyUp, true);
   });
 
-  onUnmounted(() => {
-    unlisten?.();
-    window.removeEventListener('keydown', onKey, true);
-    window.removeEventListener('keyup', onKeyUp, true);
-  });
+  onUnmounted(() => unlisten?.());
 
   function onKeyUp(event: KeyboardEvent) {
     if (listening.value) held.value = heldModifiers(event);

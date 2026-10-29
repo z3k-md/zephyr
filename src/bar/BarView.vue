@@ -26,9 +26,6 @@
     appQuit,
     openFile,
     openSetting,
-    syncApprove,
-    syncPending,
-    syncRevoke,
     openNotes,
     openSettings,
     updateInstallNow,
@@ -36,7 +33,6 @@
     setActiveMode,
     revealFile,
     setBarHeight,
-    suggest,
     startBarDrag,
     barMove,
     barMoveEnd,
@@ -47,11 +43,7 @@
     captureEvent,
     systemStats,
     captureRecording,
-    powerPreview,
-    powerRun,
-    powerCancel,
     openUrl,
-    weatherAt,
     resourcesQuit,
   } from '../api';
   import ResourcesView from './ResourcesView.vue';
@@ -63,30 +55,33 @@
   import ResultList from './ResultList.vue';
   import FooterWeather from './FooterWeather.vue';
   import WeatherCard from './WeatherCard.vue';
-  import { placeName, useWeather } from './weather';
   import ActionMenu from '../components/ActionMenu.vue';
   import { useActionMenu, type MenuAction } from '../components/actionMenu';
   import { vTip } from '../tip';
   import { isMac } from '../keys';
   import { barShown } from '../visibility';
-  import { clock } from '../format';
   import { useLater } from '../poll';
+  import { useWindowListener } from '../windowEvents';
   import NowPlayingStrip from './NowPlayingStrip.vue';
   import { dragOut } from './dragOut';
   import { GLYPHS } from './glyphs';
   import { useNowPlaying } from './nowPlaying';
   import { useFooterStats } from './footerStats';
   import { bindingForAlias, bindingTarget, buildRows, groups, rowKey, type RowCtx } from './rows';
+  import { googleUrl } from './google';
+  import { useDevices } from './useDevices';
+  import { usePower } from './usePower';
+  import { useRunKey } from './useRunKey';
+  import { useSuggest } from './useSuggest';
+  import { useTypeAhead } from './useTypeAhead';
+  import { useWeatherCard } from './useWeatherCard';
   import {
     isSnapshot,
     type Binding,
-    type SyncPending,
     type Snapshot,
     type SuggestionRow,
     type SystemStats,
     type SuggestResponse,
-    type PowerPreview,
-    type Forecast,
     type PortUse,
   } from '../types';
   // Views used now and then load on demand, and are fetched in the background on the first
@@ -175,8 +170,11 @@
   const clipView = ref<InstanceType<typeof ClipboardViewComponent> | null>(null);
   const typingView = ref<InstanceType<typeof TypingViewComponent> | null>(null);
   // Other computers asking to join sync; checked when the bar opens and every minute.
-  const devicesWaiting = ref<SyncPending[]>([]);
-  let devicePoll = 0;
+  const devices = useDevices(notice);
+  const { devicesWaiting, answerDevice } = devices;
+  // Alt+1..9 (⌘1..9 on a Mac) runs the Nth row.
+  const runKey = useRunKey();
+  const { RUN_KEY, showNumbers } = runKey;
 
   // Reopening soon after closing returns to the view and text it closed on.
   let hiddenAt = 0;
@@ -194,12 +192,9 @@
   const menu = useActionMenu(() => actions.value);
   const { open: actionsOpen, index: actionIndex } = menu;
 
-  let generation = 0;
-  let remoteApplied = false;
   let userMoved = false;
   // Arrow presses that land before the first rows do.
   let pendingMove = 0;
-  let suggestTimer = 0;
   let unlistens: UnlistenFn[] = [];
   // A list caught up a moment after a quit or close; dropped if the bar goes first.
   const later = useLater();
@@ -212,116 +207,21 @@
     typed: scope.value ? '' : lastQuery.value,
   }));
 
-  // Power commands ("shutdown in 30m"): what the typed text would do, a pending schedule with
-  // its countdown, and the first Enter of a shutdown, restart or sign-out waiting for its
-  // second.
-  const powerRow = ref<PowerPreview | null>(null);
-  const confirmArm = ref('');
+  // Power commands ("shutdown in 30m"), and the first Enter of one waiting for its second.
+  const { powerRow, confirmArm, powerRows, runPower, cancelPower } = usePower({
+    snapshot,
+    query,
+    notice,
+  });
 
-  function untilText(at: number): string {
-    const left = Math.max(0, at - Math.floor(clock.value / 1000));
-    // Rounded up to the minute first, so 1h 59m 30s reads "2h", not "1h 60m".
-    const total = Math.ceil(left / 60);
-    const hours = Math.floor(total / 60);
-    const minutes = total % 60;
-    const span = hours ? `${hours}h${minutes ? ` ${minutes}m` : ''}` : `${minutes || 1}m`;
-    if (left < 3600) return `in ${span}`;
-    const time = new Date(at * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-    return `at ${time}, in ${span}`;
-  }
-
-  const POWER_ICONS: Record<string, string> = {
-    shutdown: 'glyph:power',
-    restart: 'glyph:restart',
-    sleep: 'glyph:moon',
-    lock: 'glyph:lock',
-    sign_out: 'glyph:signout',
-    firmware: 'glyph:chip',
-  };
-  const POWER_LABELS: Record<string, string> = {
-    shutdown: 'Shut down',
-    restart: 'Restart',
-    sleep: 'Sleep',
-    lock: 'Lock',
-    sign_out: 'Sign out',
-    firmware: 'Restart to BIOS',
-  };
-  const POWER_NAMES: Record<string, string> = {
-    shutdown: 'Shutting down',
-    restart: 'Restarting',
-    sleep: 'Sleeping',
-    lock: 'Locking',
-    sign_out: 'Signing out',
-    firmware: 'Restarting to BIOS',
-  };
-
-  function powerRows(): SuggestionRow[] {
-    const rows: SuggestionRow[] = [];
-    const pending = snapshot.value?.power;
-    if (pending) {
-      rows.push({
-        kind: 'powerPending',
-        label: `${POWER_NAMES[pending.action] ?? 'Scheduled'} ${untilText(pending.at)}`,
-        query: '',
-        target: '',
-        hint: 'Enter cancels',
-        keyHints: [{ keys: 'enter', label: 'cancels' }],
-        section: 'power',
-        icon: POWER_ICONS[pending.action] ?? 'glyph:power',
-      });
-    }
-    const preview = powerRow.value;
-    if (preview && !(preview.cancel && !pending)) {
-      const key = `${preview.action}:${preview.at ?? 'now'}`;
-      rows.push({
-        kind: 'power',
-        label: preview.label,
-        query: '',
-        target: '',
-        hint:
-          confirmArm.value === key
-            ? 'Enter again to confirm'
-            : preview.cancel
-              ? 'Cancel'
-              : preview.at
-                ? 'Schedule'
-                : 'Run',
-        keyHints:
-          confirmArm.value === key ? [{ keys: 'enter', label: 'again to confirm' }] : undefined,
-        section: 'power',
-        icon: POWER_ICONS[preview.action] ?? 'glyph:power',
-        power: preview,
-      });
-      // Under a plain "shutdown", a few timers, so it's clear they exist. They're cancelable
-      // from the top of the bar, so they skip the second Enter.
-      if (!preview.at && !preview.cancel && preview.action !== 'lock') {
-        const now = Math.floor(Date.now() / 1000);
-        for (const [seconds, words] of [
-          [300, '5 minutes'],
-          [900, '15 minutes'],
-          [3600, '1 hour'],
-        ] as const) {
-          rows.push({
-            kind: 'power',
-            label: `${POWER_LABELS[preview.action]} in ${words}`,
-            query: '',
-            target: '',
-            hint: 'Schedule',
-            section: 'power',
-            icon: 'glyph:clock',
-            power: {
-              ...preview,
-              label: `${POWER_LABELS[preview.action]} in ${words}`,
-              at: now + seconds,
-              confirm: false,
-              exact: false,
-            },
-          });
-        }
-      }
-    }
-    return rows;
-  }
+  const { scheduleSuggest } = useSuggest({
+    text: typedText,
+    shown: () => lastResponse.value?.items ?? [],
+    powerRow,
+    apply: applySuggestions,
+    notice,
+    trace,
+  });
 
   const built = computed(() => {
     if (!lastResponse.value) return { rows: [] as SuggestionRow[], preselect: null };
@@ -354,51 +254,16 @@
     selected.value >= 0 ? items.value[selected.value] : undefined
   );
 
-  // Type-ahead: the rest of what Enter would act on, drawn faintly after the cursor. Enter
-  // still sends only what was typed; Right arrow or End takes the completion.
-  const caretAtEnd = ref(true);
-  // Past searches, most used first, sorted once per history change rather than per key.
-  const searchHistory = computed(() =>
-    [...(snapshot.value?.history ?? [])]
-      .filter((entry) => entry.destinationId === 'google')
-      .sort((a, b) => b.uses - a.uses || b.lastUsed - a.lastUsed)
-      .map((entry) => entry.query)
-  );
-
-  const ghost = computed(() => {
-    const typed = query.value;
-    if (!typed.trim() || !caretAtEnd.value) return '';
-    if (scope.value || typed.startsWith('!') || typed.startsWith('>')) return '';
-    const lower = typed.toLowerCase();
-    const target = selectedItem.value;
-    let candidates: string[];
-    if (target?.kind === 'app') {
-      candidates = [target.label];
-    } else if (target?.kind === 'history' || target?.kind === 'remote') {
-      candidates = [target.query];
-    } else {
-      const history = searchHistory.value;
-      const remote = items.value
-        .filter((item) => item.kind === 'history' || item.kind === 'remote')
-        .map((item) => item.query);
-      candidates = [...history, ...remote];
-    }
-    const match = candidates.find(
-      (candidate) => candidate.length > typed.length && candidate.toLowerCase().startsWith(lower)
-    );
-    return match ? match.slice(typed.length) : '';
+  // Type-ahead: the rest of what Enter would act on, drawn faintly after the cursor.
+  const typeAhead = useTypeAhead({
+    query,
+    inputEl,
+    snapshot,
+    scoped: () => scope.value !== null,
+    items,
+    selectedItem,
   });
-
-  /** The completion only shows while the cursor sits at the end of text that fits the box. */
-  function trackCaret() {
-    const input = inputEl.value;
-    if (!input) return;
-    const end = input.value.length;
-    caretAtEnd.value =
-      input.selectionStart === end &&
-      input.selectionEnd === end &&
-      input.scrollWidth <= input.clientWidth;
-  }
+  const { ghost, trackCaret } = typeAhead;
 
   /** The drag-to-move key: ⌘ on a Mac, where Ctrl+click is a right-click; Ctrl elsewhere. */
   function moveKeyOnly(event: KeyboardEvent | MouseEvent): boolean {
@@ -686,9 +551,111 @@
     void updateInstallNow().catch((error) => (notice.value = errorMessage(error)));
   }
 
+  // The page's keys from the start, ahead of anything the app sends.
+  useWindowListener('keydown', onKey, true);
+  useWindowListener('keydown', trackModifiers, true);
+  useWindowListener('keyup', trackModifiers, true);
+  useWindowListener('keyup', onKeyUp, true);
+  useWindowListener('blur', onBlur);
+  // A drop lands outside the page's key events, so the pointer corrects what's held.
+  useWindowListener('mousemove', trackModifiers, true);
+
+  function onShown() {
+    barShown.value = true;
+    void updateWaiting()
+      .then((version) => (updateReady.value = version))
+      .catch(() => undefined);
+    resumeTimers();
+    prefetchViews();
+    sentHeight = 0;
+    // Opens the connection to the suggestion service before the first keystroke.
+    void warmSuggestions().catch(() => undefined);
+    void devices.loadDevices();
+    // Hidden over five minutes: start over on the main bar, as with returning to modes
+    // turned off.
+    const stale = hiddenFor() > FRESH_AFTER_MS;
+    if (stale && parked.value) void setActiveMode('').catch(() => undefined);
+    if (stale || (snapshot.value && !snapshot.value.returnToMode)) {
+      parked.value = '';
+      view.value = 'root';
+      resetForSummon();
+      scheduleSuggest();
+      void focusInput();
+      return;
+    }
+    // Still inside a view (a workspace, or a picker mid-search): reopen right there.
+    if (view.value === 'resources') resourcesView.value?.start();
+    if (view.value === 'network') networkView.value?.start();
+    // Copies made while the bar was hidden.
+    if (view.value === 'clip') void clipView.value?.refresh();
+    if (view.value !== 'root') return;
+    if (WORKSPACES.includes(parked.value)) {
+      enter(parked.value as View);
+      return;
+    }
+    // The main bar keeps its text only briefly.
+    const limit = (snapshot.value?.resumeSeconds ?? 120) * 1000;
+    const recent = hiddenAt > 0 && limit > 0 && hiddenFor() < limit;
+    // A scoped search (files, apps, settings, notes) sticks until something is picked.
+    const picker = scope.value !== null || /^!(note|notes)\b/i.test(query.value);
+    if (!recent && !picker) resetForSummon();
+    // The empty bar's list changes while hidden (apps found after startup, a launch, a
+    // search), and the text is unchanged, so nothing else would refresh it.
+    if (!query.value) scheduleSuggest();
+    void focusInput();
+  }
+
+  function onHidden() {
+    barShown.value = false;
+    hiddenAt = performance.now();
+    pauseTimers();
+    hiddenAtWall = Date.now();
+    resourcesView.value?.stop();
+    networkView.value?.stop();
+    typingView.value?.pause();
+  }
+
   onMounted(async () => {
+    // Listened for all at once, while the settings load.
+    const listening = Promise.all([
+      listen('bar-shown', onShown),
+      listen<string | null>('update-waiting', (event) => (updateReady.value = event.payload)),
+      // Startup's unseen draw, again once the apps are found, so the first summon has them.
+      listen('bar-redraw', () => {
+        if (!query.value) scheduleSuggest();
+      }),
+      listen('bar-hidden', onHidden),
+      listen<SystemStats>('stats', (event) => takeStats(event.payload)),
+      // A zephyr:// link: text to type in, or why the link was refused. Links never run
+      // anything from the bar (search links open their page from the app), and the app
+      // refuses shell text.
+      listen<{ query: string; notice: string | null }>('bar-input', (event) => {
+        const { query: text, notice: refused } = event.payload;
+        if (refused) {
+          notice.value = refused;
+          return;
+        }
+        query.value = text;
+        void focusInput();
+      }),
+      listen('clipboard-shown', () => openClip('')),
+      // A hotkey the user gave a mode or scoped search (Settings > Shortcuts).
+      listen<string>('bar-open', (event) => {
+        query.value = '';
+        openView(event.payload);
+      }),
+      listen('bar-focus', () => {
+        void focusInput();
+      }),
+      listen<unknown>('state-changed', (event) => {
+        if (!isSnapshot(event.payload)) return;
+        snapshot.value = event.payload;
+      }),
+    ]);
     try {
-      snapshot.value = await getSnapshot();
+      const loaded = await getSnapshot();
+      // A change that arrived meanwhile is newer.
+      snapshot.value ??= loaded;
       const remembered = snapshot.value.activeMode;
       if (snapshot.value.returnToMode && MODE_NAMES[remembered]) {
         parked.value = remembered;
@@ -697,115 +664,9 @@
     } catch (error) {
       loadError.value = errorMessage(error);
     }
+    void devices.loadDevices(true);
+    unlistens.push(...(await listening));
 
-    unlistens.push(
-      await listen('bar-shown', () => {
-        barShown.value = true;
-        void updateWaiting()
-          .then((version) => (updateReady.value = version))
-          .catch(() => undefined);
-        resumeTimers();
-        prefetchViews();
-        sentHeight = 0;
-        // Opens the connection to the suggestion service before the first keystroke.
-        void warmSuggestions().catch(() => undefined);
-        void loadDevices();
-        // Hidden over five minutes: start over on the main bar, as with returning to modes
-        // turned off.
-        const stale = hiddenFor() > FRESH_AFTER_MS;
-        if (stale && parked.value) void setActiveMode('').catch(() => undefined);
-        if (stale || (snapshot.value && !snapshot.value.returnToMode)) {
-          parked.value = '';
-          view.value = 'root';
-          resetForSummon();
-          scheduleSuggest();
-          void focusInput();
-          return;
-        }
-        // Still inside a view (a workspace, or a picker mid-search): reopen right there.
-        if (view.value === 'resources') resourcesView.value?.start();
-        if (view.value === 'network') networkView.value?.start();
-        // Copies made while the bar was hidden.
-        if (view.value === 'clip') void clipView.value?.refresh();
-        if (view.value !== 'root') return;
-        if (WORKSPACES.includes(parked.value)) {
-          enter(parked.value as View);
-          return;
-        }
-        // The main bar keeps its text only briefly.
-        const limit = (snapshot.value?.resumeSeconds ?? 120) * 1000;
-        const recent = hiddenAt > 0 && limit > 0 && hiddenFor() < limit;
-        // A scoped search (files, apps, settings, notes) sticks until something is picked.
-        const picker = scope.value !== null || /^!(note|notes)\b/i.test(query.value);
-        if (!recent && !picker) resetForSummon();
-        // The empty bar's list changes while hidden (apps found after startup, a launch, a
-        // search), and the text is unchanged, so nothing else would refresh it.
-        if (!query.value) scheduleSuggest();
-        void focusInput();
-      })
-    );
-    unlistens.push(
-      await listen<string | null>('update-waiting', (event) => (updateReady.value = event.payload))
-    );
-    unlistens.push(
-      // Startup's unseen draw, again once the apps are found, so the first summon has them.
-      await listen('bar-redraw', () => {
-        if (!query.value) scheduleSuggest();
-      })
-    );
-    unlistens.push(
-      await listen('bar-hidden', () => {
-        barShown.value = false;
-        hiddenAt = performance.now();
-        pauseTimers();
-        hiddenAtWall = Date.now();
-        resourcesView.value?.stop();
-        networkView.value?.stop();
-        typingView.value?.pause();
-      })
-    );
-    unlistens.push(await listen<SystemStats>('stats', (event) => takeStats(event.payload)));
-    // A zephyr:// link: text to type in, or why the link was refused. Links never run anything
-    // from the bar (search links open their page from the app), and the app refuses shell text.
-    unlistens.push(
-      await listen<{ query: string; notice: string | null }>('bar-input', (event) => {
-        const { query: text, notice: refused } = event.payload;
-        if (refused) {
-          notice.value = refused;
-          return;
-        }
-        query.value = text;
-        void focusInput();
-      })
-    );
-    void loadDevices(true);
-    unlistens.push(await listen('clipboard-shown', () => openClip('')));
-    // A hotkey the user gave a mode or scoped search (Settings > Shortcuts).
-    unlistens.push(
-      await listen<string>('bar-open', (event) => {
-        query.value = '';
-        openView(event.payload);
-      })
-    );
-    unlistens.push(
-      await listen('bar-focus', () => {
-        void focusInput();
-      })
-    );
-    unlistens.push(
-      await listen<unknown>('state-changed', (event) => {
-        if (!isSnapshot(event.payload)) return;
-        snapshot.value = event.payload;
-      })
-    );
-
-    window.addEventListener('keydown', onKey, true);
-    window.addEventListener('keydown', trackModifiers, true);
-    window.addEventListener('keyup', trackModifiers, true);
-    window.addEventListener('keyup', onKeyUp, true);
-    window.addEventListener('blur', onBlur);
-    // A drop lands outside the page's key events, so the pointer corrects what's held.
-    window.addEventListener('mousemove', trackModifiers, true);
     if (root.value) {
       observer = new ResizeObserver(() => syncHeight());
       observer.observe(root.value);
@@ -830,39 +691,22 @@
   function onBlur() {
     movable.value = false;
     closeOnEscapeUp = false;
-    window.clearTimeout(numbersTimer);
-    numbersTimer = 0;
-    showNumbers.value = false;
-    altAlone = false;
+    runKey.reset();
   }
 
   // Timers that only matter while the bar shows: the check for computers asking to join sync,
   // and what's-playing's clock. They stop while it's hidden, as does the countdown's clock.
-  const DEVICE_POLL_MS = 60000;
-  let timersRunning = true;
   function pauseTimers() {
-    timersRunning = false;
-    pollDevices();
+    devices.pause();
     media.pause();
   }
 
   function resumeTimers() {
-    timersRunning = true;
-    pollDevices();
+    devices.resume();
     media.resume();
   }
   onUnmounted(() => {
-    window.clearInterval(devicePoll);
-    window.removeEventListener('blur', onBlur);
-    window.removeEventListener('keydown', onKey, true);
-    window.removeEventListener('keydown', trackModifiers, true);
-    window.removeEventListener('keyup', trackModifiers, true);
-    window.removeEventListener('keyup', onKeyUp, true);
-    window.removeEventListener('mousemove', trackModifiers, true);
     observer?.disconnect();
-    window.clearTimeout(suggestTimer);
-    window.clearTimeout(weatherTimer);
-    window.clearTimeout(numbersTimer);
     for (const unlisten of unlistens) unlisten();
   });
 
@@ -997,52 +841,6 @@
     }
   }
 
-  // Computers asking to join sync: asked on a summon at most every five minutes while none
-  // are waiting, and every minute while one is (so its card goes once it's answered elsewhere).
-  const DEVICE_CHECK_MS = 5 * 60 * 1000;
-  let devicesCheckedAt = 0;
-  async function loadDevices(force = false) {
-    const recent = Date.now() - devicesCheckedAt < DEVICE_CHECK_MS;
-    if (!force && recent && devicesWaiting.value.length === 0) return;
-    devicesCheckedAt = Date.now();
-    try {
-      devicesWaiting.value = await syncPending();
-    } catch {
-      devicesWaiting.value = [];
-    }
-    pollDevices();
-  }
-
-  /** The minute's check runs only while a computer is waiting and the bar shows. */
-  function pollDevices() {
-    const wanted = timersRunning && devicesWaiting.value.length > 0;
-    if (wanted && !devicePoll) {
-      devicePoll = window.setInterval(() => void loadDevices(true), DEVICE_POLL_MS);
-    } else if (!wanted && devicePoll) {
-      window.clearInterval(devicePoll);
-      devicePoll = 0;
-    }
-  }
-
-  /** An answer still on its way: the next request moves up only once it's done, and a
-   * second key press mustn't answer that one unseen. */
-  let answering = false;
-
-  async function answerDevice(decision: 'allow' | 'deny') {
-    const device = devicesWaiting.value[0];
-    if (!device || answering) return;
-    answering = true;
-    try {
-      if (decision === 'allow') await syncApprove(device.id);
-      else await syncRevoke(device.id);
-      await loadDevices(true);
-    } catch (error) {
-      notice.value = errorMessage(error);
-    } finally {
-      answering = false;
-    }
-  }
-
   watch(query, () => {
     if (!scope.value && view.value === 'root' && runAlias()) return;
     const scoped = /^!([a-z]+)\s+(.*)$/is.exec(query.value);
@@ -1118,116 +916,83 @@
     void setBarHeight(height).catch(() => (sentHeight = 0));
   }
 
-  // Local results (apps, history) land on the keystroke; remote suggestions follow after a
-  /** Text that could be a power command (power.rs WORDS, three letters in), so other text
-   *  skips asking. */
-  const POWER_WORD =
-    /^!?\s*(?:(?:cancel|abort|stop)\s+)?(?:res|reb|boo|fir|bio|uef|shu|pow|tur|sle|sus|loc|sig|log)/i;
-  // pause and only append, so the row Enter would take never shifts under the user.
-  /** The generation whose local reply said the network pass would add nothing. */
-  let remoteSkip = 0;
-  function scheduleSuggest() {
-    window.clearTimeout(suggestTimer);
-    const current = ++generation;
-    remoteApplied = false;
-    void loadSuggestions(current, false);
-    suggestTimer = window.setTimeout(() => {
-      // The local pass already said the network has nothing to add for this text.
-      if (remoteSkip === current) return;
-      void loadSuggestions(current, true);
-    }, 120);
-  }
-
-  /** Web suggestions by text, so going back to a text shows them at once. */
-  const remembered = new Map<string, SuggestionRow[]>();
-
-  /** The web rows to keep up until this text's own arrive: only ones that still match. */
-  function stillMatching(typed: string): SuggestionRow[] {
-    const prefix = typed.trim().toLowerCase();
-    if (!prefix) return [];
-    return (lastResponse.value?.items ?? []).filter(
-      (item) => item.kind === 'remote' && item.query.toLowerCase().startsWith(prefix)
-    );
-  }
-
-  async function loadSuggestions(current: number, includeRemote: boolean) {
-    try {
-      const typed = typedText();
-      const asked = performance.now();
-      trace('fetch', { text: typed, remote: includeRemote, generation: current });
-      const [answer, power] = await Promise.all([
-        suggest(typed, includeRemote),
-        includeRemote
-          ? Promise.resolve(powerRow.value)
-          : POWER_WORD.test(typed)
-            ? powerPreview(typed).catch(() => null)
-            : Promise.resolve(null),
-      ]);
-      let response = answer;
-      if (!includeRemote && current === generation) {
-        powerRow.value = power;
-        remoteSkip = answer.remote === false ? current : 0;
-      }
-      const stale = current !== generation || (!includeRemote && remoteApplied);
-      trace('fetched', {
+  /** Shows a suggest reply, keeping the row the user moved to selected when late results
+   *  reshuffle the list. */
+  async function applySuggestions(
+    response: SuggestResponse,
+    includeRemote: boolean,
+    typed: string
+  ) {
+    const kept = userMoved && selectedItem.value ? rowKey(selectedItem.value) : null;
+    lastResponse.value = response;
+    lastQuery.value = query.value;
+    mode.value = response.mode;
+    notice.value = response.notice;
+    const index = kept ? items.value.findIndex((row) => rowKey(row) === kept) : -1;
+    if (index >= 0) {
+      selected.value = index;
+    } else {
+      userMoved = false;
+      selected.value = built.value.preselect ?? -1;
+    }
+    if (pendingMove) {
+      const delta = pendingMove;
+      pendingMove = 0;
+      moveSelection(delta);
+    }
+    // The row list is only built when a capture is recording.
+    if (capturing.value)
+      trace('results', {
         text: typed,
         remote: includeRemote,
-        ms: Math.round(performance.now() - asked),
-        rows: response.items.length,
-        stale,
+        selected: selected.value,
+        rows: items.value.map((item) => ({
+          section: item.section,
+          kind: item.kind,
+          label: item.label,
+        })),
       });
-      if (stale) return;
-      if (includeRemote) remoteApplied = true;
-      // Until this text's web suggestions arrive, keep the ones seen for it before
-      // (backspacing), or the current ones that still match, so the list doesn't collapse.
-      const key = typed.trim().toLowerCase();
-      if (includeRemote) {
-        remembered.set(
-          key,
-          response.items.filter((item) => item.kind === 'remote')
-        );
-        if (remembered.size > 200) remembered.delete(remembered.keys().next().value ?? '');
-      } else {
-        // Not when no web suggestions will follow (an app named outright, a link).
-        const carried =
-          answer.remote === false ? [] : (remembered.get(key) ?? stillMatching(typed));
-        if (carried.length) response = { ...response, items: [...response.items, ...carried] };
-      }
-      // Keep the row the user moved to selected when late results reshuffle the list.
-      const kept = userMoved && selectedItem.value ? rowKey(selectedItem.value) : null;
-      lastResponse.value = response;
-      lastQuery.value = query.value;
-      mode.value = response.mode;
-      notice.value = response.notice;
-      const index = kept ? items.value.findIndex((row) => rowKey(row) === kept) : -1;
-      if (index >= 0) {
-        selected.value = index;
-      } else {
-        userMoved = false;
-        selected.value = built.value.preselect ?? -1;
-      }
-      if (pendingMove) {
-        const delta = pendingMove;
-        pendingMove = 0;
-        moveSelection(delta);
-      }
-      // The row list is only built when a capture is recording.
-      if (capturing.value)
-        trace('results', {
-          text: typed,
-          remote: includeRemote,
-          selected: selected.value,
-          rows: items.value.map((item) => ({
-            section: item.section,
-            kind: item.kind,
-            label: item.label,
-          })),
-        });
-      await nextTick();
-      syncHeight();
-    } catch (error) {
-      if (current !== generation) return;
-      notice.value = errorMessage(error);
+    await nextTick();
+    syncHeight();
+  }
+
+  /** What's playing: Ctrl+Space plays or pauses anywhere in the bar; with nothing typed,
+   *  Ctrl+Shift+→/← skip (with text they still select by word). Whether it took the key. */
+  function mediaKey(event: KeyboardEvent): boolean {
+    if (!playingNow.value || !event.ctrlKey || event.altKey || event.metaKey) return false;
+    if (event.code === 'Space' && !event.shiftKey) {
+      event.preventDefault();
+      if (!event.repeat) media.press('toggle');
+      return true;
+    }
+    if (
+      event.shiftKey &&
+      view.value === 'root' &&
+      !query.value &&
+      (event.key === 'ArrowRight' || event.key === 'ArrowLeft')
+    ) {
+      event.preventDefault();
+      if (!event.repeat) media.press(event.key === 'ArrowRight' ? 'next' : 'previous');
+      return true;
+    }
+    return false;
+  }
+
+  /** The view taking over the bar, for its keys. */
+  function viewShowing(): { onKey: (event: KeyboardEvent) => void } | null {
+    switch (view.value) {
+      case 'clip':
+        return clipView.value;
+      case 'network':
+        return networkView.value;
+      case 'resources':
+        return resourcesView.value;
+      case 'typing':
+        return typingView.value;
+      case 'shell':
+        return shellView.value;
+      default:
+        return null;
     }
   }
 
@@ -1243,58 +1008,12 @@
     if (event.isComposing || event.keyCode === 229) return;
     // A fresh Esc press closes the bar on release only if the root takes it, below.
     if (event.key === 'Escape' && !event.repeat) closeOnEscapeUp = false;
-    // A computer asking to join sync: never plain Enter, only these keys.
-    if (
-      devicesWaiting.value.length &&
-      (event.metaKey || event.ctrlKey) &&
-      !event.altKey &&
-      !event.shiftKey
-    ) {
-      if (event.code === 'KeyY' || event.code === 'KeyN') {
-        event.preventDefault();
-        // A held key answers once; the next request needs its own press.
-        if (event.repeat) return;
-        void answerDevice(event.code === 'KeyY' ? 'allow' : 'deny');
-        return;
-      }
-    }
-    // What's playing: Ctrl+Space plays or pauses anywhere in the bar; with nothing typed,
-    // Ctrl+Shift+→/← skip (with text they still select by word).
-    if (playingNow.value && event.ctrlKey && !event.altKey && !event.metaKey) {
-      if (event.code === 'Space' && !event.shiftKey) {
-        event.preventDefault();
-        if (!event.repeat) media.press('toggle');
-        return;
-      }
-      if (
-        event.shiftKey &&
-        view.value === 'root' &&
-        !query.value &&
-        (event.key === 'ArrowRight' || event.key === 'ArrowLeft')
-      ) {
-        event.preventDefault();
-        if (!event.repeat) media.press(event.key === 'ArrowRight' ? 'next' : 'previous');
-        return;
-      }
-    }
-    if (view.value === 'clip') {
-      clipView.value?.onKey(event);
-      return;
-    }
-    if (view.value === 'network') {
-      networkView.value?.onKey(event);
-      return;
-    }
-    if (view.value === 'resources') {
-      resourcesView.value?.onKey(event);
-      return;
-    }
-    if (view.value === 'typing') {
-      typingView.value?.onKey(event);
-      return;
-    }
-    if (view.value === 'shell') {
-      shellView.value?.onKey(event);
+    // A computer asking to join sync: never plain Enter, only ⌘Y and ⌘N.
+    if (devices.onKey(event)) return;
+    if (mediaKey(event)) return;
+    // A view that takes over the bar takes every other key.
+    if (view.value !== 'root') {
+      viewShowing()?.onKey(event);
       return;
     }
     if (event.key === 'Enter' && /^!(?:sh|shell)$/i.test(query.value.trim())) {
@@ -1322,21 +1041,7 @@
     if (menu.onKey(event)) return;
 
     // Right arrow or End at the end of the text takes the suggested completion.
-    if (
-      (event.key === 'ArrowRight' || event.key === 'End') &&
-      ghost.value &&
-      !event.shiftKey &&
-      !modifier &&
-      !event.altKey
-    ) {
-      event.preventDefault();
-      query.value += ghost.value;
-      void nextTick(() => {
-        inputEl.value?.setSelectionRange(query.value.length, query.value.length);
-        trackCaret();
-      });
-      return;
-    }
+    if (typeAhead.onKey(event)) return;
 
     // Shift+Space on a file previews it (plain Space still types); Esc closes the preview
     // before anything else.
@@ -1391,8 +1096,8 @@
     }
 
     // Alt+1..9 (⌘1..9 on a Mac) runs the Nth row, as Enter on it would.
-    if (runKeyHeld(event) && /^Digit[1-9]$/.test(event.code)) {
-      const index = Number(event.code.slice(5)) - 1;
+    const index = runKey.rowFor(event);
+    if (index !== null) {
       if (index < Math.min(items.value.length, visibleCount.value)) {
         event.preventDefault();
         showNumbers.value = false;
@@ -1467,53 +1172,14 @@
   }
 
   // The weather card: "weather", "forecast", or either with a city ("weather in tokyo").
-  // Here comes from the Today line's forecast; a city is looked up as it's typed.
-  const forecast = useWeather();
-  const weatherCity = computed(() => {
-    if (scope.value || view.value !== 'root') return null;
-    const asked = /^(?:weather|forecast)(?:\s+(?:in\s+|for\s+)?(.*))?$/i.exec(query.value.trim());
-    return asked ? (asked[1] ?? '').trim() : null;
+  const { forecast, cardForecast, openForecast, showWeather } = useWeatherCard({
+    query,
+    shown: () => !scope.value && view.value === 'root',
+    menuOpen: actionsOpen,
+    inputEl,
+    notice,
+    clearAfterOpen,
   });
-  const typedForecast = ref<{ city: string; forecast: Forecast | null } | null>(null);
-  let weatherTimer = 0;
-  watch(weatherCity, (city) => {
-    window.clearTimeout(weatherTimer);
-    if (!city || typedForecast.value?.city === city) return;
-    weatherTimer = window.setTimeout(async () => {
-      const found = await weatherAt(city).catch(() => null);
-      if (weatherCity.value === city) typedForecast.value = { city, forecast: found };
-    }, 350);
-  });
-  const cardForecast = computed(() => {
-    const city = weatherCity.value;
-    if (city === null || actionsOpen.value) return null;
-    if (!city) return forecast.value;
-    return typedForecast.value?.city === city ? typedForecast.value.forecast : null;
-  });
-
-  function openForecast() {
-    const shown = cardForecast.value;
-    if (!shown) return;
-    void openUrl(googleUrl(`weather ${placeName(shown)}`))
-      .then(clearAfterOpen)
-      .catch((error) => (notice.value = errorMessage(error)));
-  }
-
-  /** The footer's weather: the weather card. */
-  function showWeather() {
-    if (!forecast.value) return;
-    query.value = 'weather';
-    // The caret at the end, not the word selected, so typing a city just carries on.
-    void nextTick(() => {
-      const input = inputEl.value;
-      input?.focus();
-      input?.setSelectionRange(input.value.length, input.value.length);
-    });
-  }
-
-  function googleUrl(text: string): string {
-    return `https://www.google.com/search?q=${encodeURIComponent(text)}`;
-  }
 
   /**
    * Shift+Enter on a search opens it in Google's AI Mode (udm=50) instead of the usual
@@ -1544,47 +1210,7 @@
       gridReady = true;
       void prepareGrid().catch(() => (gridReady = false));
     }
-    trackRunKey(event);
-  }
-
-  // Alt+1..9 (⌘1..9 on a Mac) runs the Nth row. Holding the key a moment, or tapping Alt
-  // alone on Windows, numbers the rows; any other key hides the numbers again.
-  const RUN_KEY = isMac ? 'cmd' : 'alt';
-  const showNumbers = ref(false);
-  let numbersTimer = 0;
-  let altAlone = false;
-  function runKeyHeld(event: KeyboardEvent | MouseEvent) {
-    return isMac
-      ? event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey
-      : event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey;
-  }
-  function trackRunKey(event: KeyboardEvent | MouseEvent) {
-    const keyboard = event instanceof KeyboardEvent;
-    if (keyboard && event.type === 'keydown') {
-      altAlone = !isMac && event.key === 'Alt';
-      if (event.key !== 'Alt' && event.key !== 'Meta') showNumbers.value = false;
-    }
-    if (keyboard && event.type === 'keyup' && event.key === 'Alt' && !isMac) {
-      // A bare Alt would otherwise move the webview's focus to a (missing) menu bar.
-      event.preventDefault();
-      window.clearTimeout(numbersTimer);
-      numbersTimer = 0;
-      showNumbers.value = altAlone;
-      altAlone = false;
-      return;
-    }
-    if (runKeyHeld(event)) {
-      if (!numbersTimer && !showNumbers.value) {
-        numbersTimer = window.setTimeout(() => {
-          numbersTimer = 0;
-          showNumbers.value = true;
-        }, 300);
-      }
-    } else if (!keyboard || event.type === 'keyup') {
-      window.clearTimeout(numbersTimer);
-      numbersTimer = 0;
-      if (isMac || keyboard) showNumbers.value = false;
-    }
+    runKey.track(event);
   }
 
   /**
@@ -1794,34 +1420,6 @@
     const row = items.value[index];
     if (row?.kind !== 'file' || !row.path) return;
     void dragOut({ path: row.path }).catch((error) => (notice.value = errorMessage(error)));
-  }
-
-  /** Shut down, restart and sign out take a second Enter; sleep and lock go at once. */
-  async function runPower(preview: PowerPreview) {
-    const key = `${preview.action}:${preview.at ?? 'now'}`;
-    if (preview.confirm && !preview.at && confirmArm.value !== key) {
-      confirmArm.value = key;
-      notice.value = `Press Enter again to ${preview.label.toLowerCase()}, or Esc to back out`;
-      return;
-    }
-    confirmArm.value = '';
-    try {
-      await powerRun(preview.action, preview.at);
-      query.value = '';
-      notice.value = preview.at ? `${preview.label}. Open Zephyr to cancel it.` : null;
-    } catch (error) {
-      notice.value = errorMessage(error);
-    }
-  }
-
-  async function cancelPower() {
-    try {
-      await powerCancel();
-      query.value = '';
-      notice.value = 'Cancelled';
-    } catch (error) {
-      notice.value = errorMessage(error);
-    }
   }
 
   /** Clears the text, scope, selection and message once something has opened. */
