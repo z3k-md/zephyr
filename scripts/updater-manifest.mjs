@@ -5,6 +5,8 @@
 //
 // Env: GITHUB_TOKEN, GITHUB_REPOSITORY, RELEASE_ID, REQUIRED_PLATFORMS (comma separated),
 // DRY_RUN=1 to print the manifest without uploading.
+import { platformsFor } from './release-assets.mjs';
+
 const API = 'https://api.github.com';
 const {
   GITHUB_TOKEN,
@@ -35,18 +37,6 @@ async function github(path, init = {}) {
     );
   }
   return response;
-}
-
-const MAC_ARCHES = { universal: ['aarch64', 'x86_64'], aarch64: ['aarch64'], x64: ['x86_64'] };
-const WINDOWS_ARCHES = { x64: 'x86_64', arm64: 'aarch64', x86: 'i686' };
-
-/** Maps an updater bundle file name to the platform keys the Tauri updater looks up. */
-function platformsFor(name) {
-  const mac = name.match(/_(universal|aarch64|x64)\.app\.tar\.gz$/);
-  if (mac) return MAC_ARCHES[mac[1]].map((arch) => `darwin-${arch}`);
-  const windows = name.match(/_(x64|arm64|x86)-setup\.exe$/);
-  if (windows) return [`windows-${WINDOWS_ARCHES[windows[1]]}`];
-  return [];
 }
 
 const repo = `/repos/${GITHUB_REPOSITORY}`;

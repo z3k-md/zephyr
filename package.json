@@ -17,7 +17,8 @@
     "test": "cargo test --manifest-path src-tauri/Cargo.toml --locked",
     "lint": "prettier --check . && bun run typecheck && vite build && cargo fmt --manifest-path src-tauri/Cargo.toml --check && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings",
     "format": "prettier --write . && cargo fmt --manifest-path src-tauri/Cargo.toml",
-    "icons": "node scripts/icons.mjs"
+    "icons": "node scripts/icons.mjs",
+    "test:scripts": "node --test \"scripts/*.test.mjs\""
   },
   "dependencies": {
     "@crabnebula/tauri-plugin-drag": "^2.1.0",
