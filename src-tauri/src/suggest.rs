@@ -752,8 +752,8 @@ fn history_item(entry: HistoryEntry) -> Suggestion {
         kind: "history".into(),
         hint: if link { "Link" } else { "Google" }.into(),
         section: "recent".into(),
-        // Google's G as a silhouette in the row's color.
-        icon: if link { "glyph:link" } else { "glyph:google" }.into(),
+        // A clock turning back, as browsers mark recent searches.
+        icon: if link { "glyph:link" } else { "glyph:history" }.into(),
         ..Default::default()
     }
 }
@@ -1080,7 +1080,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             (row.section.as_str(), row.icon.as_str(), row.target.as_str()),
-            ("recent", "glyph:google", "web")
+            ("recent", "glyph:history", "web")
         );
         let history = [searched("crispr.org", "url")];
         let response = local_full("crispr", &[], &history, false);
