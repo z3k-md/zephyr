@@ -6,10 +6,11 @@
   import { vFit } from '../fit';
   import { bytes } from '../format';
   import { gpuTitle } from './footerStats';
-  import { isMac, isModifierKey } from '../keys';
+  import { isMac } from '../keys';
   import { useLater, usePoll } from '../poll';
-  import Keys from '../components/Keys.vue';
   import KeyHints from '../components/KeyHints.vue';
+  import ActionMenu from '../components/ActionMenu.vue';
+  import { MENU_HINTS, isMenuKey, useActionMenu, type MenuAction } from '../components/actionMenu';
   import ResourceDetailPane from './ResourceDetail.vue';
   import ResourceDrill from './ResourceDrill.vue';
   import {
@@ -41,16 +42,6 @@
   const emit = defineEmits<{ exit: []; search: [text: string]; network: [] }>();
   /** Text to filter by on opening (a process ID, from a port's row). */
   const props = defineProps<{ initialFilter?: string }>();
-
-  interface Action {
-    label: string;
-    keys?: string;
-    /** The menu stays open after it runs. */
-    keepOpen?: boolean;
-    /** Why it can't be done here; shown greyed with the reason. */
-    disabled?: string;
-    run: () => unknown;
-  }
 
   const SORTS: { id: ResourceSort; label: string }[] = [
     { id: 'cpu', label: 'CPU' },
@@ -85,10 +76,6 @@
     { keys: 'tab', label: 'sort' },
     { keys: 'mod+k', label: 'actions' },
   ];
-  const MENU_HINTS = [
-    { keys: 'enter', label: 'run' },
-    { keys: 'esc', label: 'back' },
-  ];
   const CONFIRM_HINTS = [
     { keys: 'enter', label: 'yes' },
     { keys: 'esc', label: 'no' },
@@ -106,9 +93,8 @@
   const notice = ref<string | null>(null);
   /** The quit waiting for a second press, on the selected row. */
   const confirming = ref<{ key: string; force: boolean } | null>(null);
-  const actionsOpen = ref(false);
-  const actionIndex = ref(0);
-  const actionsShown = ref(Infinity);
+  const menu = useActionMenu(() => actions.value);
+  const { open: actionsOpen, index: actionIndex } = menu;
   const rate = ref(savedRate());
   /** Show info for the selected row, and the tiles' drill-ins in place of the list. */
   const detailOpen = ref(false);
@@ -310,11 +296,11 @@
   /** Finder and the Dock come back by themselves on a Mac; Explorer is restarted. */
   const RELAUNCH = isMac ? 'Relaunch' : 'Restart';
 
-  const actions = computed<Action[]>(() => {
+  const actions = computed<MenuAction[]>(() => {
     const row = current.value;
     if (!row) return [];
     const noPath = row.locked ? 'Needs administrator rights' : 'Not known';
-    const list: Action[] = [
+    const list: MenuAction[] = [
       { label: `Switch to ${row.name}`, keys: 'enter', run: () => switchTo(row) },
       { label: 'Show info', keys: 'shift+space', run: () => openDetail() },
       row.relaunch
@@ -364,12 +350,6 @@
     return list;
   });
 
-  function runAction(action: Action | undefined) {
-    if (!action || action.disabled) return;
-    if (!action.keepOpen) actionsOpen.value = false;
-    void action.run();
-  }
-
   function openDetail() {
     if (!current.value) return;
     drill.value = null;
@@ -388,34 +368,9 @@
   /** Called by the bar for every key while System Resources is showing. */
   function onKey(event: KeyboardEvent) {
     const modifier = event.metaKey || event.ctrlKey;
-    if (modifier && event.code === 'KeyK') {
-      event.preventDefault();
-      confirming.value = null;
-      actionsOpen.value = !actionsOpen.value && actions.value.length > 0;
-      actionIndex.value = 0;
-      return;
-    }
-    if (actionsOpen.value) {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        actionsOpen.value = false;
-        return;
-      } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-        event.preventDefault();
-        const count = Math.min(actions.value.length, actionsShown.value);
-        if (count === 0) return;
-        actionIndex.value =
-          (actionIndex.value + (event.key === 'ArrowDown' ? 1 : -1) + count) % count;
-        return;
-      } else if (event.key === 'Enter') {
-        event.preventDefault();
-        if (!event.repeat) runAction(actions.value[actionIndex.value]);
-        return;
-      }
-      if (isModifierKey(event)) return;
-      // Any other key closes the menu and does what it does in the list.
-      actionsOpen.value = false;
-    }
+    // Opening the menu backs out of a quit waiting for its second press.
+    if (isMenuKey(event)) confirming.value = null;
+    if (menu.onKey(event)) return;
     if (modifier && event.key === 'Backspace' && isMac) {
       event.preventDefault();
       if (!event.repeat) askQuit(event.altKey);
@@ -597,6 +552,18 @@
         v-model="filter"
         class="query"
         type="text"
+        role="combobox"
+        aria-label="Filter apps and processes"
+        aria-autocomplete="list"
+        :aria-controls="actionsOpen ? 'res-actions' : 'res-list'"
+        :aria-expanded="actionsOpen || rows.length > 0"
+        :aria-activedescendant="
+          actionsOpen
+            ? `res-actions-${actionIndex}`
+            : rows.length && !drill && !detailOpen
+              ? `res-row-${selectedIndex}`
+              : undefined
+        "
         placeholder="Filter apps and processes"
         spellcheck="false"
         autocomplete="off"
@@ -714,29 +681,16 @@
 
     <p v-if="notice" class="notice">{{ notice }}</p>
 
-    <ul
+    <ActionMenu
       v-if="actionsOpen"
-      v-fit="(count: number) => (actionsShown = count)"
-      class="results actions res-actions"
-      role="listbox"
-      aria-label="Actions"
-    >
-      <li
-        v-for="(action, index) in actions"
-        :key="action.label"
-        role="option"
-        :aria-selected="index === actionIndex"
-        class="item"
-        :class="{ selected: index === actionIndex }"
-        @mousedown.prevent
-        @click="runAction(action)"
-        @mousemove="actionIndex = index"
-      >
-        <span class="label" :class="{ off: action.disabled }">{{ action.label }}</span>
-        <span v-if="action.disabled" class="res-why">{{ action.disabled }}</span>
-        <Keys v-else-if="action.keys" :keys="action.keys" />
-      </li>
-    </ul>
+      id="res-actions"
+      class="res-actions"
+      :actions="actions"
+      :index="actionIndex"
+      @run="menu.run"
+      @hover="menu.hover"
+      @fit="menu.shown.value = $event"
+    />
 
     <ResourceDrill v-else-if="drill" :kind="drill" :heat="heat" :memory="memoryParts" />
 
@@ -769,12 +723,14 @@
       <ul
         v-else
         v-fit="(count: number) => (shown = count)"
+        id="res-list"
         class="res-list"
         role="listbox"
         aria-label="Apps and processes"
       >
         <li
           v-for="(row, index) in rows"
+          :id="`res-row-${index}`"
           :key="row.key"
           role="option"
           :aria-selected="index === selectedIndex"

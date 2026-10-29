@@ -16,19 +16,13 @@
   import { ago, bytes, dateTime } from '../format';
   import { isMac } from '../keys';
   import SelectMenu from '../components/SelectMenu.vue';
-  import Keys from '../components/Keys.vue';
+  import ActionMenu from '../components/ActionMenu.vue';
+  import { MENU_HINTS, useActionMenu, type MenuAction } from '../components/actionMenu';
   import KeyHints from '../components/KeyHints.vue';
 
   const props = defineProps<{ initialQuery: string }>();
   // `picked` means an item was pasted or copied, which ends the clipboard picker.
   const emit = defineEmits<{ exit: []; picked: [] }>();
-
-  interface Action {
-    label: string;
-    /** Its key, as a spec for the Keys component ("mod+enter"). */
-    keys?: string;
-    run: () => unknown;
-  }
 
   const LIST_HINTS = [
     { keys: 'enter', label: 'paste' },
@@ -36,10 +30,6 @@
     { keys: 'shift+enter', label: 'plain text' },
     { keys: 'tab', label: 'type' },
     { keys: 'mod+k', label: 'actions' },
-  ];
-  const MENU_HINTS = [
-    { keys: 'enter', label: 'run' },
-    { keys: 'esc', label: 'back' },
   ];
 
   const FILTERS: { id: string; label: string }[] = [
@@ -69,9 +59,13 @@
   const selected = ref(0);
   const detail = ref<ClipDetail | null>(null);
   const notice = ref<string | null>(null);
-  const actionsOpen = ref(false);
-  const actionIndex = ref(0);
   const confirmClear = ref(false);
+  // Typing while it's open still goes to the search; Esc also backs out of Delete all.
+  const menu = useActionMenu(() => actions.value, {
+    keepOpenWhileTyping: true,
+    onEscape: () => (confirmClear.value = false),
+  });
+  const { open: actionsOpen, index: actionIndex } = menu;
 
   let generation = 0;
 
@@ -85,10 +79,10 @@
     return { chars: text.length, words };
   });
 
-  const actions = computed<Action[]>(() => {
+  const actions = computed<MenuAction[]>(() => {
     const item = current.value;
     if (!item) return [];
-    const list: Action[] = [
+    const list: MenuAction[] = [
       { label: 'Paste', keys: 'enter', run: () => paste(false) },
       { label: 'Copy to clipboard', keys: 'mod+enter', run: () => copy() },
     ];
@@ -105,6 +99,7 @@
       label: confirmClear.value
         ? 'Press again to delete all unpinned items'
         : 'Delete all unpinned',
+      keepOpen: true,
       run: () => clearAll(),
     });
     return list;
@@ -251,14 +246,6 @@
     }
   }
 
-  function runAction(action: Action | undefined) {
-    if (!action) return;
-    if (!action.label.startsWith('Delete all') && !action.label.startsWith('Press again')) {
-      actionsOpen.value = false;
-    }
-    void action.run();
-  }
-
   function cycleFilter(backward: boolean) {
     const index = FILTERS.findIndex((item) => item.id === filter.value);
     const next = (index + (backward ? -1 : 1) + FILTERS.length) % FILTERS.length;
@@ -274,28 +261,7 @@
     // An open filter menu takes its own keys.
     if (filterMenu.value?.isOpen()) return;
     const modifier = event.metaKey || event.ctrlKey;
-    if (modifier && event.code === 'KeyK') {
-      event.preventDefault();
-      actionsOpen.value = !actionsOpen.value && actions.value.length > 0;
-      actionIndex.value = 0;
-      return;
-    }
-    if (actionsOpen.value) {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        actionsOpen.value = false;
-        confirmClear.value = false;
-      } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-        event.preventDefault();
-        const count = actions.value.length;
-        actionIndex.value =
-          (actionIndex.value + (event.key === 'ArrowDown' ? 1 : -1) + count) % count;
-      } else if (event.key === 'Enter') {
-        event.preventDefault();
-        if (!event.repeat) runAction(actions.value[actionIndex.value]);
-      }
-      return;
-    }
+    if (menu.onKey(event)) return;
     if (event.key === 'Escape') {
       event.preventDefault();
       emit('exit');
@@ -355,6 +321,18 @@
         v-model="query"
         class="query"
         type="text"
+        role="combobox"
+        aria-label="Search clipboard history"
+        aria-autocomplete="list"
+        :aria-controls="actionsOpen ? 'clip-actions' : 'clip-list'"
+        :aria-expanded="actionsOpen || items.length > 0"
+        :aria-activedescendant="
+          actionsOpen
+            ? `clip-actions-${actionIndex}`
+            : items.length
+              ? `clip-${selected}`
+              : undefined
+        "
         placeholder="Search clipboard history"
         spellcheck="false"
         autocomplete="off"
@@ -377,6 +355,7 @@
     <div v-else class="clip-body">
       <ul
         v-fit="(count: number) => (shown = count)"
+        id="clip-list"
         class="clip-list"
         role="listbox"
         aria-label="Clipboard history"
@@ -390,6 +369,7 @@
             Recent
           </li>
           <li
+            :id="`clip-${index}`"
             :data-index="index"
             role="option"
             :aria-selected="index === selected"
@@ -414,20 +394,16 @@
       </ul>
 
       <section class="clip-preview" aria-live="polite">
-        <ul v-if="actionsOpen" class="results actions clip-actions" role="listbox">
-          <li
-            v-for="(action, index) in actions"
-            :key="action.label"
-            class="item"
-            :class="{ selected: index === actionIndex }"
-            @mousedown.prevent
-            @click="runAction(action)"
-            @mousemove="actionIndex = index"
-          >
-            <span class="label">{{ action.label }}</span>
-            <Keys v-if="action.keys" :keys="action.keys" />
-          </li>
-        </ul>
+        <ActionMenu
+          v-if="actionsOpen"
+          id="clip-actions"
+          class="clip-actions"
+          :actions="actions"
+          :index="actionIndex"
+          @run="menu.run"
+          @hover="menu.hover"
+          @fit="menu.shown.value = $event"
+        />
         <template v-else-if="detail">
           <div class="clip-content">
             <div v-if="detail.kind === 'color' && detail.color" class="clip-swatch">

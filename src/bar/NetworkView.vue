@@ -3,11 +3,11 @@
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { GLYPHS } from './glyphs';
   import { vTip } from '../tip';
-  import { vFit } from '../fit';
   import { bytes, elapsed } from '../format';
-  import { isModifierKey } from '../keys';
   import { usePoll } from '../poll';
   import KeyHints from '../components/KeyHints.vue';
+  import ActionMenu from '../components/ActionMenu.vue';
+  import { MENU_HINTS, useActionMenu, type MenuAction } from '../components/actionMenu';
   import {
     errorMessage,
     networkAddresses,
@@ -33,17 +33,8 @@
   const props = defineProps<{ lastSpeed: SpeedResult | null }>();
   const emit = defineEmits<{ exit: [] }>();
 
-  interface Action {
-    label: string;
-    run: () => unknown;
-  }
-
   const LIST_HINTS = [
     { keys: 'mod+k', label: 'actions' },
-    { keys: 'esc', label: 'back' },
-  ];
-  const MENU_HINTS = [
-    { keys: 'enter', label: 'run' },
     { keys: 'esc', label: 'back' },
   ];
   const TEST_HINTS = [{ keys: 'esc', label: 'cancel' }];
@@ -52,9 +43,8 @@
   const addresses = ref<NetworkAddress[]>([]);
   const publicIp = ref<string | null>(null);
   const notice = ref<string | null>(null);
-  const actionsOpen = ref(false);
-  const actionIndex = ref(0);
-  const actionsShown = ref(Infinity);
+  const menu = useActionMenu(() => actions.value);
+  const { open: actionsOpen, index: actionIndex } = menu;
   const live = ref(false);
 
   /** The speed test: running with its latest reading, or finished with its result. */
@@ -400,8 +390,8 @@
     return lines.join('\n');
   }
 
-  const actions = computed<Action[]>(() => {
-    const list: Action[] = [
+  const actions = computed<MenuAction[]>(() => {
+    const list: MenuAction[] = [
       testRunning.value
         ? { label: 'Cancel speed test', run: cancelSpeedTest }
         : { label: 'Run speed test', run: runSpeedTest },
@@ -428,41 +418,9 @@
     void openUrl(url).catch((error) => (notice.value = errorMessage(error)));
   }
 
-  function runAction(action: Action | undefined) {
-    if (!action) return;
-    actionsOpen.value = false;
-    void action.run();
-  }
-
   /** Called by the bar for every key while the Network view shows. */
   function onKey(event: KeyboardEvent) {
-    const modifier = event.metaKey || event.ctrlKey;
-    if (modifier && event.code === 'KeyK') {
-      event.preventDefault();
-      actionsOpen.value = !actionsOpen.value;
-      actionIndex.value = 0;
-      return;
-    }
-    if (actionsOpen.value) {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        actionsOpen.value = false;
-        return;
-      } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-        event.preventDefault();
-        const count = Math.min(actions.value.length, actionsShown.value);
-        if (count === 0) return;
-        actionIndex.value =
-          (actionIndex.value + (event.key === 'ArrowDown' ? 1 : -1) + count) % count;
-        return;
-      } else if (event.key === 'Enter') {
-        event.preventDefault();
-        if (!event.repeat) runAction(actions.value[actionIndex.value]);
-        return;
-      }
-      if (isModifierKey(event)) return;
-      actionsOpen.value = false;
-    }
+    if (menu.onKey(event)) return;
     if (event.key === 'Escape' || (event.key === 'Backspace' && !event.repeat)) {
       event.preventDefault();
       if (testRunning.value) cancelSpeedTest();
@@ -527,27 +485,16 @@
 
     <p v-if="notice" class="notice">{{ notice }}</p>
 
-    <ul
+    <ActionMenu
       v-if="actionsOpen"
-      v-fit="(count: number) => (actionsShown = count)"
-      class="results actions res-actions"
-      role="listbox"
-      aria-label="Actions"
-    >
-      <li
-        v-for="(action, index) in actions"
-        :key="action.label"
-        role="option"
-        :aria-selected="index === actionIndex"
-        class="item"
-        :class="{ selected: index === actionIndex }"
-        @mousedown.prevent
-        @click="runAction(action)"
-        @mousemove="actionIndex = index"
-      >
-        <span class="label">{{ action.label }}</span>
-      </li>
-    </ul>
+      id="net-actions"
+      class="res-actions"
+      :actions="actions"
+      :index="actionIndex"
+      @run="menu.run"
+      @hover="menu.hover"
+      @fit="menu.shown.value = $event"
+    />
 
     <template v-else>
       <div class="net-chart" @mousemove="hoverChart" @mouseleave="hovered = -1">

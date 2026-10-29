@@ -64,8 +64,8 @@
   import FooterWeather from './FooterWeather.vue';
   import WeatherCard from './WeatherCard.vue';
   import { placeName, useWeather } from './weather';
-  import Keys from '../components/Keys.vue';
-  import { vFit } from '../fit';
+  import ActionMenu from '../components/ActionMenu.vue';
+  import { useActionMenu, type MenuAction } from '../components/actionMenu';
   import { vTip } from '../tip';
   import { isMac } from '../keys';
   import { barShown } from '../visibility';
@@ -190,15 +190,9 @@
   // After this long hidden, the bar opens fresh on the main bar instead of where it was.
   const FRESH_AFTER_MS = 5 * 60 * 1000;
 
-  interface Action {
-    label: string;
-    /** Its key, as a spec for the Keys component ("shift+enter"). */
-    keys?: string;
-    run: () => unknown;
-  }
-
-  const actionsOpen = ref(false);
-  const actionIndex = ref(0);
+  // Ctrl+K's menu, over the results.
+  const menu = useActionMenu(() => actions.value);
+  const { open: actionsOpen, index: actionIndex } = menu;
 
   let generation = 0;
   let remoteApplied = false;
@@ -496,9 +490,9 @@
   watch(notice, (text) => text && trace('notice', { text }));
 
   // Ctrl+K (⌘K on a Mac) lists what else the selected row, or the typed text, can do.
-  const rowActions = computed<Action[]>(() => {
+  const rowActions = computed<MenuAction[]>(() => {
     const item = selectedItem.value;
-    const list: Action[] = [];
+    const list: MenuAction[] = [];
     if (item?.portUse) {
       list.push(...portActions(item.portUse));
     } else if (item?.kind === 'answer') {
@@ -570,7 +564,7 @@
   });
 
   // Anything that can have a hotkey or alias gets one more action, which opens Settings on it.
-  const actions = computed<Action[]>(() => {
+  const actions = computed<MenuAction[]>(() => {
     const item = selectedItem.value;
     const bindable = item ? bindingTarget(item) : null;
     if (!bindable) return rowActions.value;
@@ -656,9 +650,9 @@
     }
   }
 
-  function portActions(use: PortUse): Action[] {
+  function portActions(use: PortUse): MenuAction[] {
     const name = portName(use);
-    const list: Action[] = [
+    const list: MenuAction[] = [
       { label: 'Show in Resources', keys: 'enter', run: () => showInResources(use.pid) },
       { label: `Quit ${name}`, run: () => armQuit(use, false) },
       { label: `Force quit ${name}`, run: () => armQuit(use, true) },
@@ -1324,38 +1318,8 @@
       if (!event.repeat) void openSettings();
       return;
     }
-    if (modifier && !event.altKey && !event.shiftKey && event.code === 'KeyK') {
-      event.preventDefault();
-      if (actionsOpen.value) {
-        actionsOpen.value = false;
-      } else if (actions.value.length > 0) {
-        actionIndex.value = 0;
-        actionsOpen.value = true;
-      }
-      return;
-    }
-
-    if (actionsOpen.value) {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        actionsOpen.value = false;
-        return;
-      }
-      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-        event.preventDefault();
-        const count = Math.min(actions.value.length, actionsShown.value);
-        actionIndex.value =
-          (actionIndex.value + (event.key === 'ArrowDown' ? 1 : -1) + count) % count;
-        return;
-      }
-      if (event.key === 'Enter') {
-        event.preventDefault();
-        if (!event.repeat) runAction(actions.value[actionIndex.value]);
-        return;
-      }
-      // Anything else goes back to typing.
-      actionsOpen.value = false;
-    }
+    // Ctrl+K and, while its menu is open, the menu's keys; anything else goes back to typing.
+    if (menu.onKey(event)) return;
 
     // Right arrow or End at the end of the text takes the suggested completion.
     if (
@@ -1623,12 +1587,6 @@
     }
   }
 
-  function runAction(action: Action | undefined) {
-    if (!action) return;
-    actionsOpen.value = false;
-    void action.run();
-  }
-
   /**
    * Aliases the user set (Settings > Shortcuts). A direct one fires as soon as it's typed;
    * a command's, typed and then a space, goes into that command with whatever follows. An app's or bookmark's alias waits for Enter (its row tops the list instead).
@@ -1789,7 +1747,6 @@
   // Lists never scroll: only the rows that fit are shown (see v-fit), and arrows stay
   // among them.
   const visibleCount = ref(Infinity);
-  const actionsShown = ref(Infinity);
 
   function chooseAt(index: number) {
     selected.value = index;
@@ -2026,9 +1983,15 @@
             type="text"
             role="combobox"
             aria-autocomplete="both"
-            aria-controls="results"
+            :aria-controls="actionsOpen ? 'actions' : 'results'"
             :aria-expanded="items.length > 0"
-            :aria-activedescendant="selected >= 0 ? `result-${selected}` : undefined"
+            :aria-activedescendant="
+              actionsOpen
+                ? `actions-${actionIndex}`
+                : selected >= 0
+                  ? `result-${selected}`
+                  : undefined
+            "
             :placeholder="scope ? `Search ${scope.name.toLowerCase()}` : 'Search or open an app'"
             spellcheck="false"
             autocomplete="off"
@@ -2085,28 +2048,15 @@
 
       <div class="bar-body">
         <WeatherCard v-if="cardForecast" :forecast="cardForecast" @open="openForecast" />
-        <ul
+        <ActionMenu
           v-if="actionsOpen"
-          class="results actions"
-          role="listbox"
-          aria-label="Actions"
-          v-fit="(count: number) => (actionsShown = count)"
-        >
-          <li
-            v-for="(action, index) in actions"
-            :key="action.label"
-            role="option"
-            :aria-selected="index === actionIndex"
-            class="item"
-            :class="{ selected: index === actionIndex }"
-            @mousedown.prevent
-            @click="runAction(action)"
-            @mousemove="actionIndex = index"
-          >
-            <span class="label">{{ action.label }}</span>
-            <Keys v-if="action.keys" :keys="action.keys" />
-          </li>
-        </ul>
+          id="actions"
+          :actions="actions"
+          :index="actionIndex"
+          @run="menu.run"
+          @hover="menu.hover"
+          @fit="menu.shown.value = $event"
+        />
 
         <ResultList
           v-else-if="items.length"
