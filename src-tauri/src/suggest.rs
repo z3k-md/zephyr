@@ -79,256 +79,200 @@ pub async fn gather(
     catalog: Catalog<'_>,
     include_remote: bool,
 ) -> SuggestResponse {
-    let now = catalog.now;
-    let parsed = query::parse_input(input);
-    let scoped = parsed.scope.as_deref().is_some_and(apps::is_scope);
-    let settings_scoped = parsed.scope.as_deref().is_some_and(settings::is_scope);
-    let files_scoped = parsed.scope.as_deref().is_some_and(files::is_scope);
-    let notes_scoped = parsed.scope.as_deref().is_some_and(notes::is_scope);
-    let bookmarks_scoped = parsed.scope.as_deref().is_some_and(bookmarks::is_scope);
     if input.trim().is_empty() {
         return recent(history, &catalog);
     }
-    if scoped {
-        let items: Vec<Suggestion> = if parsed.query.is_empty() {
+    let parsed = query::parse_input(input);
+    if let Some(scope) = parsed.scope.as_deref()
+        && let Some(response) = scoped(scope, &parsed.query, &catalog)
+    {
+        return response;
+    }
+    let text = parsed.query.as_str();
+    // A URL names where the text goes, so apps stay out of the way.
+    if query::looks_like_url(text) {
+        return SuggestResponse {
+            mode: "search".into(),
+            items: history_items(history, text, catalog.now, 4),
+            target: Some("url".into()),
+            text: text.to_string(),
+            ..Default::default()
+        };
+    }
+    if let Some(port) = crate::net::ports::asked_port(text) {
+        return port_answers_off_thread(text.to_string(), Some(port)).await;
+    }
+    if crate::net::ports::asks_for_list(text) {
+        return port_answers_off_thread(text.to_string(), None).await;
+    }
+    if crate::net::ip::is_query(text) {
+        return ip_answers(text, include_remote).await;
+    }
+    if settings::is_bare(text) {
+        return bare_settings(text, &catalog);
+    }
+    let mut response = unscoped(text, history, &catalog);
+    if include_remote && response.remote {
+        let found = fetch_remote(text).await;
+        merge_remote(&mut response.items, found);
+        response.items.truncate(8);
+    }
+    response
+}
+
+/// A scoped query lists only its own kind of result; `None` for a scope not listed here.
+fn scoped(scope: &str, text: &str, catalog: &Catalog<'_>) -> Option<SuggestResponse> {
+    let response = if apps::is_scope(scope) {
+        let items: Vec<Suggestion> = if text.is_empty() {
             catalog.recent(8).into_iter().map(app_item).collect()
         } else {
             catalog
-                .ranked(&parsed.query, 8)
+                .ranked(text, 8)
                 .into_iter()
                 .map(|(app, _)| app_item(app))
                 .collect()
         };
-        let notice = (items.is_empty() && !parsed.query.is_empty())
-            .then(|| format!("No app matches {}", parsed.query));
-        return SuggestResponse {
-            mode: "search".into(),
-            preselect: (!items.is_empty() && !parsed.query.is_empty()).then_some(0),
-            items,
-            notice,
-            text: parsed.query.clone(),
-            ..Default::default()
-        };
-    }
-    if settings_scoped {
-        let items: Vec<Suggestion> = if parsed.query.is_empty() {
+        let notice = empty_notice(&items, text, "app", None);
+        scope_list(text, items, notice)
+    } else if settings::is_scope(scope) {
+        let items: Vec<Suggestion> = if text.is_empty() {
             starters(catalog.settings, 8)
         } else {
-            settings::ranked(catalog.settings, &parsed.query, 8)
+            settings::ranked(catalog.settings, text, 8)
         }
         .into_iter()
         .map(setting_item)
         .collect();
-        let notice = (items.is_empty() && !parsed.query.is_empty())
-            .then(|| format!("No setting matches {}", parsed.query));
-        return SuggestResponse {
-            mode: "search".into(),
-            preselect: (!items.is_empty() && !parsed.query.is_empty()).then_some(0),
-            items,
-            notice,
-            text: parsed.query.clone(),
-            ..Default::default()
-        };
-    }
-    if bookmarks_scoped {
-        let items: Vec<Suggestion> = bookmarks::search(&parsed.query, 8)
+        let notice = empty_notice(&items, text, "setting", None);
+        scope_list(text, items, notice)
+    } else if bookmarks::is_scope(scope) {
+        let items: Vec<Suggestion> = bookmarks::search(text, 8)
             .iter()
             .map(bookmark_item)
             .collect();
-        let notice = if items.is_empty() && !parsed.query.is_empty() {
-            Some(format!("No bookmark matches {}", parsed.query))
-        } else if items.is_empty() {
-            Some("No browser bookmarks found".into())
-        } else {
-            None
-        };
-        return SuggestResponse {
-            mode: "search".into(),
-            preselect: (!items.is_empty() && !parsed.query.is_empty()).then_some(0),
-            items,
-            notice,
-            text: parsed.query.clone(),
-            ..Default::default()
-        };
-    }
-    if notes_scoped {
-        return SuggestResponse {
-            text: parsed.query.clone(),
-            ..notes_response(&parsed.query)
-        };
-    }
-    if parsed.scope.as_deref() == Some("type") {
-        return SuggestResponse {
+        let notice = empty_notice(&items, text, "bookmark", Some("No browser bookmarks found"));
+        scope_list(text, items, notice)
+    } else if notes::is_scope(scope) {
+        SuggestResponse {
+            text: text.to_string(),
+            ..notes_response(text)
+        }
+    } else if scope == "type" {
+        SuggestResponse {
             mode: "search".into(),
             notice: Some("Press Enter to start a typing test".into()),
             ..Default::default()
-        };
-    }
-    if files_scoped {
-        let items: Vec<Suggestion> = if parsed.query.is_empty() {
-            files::recent(catalog.file_opens, now, 8)
+        }
+    } else if files::is_scope(scope) {
+        let items: Vec<Suggestion> = if text.is_empty() {
+            files::recent(catalog.file_opens, catalog.now, 8)
         } else {
-            catalog.files(&parsed.query, 8)
+            catalog.files(text, 8)
         }
         .iter()
         .map(file_item)
         .collect();
-        let notice = if items.is_empty() && !parsed.query.is_empty() {
-            Some(format!("No file matches {}", parsed.query))
-        } else if items.is_empty() {
-            Some("Type a file or folder name".into())
-        } else {
-            None
-        };
-        return SuggestResponse {
-            mode: "search".into(),
-            preselect: (!items.is_empty() && !parsed.query.is_empty()).then_some(0),
-            items,
-            notice,
-            text: parsed.query.clone(),
-            ..Default::default()
-        };
+        let notice = empty_notice(&items, text, "file", Some("Type a file or folder name"));
+        scope_list(text, items, notice)
+    } else {
+        return None;
+    };
+    Some(response)
+}
+
+/// A scope's rows; once something is typed, Enter takes the first.
+fn scope_list(text: &str, items: Vec<Suggestion>, notice: Option<String>) -> SuggestResponse {
+    SuggestResponse {
+        mode: "search".into(),
+        preselect: (!items.is_empty() && !text.is_empty()).then_some(0),
+        items,
+        notice,
+        text: text.to_string(),
+        ..Default::default()
     }
-    // A URL names where the text goes, so apps stay out of the way.
-    let is_url = query::looks_like_url(&parsed.query);
-    let offer_apps = !is_url;
-    if offer_apps && let Some(port) = crate::net::ports::asked_port(&parsed.query) {
-        return port_answers_off_thread(parsed.query.clone(), Some(port)).await;
+}
+
+/// What an empty scope says: that nothing matches the text, or `idle` before anything is typed.
+fn empty_notice(
+    items: &[Suggestion],
+    text: &str,
+    kind: &str,
+    idle: Option<&str>,
+) -> Option<String> {
+    if !items.is_empty() {
+        None
+    } else if !text.is_empty() {
+        Some(format!("No {kind} matches {text}"))
+    } else {
+        idle.map(String::from)
     }
-    if offer_apps && crate::net::ports::asks_for_list(&parsed.query) {
-        return port_answers_off_thread(parsed.query.clone(), None).await;
-    }
-    if offer_apps && crate::net::ip::is_query(&parsed.query) {
-        return ip_answers(&parsed.query, include_remote).await;
-    }
-    // A bare "settings": the system's settings app, the app's own Settings, then the usual pages.
-    if offer_apps && settings::is_bare(&parsed.query) {
-        let mut items: Vec<Suggestion> = catalog
-            .system_settings_app()
-            .map(app_item)
+}
+
+/// A bare "settings": the system's settings app, the app's own Settings, then the usual pages.
+fn bare_settings(text: &str, catalog: &Catalog<'_>) -> SuggestResponse {
+    let mut items: Vec<Suggestion> = catalog
+        .system_settings_app()
+        .map(app_item)
+        .into_iter()
+        .collect();
+    items.extend(
+        catalog
+            .settings
+            .iter()
+            .find(|setting| setting.id == "zephyr.settings")
+            .map(setting_item),
+    );
+    items.extend(
+        settings::favorites(catalog.settings, catalog.setting_opens, catalog.now, 4)
             .into_iter()
-            .collect();
-        items.extend(
-            catalog
-                .settings
-                .iter()
-                .find(|setting| setting.id == "zephyr.settings")
-                .map(setting_item),
-        );
-        items.extend(
-            settings::favorites(catalog.settings, catalog.setting_opens, now, 4)
-                .into_iter()
-                .map(setting_item),
-        );
-        return SuggestResponse {
-            mode: "search".into(),
-            preselect: (!items.is_empty()).then_some(0),
-            items,
-            notice: None,
-            target: Some("web".into()),
-            text: parsed.query.clone(),
-            remote: false,
-        };
+            .map(setting_item),
+    );
+    SuggestResponse {
+        mode: "search".into(),
+        preselect: (!items.is_empty()).then_some(0),
+        items,
+        notice: None,
+        target: Some("web".into()),
+        text: text.to_string(),
+        remote: false,
     }
+}
+
+/// Unscoped text that isn't a link: settings pages, apps, bookmarks, an answer, recent
+/// searches and files, over a web search for the text.
+fn unscoped(text: &str, history: &[HistoryEntry], catalog: &Catalog<'_>) -> SuggestResponse {
+    let now = catalog.now;
     // "wifi settings", "settings dark": the pages lead and Enter opens the best; the web
     // row stays right under them. An app named exactly this text still wins.
-    let intent: Vec<Suggestion> = if offer_apps {
-        catalog
-            .setting_intent(&parsed.query)
-            .into_iter()
-            .map(match_item)
-            .collect()
-    } else {
-        Vec::new()
-    };
-    // Ranked once: the app Enter would launch is the best of these.
-    let app_matches = if offer_apps {
-        catalog.ranked(&parsed.query, 4)
-    } else {
-        Vec::new()
-    };
-    let preferred = intent
-        .is_empty()
-        .then(|| apps::preferred_of(&app_matches, catalog.overrides, &parsed.query))
-        .flatten();
-    let other_apps: Vec<Suggestion> = if offer_apps {
-        app_matches
-            .into_iter()
-            .filter(|(app, found)| {
-                *found >= apps::Strength::Substring
-                    && preferred.is_none_or(|chosen| chosen.id != app.id)
-            })
-            .take(2)
-            .map(|(app, _)| app_item(app))
-            .collect()
-    } else {
-        Vec::new()
-    };
-
-    // A bookmark titled exactly what was typed ("music") opens on Enter, like an app name;
-    // other matches show below but never take Enter, so searching stays the default.
-    let exact_bookmark = (offer_apps && preferred.is_none())
-        .then(|| bookmarks::exact(&parsed.query))
-        .flatten();
-    let other_bookmarks: Vec<Suggestion> = if offer_apps && parsed.query.trim().len() >= 2 {
-        bookmarks::search(&parsed.query, 3)
-            .iter()
-            .filter(|found| {
-                exact_bookmark
-                    .as_ref()
-                    .is_none_or(|exact| exact.url != found.url)
-            })
-            .take(2)
-            .map(bookmark_item)
-            .collect()
-    } else {
-        Vec::new()
-    };
+    let intent: Vec<Suggestion> = catalog
+        .setting_intent(text)
+        .into_iter()
+        .map(match_item)
+        .collect();
+    let (preferred, other_apps) = app_rows(text, catalog, !intent.is_empty());
+    let (exact_bookmark, other_bookmarks) = bookmark_rows(text, preferred.is_some());
 
     // A page named exactly ("bluetooth", "dark mode") sits right under the web row; the web
     // search keeps Enter.
     let exact_pane: Option<Suggestion> =
-        (offer_apps && intent.is_empty() && preferred.is_none() && exact_bookmark.is_none())
-            .then(|| settings::exact(catalog.settings, &parsed.query, catalog.setting_opens, now))
+        (intent.is_empty() && preferred.is_none() && exact_bookmark.is_none())
+            .then(|| settings::exact(catalog.settings, text, catalog.setting_opens, now))
             .flatten()
             .map(match_item);
-
-    // Files and settings never take Enter unscoped: at most two rows between them, below
-    // everything else local. Files only come from ones opened before, so this never waits on
-    // the index.
-    let incidental: Vec<Suggestion> = if offer_apps {
-        let opened = files::incidental(catalog.file_opens, &parsed.query, now, 2);
-        let mut rows: Vec<Suggestion> = opened.iter().map(file_item).collect();
-        // A system tool that is also an installed app (Registry Editor) shows once, as the app.
-        let shown_app = |title: &str| {
-            preferred.is_some_and(|app| app.name.eq_ignore_ascii_case(title))
-                || other_apps
-                    .iter()
-                    .any(|item| item.label.eq_ignore_ascii_case(title))
-        };
-        rows.extend(
-            settings::incidental(catalog.settings, &parsed.query, 2)
-                .into_iter()
-                .filter(|setting| !shown_app(setting.title))
-                .filter(|setting| {
-                    let id = Some(setting.id.to_string());
-                    !intent.iter().any(|row| row.setting_id == id)
-                        && exact_pane.as_ref().is_none_or(|row| row.setting_id != id)
-                })
-                .take(2 - rows.len())
-                .map(setting_item),
-        );
-        rows
-    } else {
-        Vec::new()
-    };
+    let incidental = incidental_rows(
+        text,
+        catalog,
+        preferred,
+        &other_apps,
+        &intent,
+        exact_pane.as_ref(),
+    );
 
     // A calculation or time question answers in the top row, unless an app already claims
     // Enter for this text.
-    let answer =
-        (offer_apps && preferred.is_none() && exact_bookmark.is_none() && intent.is_empty())
-            .then(|| answer::inline(&parsed.query, chrono::Utc::now()))
-            .flatten();
+    let answer = (preferred.is_none() && exact_bookmark.is_none() && intent.is_empty())
+        .then(|| answer::inline(text, chrono::Utc::now()))
+        .flatten();
 
     let has_intent = !intent.is_empty();
     let mut items = intent;
@@ -342,42 +286,23 @@ pub async fn gather(
         items.push(bookmark_item(bookmark));
     }
     if let Some(answer) = &answer {
-        items.push(Suggestion {
-            label: answer.value.clone(),
-            query: answer.value.clone(),
-            kind: "answer".into(),
-            hint: "Copy".into(),
-            section: "answer".into(),
-            subtitle: parsed.query.clone(),
-            icon: match answer.hint {
-                "Conversion" => "glyph:conversion",
-                "Time" => "glyph:clock",
-                _ => "glyph:calculator",
-            }
-            .into(),
-            ..Default::default()
-        });
+        items.push(answer_item(answer, text));
     }
     // An app match keeps the apps together at the top; otherwise recent searches lead.
     if preferred.is_some() {
         items.extend(other_apps);
-        items.extend(history_items(history, &parsed.query, now, 4));
+        items.extend(history_items(history, text, now, 4));
     } else {
-        items.extend(history_items(history, &parsed.query, now, 4));
+        items.extend(history_items(history, text, now, 4));
         items.extend(other_apps);
     }
     items.extend(other_bookmarks);
     items.truncate(8 - incidental.len());
     items.extend(incidental);
 
-    // Suggestions only help when free text is going to a search: not under an app match,
-    // an inline answer, or a link.
-    let remote = !parsed.query.is_empty() && preferred.is_none() && answer.is_none() && !is_url;
-    if include_remote && remote {
-        let found = fetch_remote(&parsed.query).await;
-        merge_remote(&mut items, found);
-    }
-    items.truncate(8);
+    // Suggestions only help when free text is going to a search: not under an app match or
+    // an inline answer.
+    let remote = !text.is_empty() && preferred.is_none() && answer.is_none();
     SuggestResponse {
         mode: "search".into(),
         items,
@@ -387,9 +312,105 @@ pub async fn gather(
             || exact_bookmark.is_some()
             || has_intent)
             .then_some(0),
-        target: Some(if is_url { "url" } else { "web" }.into()),
-        text: parsed.query.clone(),
+        target: Some("web".into()),
+        text: text.to_string(),
         remote,
+    }
+}
+
+/// The app Enter would launch (none when settings pages already lead), and up to two other
+/// good matches.
+fn app_rows<'a>(
+    text: &str,
+    catalog: &Catalog<'a>,
+    pages_lead: bool,
+) -> (Option<&'a App>, Vec<Suggestion>) {
+    // Ranked once: the app Enter would launch is the best of these.
+    let app_matches = catalog.ranked(text, 4);
+    let preferred = (!pages_lead)
+        .then(|| apps::preferred_of(&app_matches, catalog.overrides, text))
+        .flatten();
+    let others = app_matches
+        .into_iter()
+        .filter(|(app, found)| {
+            *found >= apps::Strength::Substring
+                && preferred.is_none_or(|chosen| chosen.id != app.id)
+        })
+        .take(2)
+        .map(|(app, _)| app_item(app))
+        .collect();
+    (preferred, others)
+}
+
+/// A bookmark titled exactly what was typed ("music") opens on Enter, like an app name;
+/// other matches show below but never take Enter, so searching stays the default.
+fn bookmark_rows(text: &str, app_claims_enter: bool) -> (Option<Bookmark>, Vec<Suggestion>) {
+    let exact = (!app_claims_enter)
+        .then(|| bookmarks::exact(text))
+        .flatten();
+    let others = if text.trim().len() >= 2 {
+        bookmarks::search(text, 3)
+            .iter()
+            .filter(|found| exact.as_ref().is_none_or(|exact| exact.url != found.url))
+            .take(2)
+            .map(bookmark_item)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    (exact, others)
+}
+
+/// Files and settings never take Enter unscoped: at most two rows between them, below
+/// everything else local. Files only come from ones opened before, so this never waits on
+/// the index.
+fn incidental_rows(
+    text: &str,
+    catalog: &Catalog<'_>,
+    preferred: Option<&App>,
+    other_apps: &[Suggestion],
+    intent: &[Suggestion],
+    exact_pane: Option<&Suggestion>,
+) -> Vec<Suggestion> {
+    let opened = files::incidental(catalog.file_opens, text, catalog.now, 2);
+    let mut rows: Vec<Suggestion> = opened.iter().map(file_item).collect();
+    // A system tool that is also an installed app (Registry Editor) shows once, as the app.
+    let shown_app = |title: &str| {
+        preferred.is_some_and(|app| app.name.eq_ignore_ascii_case(title))
+            || other_apps
+                .iter()
+                .any(|item| item.label.eq_ignore_ascii_case(title))
+    };
+    rows.extend(
+        settings::incidental(catalog.settings, text, 2)
+            .into_iter()
+            .filter(|setting| !shown_app(setting.title))
+            .filter(|setting| {
+                let id = Some(setting.id.to_string());
+                !intent.iter().any(|row| row.setting_id == id)
+                    && exact_pane.is_none_or(|row| row.setting_id != id)
+            })
+            .take(2 - rows.len())
+            .map(setting_item),
+    );
+    rows
+}
+
+fn answer_item(answer: &answer::Answer, text: &str) -> Suggestion {
+    Suggestion {
+        label: answer.value.clone(),
+        query: answer.value.clone(),
+        kind: "answer".into(),
+        hint: "Copy".into(),
+        section: "answer".into(),
+        subtitle: text.to_string(),
+        icon: match answer.hint {
+            "Conversion" => "glyph:conversion",
+            "Time" => "glyph:clock",
+            _ => "glyph:calculator",
+        }
+        .into(),
+        ..Default::default()
     }
 }
 
@@ -1138,6 +1159,55 @@ mod tests {
         let none = local("!set wallpaper", &[]);
         assert!(none.items.is_empty());
         assert_eq!(none.notice.as_deref(), Some("No setting matches wallpaper"));
+    }
+
+    fn item_labels(response: &SuggestResponse) -> Vec<&str> {
+        response
+            .items
+            .iter()
+            .map(|item| item.label.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn the_app_scope_lists_only_apps_and_says_when_none_match() {
+        let apps = [App {
+            id: "code".into(),
+            name: "Visual Studio Code".into(),
+        }];
+        let response = local("!app code", &apps);
+        assert_eq!(item_labels(&response), ["Visual Studio Code"]);
+        assert_eq!(response.preselect, Some(0));
+        assert_eq!(response.text, "code");
+
+        let none = local("!app zzz", &apps);
+        assert!(none.items.is_empty());
+        assert_eq!(none.notice.as_deref(), Some("No app matches zzz"));
+
+        assert_eq!(local("!app", &apps).notice, None);
+    }
+
+    #[test]
+    fn the_typing_scope_only_offers_the_test() {
+        let response = local("!type", &[]);
+        assert!(response.items.is_empty());
+        assert_eq!(
+            response.notice.as_deref(),
+            Some("Press Enter to start a typing test")
+        );
+    }
+
+    #[test]
+    fn a_link_keeps_recent_searches_but_no_apps_or_answers() {
+        let apps = [App {
+            id: "example".into(),
+            name: "example.com".into(),
+        }];
+        let history = [searched("example.com/docs", "url")];
+        let response = local_full("example.com", &apps, &history, false);
+        assert_eq!(item_labels(&response), ["example.com/docs"]);
+        assert_eq!(response.preselect, None);
+        assert!(!response.remote);
     }
 
     #[test]
