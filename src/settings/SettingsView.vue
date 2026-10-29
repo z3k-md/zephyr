@@ -427,6 +427,7 @@
 
   // Dev builds can't install a real update; this plays the update card through instead.
   const isDev = import.meta.env.DEV;
+  const devBuild = isDev ? __DEV_BUILD__ : '';
   async function rehearse() {
     try {
       await rehearseUpdate();
@@ -885,7 +886,10 @@
       <section v-if="snapshot" v-show="!search && active === 'about'" id="section-about">
         <h2>About</h2>
         <div class="field" data-focus="updates">
-          <span>Zephyr {{ appVersion || '…' }}{{ isDev ? ' (dev build)' : '' }}</span>
+          <span
+            >Zephyr
+            {{ isDev ? ['dev', devBuild].filter(Boolean).join(' · ') : appVersion || '…' }}</span
+          >
           <button type="button" @click="updates">Check for updates</button>
           <span v-if="updateMessage" class="hint-text">{{ updateMessage }}</span>
         </div>
