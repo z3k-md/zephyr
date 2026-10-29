@@ -3,7 +3,7 @@
 //! so the two players that script well are asked directly, and only while they're running:
 //! a `tell` would otherwise launch them. Each asks for Automation permission the first time.
 //! Both announce track and play/pause changes as distributed notifications, which wake the
-//! watcher at once, as does a player quitting; while the bar shows, a slow poll catches the
+//! watcher at once while the bar shows, as does a player quitting; a slow poll catches the
 //! rest (a seek). Nothing runs while it's hidden: opening the bar reads afresh.
 
 use std::sync::mpsc::Sender;
@@ -67,29 +67,12 @@ impl Sessions for Mac {
             let Some(path) = running(bundle) else {
                 continue;
             };
-            let Some(reply) = run(&read_script(bundle)) else {
+            let Some((session, cover)) =
+                run(&read_script(bundle)).and_then(|reply| super::parse_player_reply(&reply, path))
+            else {
                 continue;
             };
-            let mut fields = reply.split('\n');
-            let state = fields.next().unwrap_or_default().trim();
-            if state != "playing" && state != "paused" {
-                continue;
-            }
-            let mut next = || fields.next().unwrap_or_default().trim().to_string();
-            let (title, artist, album) = (next(), next(), next());
-            let duration_ms = next().parse().ok();
-            let position_ms = next().parse().ok();
-            let cover = next();
-            sessions.push(Session {
-                source_app: path,
-                title,
-                artist,
-                album,
-                playing: state == "playing",
-                current: false,
-                position_ms,
-                duration_ms,
-            });
+            sessions.push(session);
             self.listed.push((bundle, cover));
         }
         sessions
@@ -274,16 +257,21 @@ fn run(script: &str) -> Option<String> {
 fn running(bundle: &str) -> Option<String> {
     use objc2_app_kit::NSRunningApplication;
     use objc2_foundation::NSString;
-    let apps =
-        NSRunningApplication::runningApplicationsWithBundleIdentifier(&NSString::from_str(bundle));
-    let app = apps.firstObject()?;
-    let url = app.bundleURL()?;
-    Some(url.path()?.to_string())
+    // The watcher's thread has no pool of its own to drain what AppKit autoreleases.
+    objc2::rc::autoreleasepool(|_| {
+        let apps = NSRunningApplication::runningApplicationsWithBundleIdentifier(
+            &NSString::from_str(bundle),
+        );
+        let app = apps.firstObject()?;
+        let url = app.bundleURL()?;
+        Some(url.path()?.to_string())
+    })
 }
 
-/// Wakes the watcher on each player's change notification, and on any app quitting (a player
-/// that quits says nothing itself). Both arrive through the main run loop, so they're watched
-/// from the main thread.
+/// While the bar shows, wakes the watcher on each player's change notification and on any app
+/// quitting (a player that quits says nothing itself); while it's hidden, opening it reads
+/// afresh anyway. Both arrive through the main run loop, so they're watched from the main
+/// thread.
 fn listen(app: &tauri::AppHandle, wake: Sender<Wake>) {
     let _ = app.run_on_main_thread(move || {
         use block2::RcBlock;
@@ -291,7 +279,9 @@ fn listen(app: &tauri::AppHandle, wake: Sender<Wake>) {
         use objc2_foundation::{NSDistributedNotificationCenter, NSNotification, NSString};
         let quit = wake.clone();
         let block = RcBlock::new(move |_: std::ptr::NonNull<NSNotification>| {
-            let _ = quit.send(Wake::Changed);
+            if crate::stats::bar_visible() {
+                let _ = quit.send(Wake::Changed);
+            }
         });
         // SAFETY: the block only sends on a channel; the observer lives as long as the app.
         let observer = unsafe {
@@ -309,7 +299,9 @@ fn listen(app: &tauri::AppHandle, wake: Sender<Wake>) {
         for (_, name) in PLAYERS {
             let wake = wake.clone();
             let block = RcBlock::new(move |_: std::ptr::NonNull<NSNotification>| {
-                let _ = wake.send(Wake::Changed);
+                if crate::stats::bar_visible() {
+                    let _ = wake.send(Wake::Changed);
+                }
             });
             // SAFETY: the block only sends on a channel; the observer lives as long as the app.
             let observer = unsafe {

@@ -407,9 +407,67 @@ fn focus_app(_source_app: &str) -> bool {
     false
 }
 
+/// macOS: a player's AppleScript reply, a line each: its state, then title, artist, album,
+/// duration and position in ms, and Spotify's cover address. A session and the cover
+/// address, or none when the player isn't playing or paused.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn parse_player_reply(reply: &str, source_app: String) -> Option<(Session, String)> {
+    let mut fields = reply.split('\n');
+    let state = fields.next().unwrap_or_default().trim();
+    if state != "playing" && state != "paused" {
+        return None;
+    }
+    let mut next = || fields.next().unwrap_or_default().trim().to_string();
+    let (title, artist, album) = (next(), next(), next());
+    let duration_ms = next().parse().ok();
+    let position_ms = next().parse().ok();
+    let cover = next();
+    let session = Session {
+        source_app,
+        title,
+        artist,
+        album,
+        playing: state == "playing",
+        current: false,
+        position_ms,
+        duration_ms,
+    };
+    Some((session, cover))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_players_applescript_reply_reads_as_a_session() {
+        let reply = "playing\nSo What\nMiles Davis\nKind of Blue\n562000\n12345\nhttps://i.scdn.co/image/ab67";
+        let (session, cover) =
+            parse_player_reply(reply, "/Applications/Spotify.app".into()).expect("a session");
+        assert_eq!(session.title, "So What");
+        assert_eq!(session.artist, "Miles Davis");
+        assert_eq!(session.album, "Kind of Blue");
+        assert!(session.playing);
+        assert_eq!(session.duration_ms, Some(562000));
+        assert_eq!(session.position_ms, Some(12345));
+        assert_eq!(session.source_app, "/Applications/Spotify.app");
+        assert_eq!(cover, "https://i.scdn.co/image/ab67");
+
+        // Music: no cover address, and a stream without a length.
+        let (session, cover) =
+            parse_player_reply("paused\nRadio\n\n\nmissing value\n0\n", String::new()).unwrap();
+        assert!(!session.playing);
+        assert_eq!(session.duration_ms, None);
+        assert_eq!(session.position_ms, Some(0));
+        assert_eq!(cover, "");
+
+        for reply in ["stopped", "", "fast forwarding"] {
+            assert!(
+                parse_player_reply(reply, String::new()).is_none(),
+                "{reply}"
+            );
+        }
+    }
 
     fn session(title: &str, playing: bool, current: bool) -> Session {
         Session {
