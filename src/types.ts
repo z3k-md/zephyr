@@ -246,6 +246,8 @@ export interface Suggestion {
   privateWindow?: string;
   /** An open app's windows, front to back; Enter switches to the first. */
   windows?: WindowRef[];
+  /** The app is running though its windows aren't listed (macOS), so it can be quit. */
+  running?: boolean;
   /** The window a window row switches to. */
   window?: number;
 }

@@ -397,6 +397,9 @@
           run: () => launch(appId, false, true),
         });
       }
+      if (item.running) {
+        list.push({ label: `Quit ${item.label}`, run: () => quitApp(appId, item.label) });
+      }
       list.push({ label: 'Copy name', run: () => copyText(item.label) });
     } else if (item?.kind === 'window' && item.window) {
       const handle = item.window;

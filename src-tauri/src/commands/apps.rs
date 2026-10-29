@@ -118,25 +118,13 @@ pub fn window_close(handle: i64) -> Result<(), String> {
     }
 }
 
-/// Quits an app gracefully: every one of its windows is asked to close, so it can still
-/// offer to save. Nothing is force-killed.
+/// Quits an app gracefully, so it can still offer to save. Nothing is force-killed.
 #[tauri::command]
 pub fn app_quit(app_id: String) -> Result<(), String> {
-    crate::running::supported()?;
     let target = apps::index()
         .find(&app_id)
         .ok_or_else(|| "That app is no longer installed.".to_string())?;
-    let windows = crate::running::all();
-    let mut asked = false;
-    for window in crate::running::of_app(&target, &windows) {
-        asked |= crate::running::close(window.handle);
-    }
-    crate::running::refresh();
-    if asked {
-        Ok(())
-    } else {
-        Err(format!("{} has no windows open.", target.name))
-    }
+    crate::running::quit(&target)
 }
 
 #[tauri::command]

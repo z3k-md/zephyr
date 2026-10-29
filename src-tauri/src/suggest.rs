@@ -42,6 +42,9 @@ pub struct Suggestion {
     /// An open app's windows, front to back; its row switches to the first.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub windows: Vec<crate::running::WindowRef>,
+    /// The app is running though its windows aren't listed (macOS), so it can be quit.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub running: bool,
     /// The window a `window` row switches to.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub window: Option<i64>,

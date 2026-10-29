@@ -2,7 +2,8 @@
 //! typing part of a window's title (a document, a browser tab) finds that window. They're
 //! listed each time the bar is summoned, never on a timer.
 //!
-//! Windows only for now; on macOS the list stays empty, so app rows launch as before.
+//! Windows only for now; on macOS the list stays empty, so app rows launch as before, though
+//! a running app's row says so and can quit it.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -56,7 +57,7 @@ fn store(generation: u64, found: Vec<OpenWindow>) {
     }
 }
 
-/// Errs where open windows can't be listed or acted on (macOS, for now), so Close and Quit
+/// Errs where open windows can't be listed or acted on (macOS, for now), so Switch and Close
 /// say so instead of quietly doing nothing.
 pub fn supported() -> Result<(), String> {
     if cfg!(windows) {
@@ -93,6 +94,34 @@ pub fn close_process_windows(pid: u32) -> bool {
 /// Asks a window to close, as its own close button would; the app may still ask to save.
 pub fn close(handle: i64) -> bool {
     platform::close(handle)
+}
+
+/// Quits an app gracefully, so it can still offer to save; nothing is force-killed. Windows
+/// asks each of its windows to close; macOS asks the app to quit, as its Quit menu item would.
+pub fn quit(app: &App) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        if mac::quit(&app.id) {
+            Ok(())
+        } else {
+            Err(format!("{} isn't running.", app.name))
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        supported()?;
+        let windows = all();
+        let mut asked = false;
+        for window in of_app(app, &windows) {
+            asked |= close(window.handle);
+        }
+        refresh();
+        if asked {
+            Ok(())
+        } else {
+            Err(format!("{} has no windows open.", app.name))
+        }
+    }
 }
 
 /// The windows that belong to `app`, front to back.
@@ -243,6 +272,8 @@ pub fn by_title<'a>(query: &str, windows: &'a [OpenWindow], limit: usize) -> Vec
 /// Adds what's running to a suggestion list: app rows that are open say "Running" and carry
 /// their windows; windows whose title matches the text get a section below the apps.
 pub fn annotate(response: &mut SuggestResponse, installed: &[App], query: &str) {
+    #[cfg(target_os = "macos")]
+    mac::mark_running(response);
     let windows = all();
     if windows.is_empty() {
         return;
@@ -515,8 +546,57 @@ mod platform {
     }
 }
 
-// The Mac side (NSWorkspace running apps, AX window titles) is still to come; until then
-// nothing is listed and app rows launch as before.
+/// macOS knows which apps run (NSWorkspace) without listing their windows: running app rows
+/// are marked so they can be quit. Bundle paths are the apps' ids (apps.rs).
+#[cfg(target_os = "macos")]
+mod mac {
+    use objc2_app_kit::NSWorkspace;
+
+    use crate::suggest::SuggestResponse;
+
+    /// The bundle paths of the apps running now.
+    fn running() -> Vec<String> {
+        // Called off the main thread, which has no pool to drain what AppKit autoreleases.
+        objc2::rc::autoreleasepool(|_| {
+            NSWorkspace::sharedWorkspace()
+                .runningApplications()
+                .iter()
+                .filter_map(|app| Some(app.bundleURL()?.path()?.to_string()))
+                .collect()
+        })
+    }
+
+    /// Marks app rows whose app is running.
+    pub fn mark_running(response: &mut SuggestResponse) {
+        if !response.items.iter().any(|item| item.kind == "app") {
+            return;
+        }
+        let running = running();
+        for item in response.items.iter_mut().filter(|item| item.kind == "app") {
+            if item.app_id.as_ref().is_some_and(|id| running.contains(id)) {
+                item.hint = "Running".into();
+                item.running = true;
+            }
+        }
+    }
+
+    /// Asks every running copy of the app at `bundle` to quit; false when none is running.
+    pub fn quit(bundle: &str) -> bool {
+        objc2::rc::autoreleasepool(|_| {
+            let mut asked = false;
+            for app in NSWorkspace::sharedWorkspace().runningApplications().iter() {
+                let path = app.bundleURL().and_then(|url| url.path());
+                if path.is_some_and(|path| path.to_string() == bundle) {
+                    asked |= app.terminate();
+                }
+            }
+            asked
+        })
+    }
+}
+
+// The Mac side of the window list (AX window titles) is still to come; until then nothing is
+// listed and app rows launch as before.
 #[cfg(not(windows))]
 mod platform {
     use super::OpenWindow;
