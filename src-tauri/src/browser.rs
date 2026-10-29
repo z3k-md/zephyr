@@ -54,16 +54,34 @@ pub fn start() {
         .ok();
 }
 
-/// Whether a connection comes from a browser extension; web pages can't use this socket.
+/// Zephyr's own extension. The `key` in `extension/manifest.json` fixes its id wherever it's
+/// loaded unpacked from; a store listing would get its own id, which belongs here too.
+const EXTENSION_IDS: &[&str] = &["akdgnalpenplabkcifocffknemieldni"];
+
+/// How long a connection has to finish the WebSocket handshake.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Whether a connection comes from Zephyr's extension; web pages and other extensions can't
+/// use this socket (it hands out the pages the user opens and what's playing).
 fn from_extension(origin: Option<&str>) -> bool {
     origin.is_some_and(|origin| {
-        origin.starts_with("chrome-extension://") || origin.starts_with("extension://")
+        ["chrome-extension://", "extension://"]
+            .iter()
+            .any(|scheme| {
+                origin
+                    .strip_prefix(scheme)
+                    .is_some_and(|id| EXTENSION_IDS.contains(&id.trim_end_matches('/')))
+            })
     })
 }
 
 // tungstenite's handshake callback returns its own (large) error type.
 #[allow(clippy::result_large_err)]
 fn serve(stream: TcpStream) {
+    // A connection that never finishes its handshake gives up its thread.
+    if stream.set_read_timeout(Some(HANDSHAKE_TIMEOUT)).is_err() {
+        return;
+    }
     let socket = tungstenite::accept_hdr(
         stream,
         |request: &tungstenite::handshake::server::Request, response| {
@@ -208,8 +226,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_extensions_may_connect() {
-        assert!(from_extension(Some("chrome-extension://abcdefghijklmnop")));
+    fn only_zephyrs_extension_may_connect() {
+        assert!(from_extension(Some(
+            "chrome-extension://akdgnalpenplabkcifocffknemieldni"
+        )));
+        assert!(from_extension(Some(
+            "chrome-extension://akdgnalpenplabkcifocffknemieldni/"
+        )));
+        assert!(from_extension(Some(
+            "extension://akdgnalpenplabkcifocffknemieldni"
+        )));
+        assert!(!from_extension(Some("chrome-extension://abcdefghijklmnop")));
+        assert!(!from_extension(Some(
+            "chrome-extension://akdgnalpenplabkcifocffknemieldnix"
+        )));
+        assert!(!from_extension(Some(
+            "moz-extension://akdgnalpenplabkcifocffknemieldni"
+        )));
+        assert!(!from_extension(Some(
+            "https://chrome-extension://akdgnalpenplabkcifocffknemieldni"
+        )));
         assert!(!from_extension(Some("https://evil.example")));
         assert!(!from_extension(Some("null")));
         assert!(!from_extension(None));

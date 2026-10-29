@@ -13,12 +13,14 @@ still open, just always in a new tab.
 2. Turn on **Developer mode**.
 3. Click **Load unpacked** and choose this `extension` folder.
 
-After these files change, click the reload icon on the extension there.
+After these files change, click the reload icon on the extension there. The `key` in the
+manifest gives the extension a fixed id (`akdgnalpenplabkcifocffknemieldni`), the only one Zephyr
+accepts; if you loaded it before the key was added, remove it and load it again.
 
 ## How it works
 
 The extension keeps a local WebSocket open to Zephyr (`ws://127.0.0.1:47391`; Zephyr only
-accepts browser extensions there). When you open a bookmark, Zephyr first asks it whether a tab
+accepts its own extension there). When you open a bookmark, Zephyr first asks it whether a tab
 is already on that page: the same address, or for a bookmark to a site or section (no
 `?query`), any page under it, so a `music.youtube.com` bookmark matches a song that is playing.
 If so, the extension switches to that tab and nothing new opens.
