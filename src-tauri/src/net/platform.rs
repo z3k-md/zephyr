@@ -199,7 +199,17 @@ mod imp {
                 // The kernel hands back the IP header too; the ICMP message follows it.
                 let header = usize::from(reply.first()? & 0x0F) * 4;
                 let icmp = reply.get(header..)?;
-                if icmp.len() >= 8 && icmp[0] == 0 && icmp[6..8] == self.sequence.to_be_bytes() {
+                // Every ICMP socket in the process sees every echo reply, and the router and
+                // internet pingers send the same sequence numbers in step, so a reply counts
+                // only when it's from the address asked, with this pinger's id: the router's
+                // quick answer used to be taken for the internet's.
+                let from = reply.get(12..16)?;
+                if icmp.len() >= 8
+                    && icmp[0] == 0
+                    && from == ip.octets()
+                    && icmp[4..6] == self.id.to_be_bytes()
+                    && icmp[6..8] == self.sequence.to_be_bytes()
+                {
                     return Some(started.elapsed().as_secs_f32() * 1000.0);
                 }
             }
