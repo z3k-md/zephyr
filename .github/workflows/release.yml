@@ -117,12 +117,15 @@ jobs:
           ref: ${{ needs.version.outputs.tag }}
 
       # Releases only push a tag (main is protected), so the version is stamped here.
-      # tauri.conf.json reads it from package.json.
+      # tauri.conf.json reads it from package.json; Cargo.toml gets it too, for
+      # CARGO_PKG_VERSION. The build isn't --locked, so Cargo.lock follows on its own.
       - name: Set version from tag
         shell: bash
         env:
           TAG: ${{ needs.version.outputs.tag }}
-        run: npm pkg set version="${TAG#v}"
+        run: |
+          npm pkg set version="${TAG#v}"
+          node scripts/set-version.mjs "${TAG#v}"
 
       - uses: ./.github/actions/setup
 
