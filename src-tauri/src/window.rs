@@ -1,5 +1,7 @@
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+
+use crate::timer::{self, Debounce};
 
 use tauri::{
     AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder,
@@ -8,7 +10,9 @@ use tauri::{
 pub const BAR_WIDTH: f64 = 680.0;
 
 static SUPPRESS_BLUR: AtomicBool = AtomicBool::new(false);
-static SHOW_GENERATION: AtomicU64 = AtomicU64::new(0);
+/// Lets focus loss hide the bar again once a show or a move has settled; a newer one waits
+/// afresh.
+static SETTLE_BLUR: Debounce = Debounce::new();
 
 pub fn suppressing_blur() -> bool {
     SUPPRESS_BLUR.load(Ordering::SeqCst)
@@ -17,9 +21,11 @@ pub fn suppressing_blur() -> bool {
 /// Set while the user Ctrl+drags the bar, so only their moves are remembered, not
 /// `place_bar`'s.
 static DRAGGING: AtomicBool = AtomicBool::new(false);
-static MOVE_GENERATION: AtomicU64 = AtomicU64::new(0);
-/// Bumped per drag, so a drop settling late doesn't end the next drag.
-static DRAG_GENERATION: AtomicU64 = AtomicU64::new(0);
+/// Saves where the bar is once a drag's moves stop.
+static SAVE_POSITION: Debounce = Debounce::new();
+/// Ends a drag after its drop; cancelled by the next drag, so a drop settling late doesn't
+/// end it.
+static END_DRAG: Debounce = Debounce::new();
 
 /// Starts moving the bar. On macOS the page then drives the move (see `free_drag`) and
 /// gets back where the bar is and the screen's scale.
@@ -28,7 +34,7 @@ pub fn start_bar_drag(app: &AppHandle) -> Result<Option<(i32, i32, f64)>, String
         .get_webview_window("main")
         .ok_or("Main window is missing")?;
     DRAGGING.store(true, Ordering::SeqCst);
-    DRAG_GENERATION.fetch_add(1, Ordering::SeqCst);
+    END_DRAG.cancel();
     // The move loop hands focus around, and the bar hides when it loses focus, so it closed
     // the moment it was dropped. Losing focus doesn't count until the move is over.
     SUPPRESS_BLUR.store(true, Ordering::SeqCst);
@@ -92,24 +98,16 @@ pub fn end_drag_out(app: &AppHandle, dropped: bool) {
 /// the wider clipboard view), not the user's, so they stop being remembered.
 #[cfg(any(windows, target_os = "macos"))]
 fn end_bar_drag() {
-    let generation = DRAG_GENERATION.load(Ordering::SeqCst);
-    std::thread::spawn(move || {
-        // Longer than `bar_moved`'s wait, so the drop's own position is still saved.
-        std::thread::sleep(Duration::from_millis(500));
-        if DRAG_GENERATION.load(Ordering::SeqCst) == generation {
-            DRAGGING.store(false, Ordering::SeqCst);
-        }
+    // Longer than `bar_moved`'s wait, so the drop's own position is still saved.
+    END_DRAG.schedule(Duration::from_millis(500), || {
+        DRAGGING.store(false, Ordering::SeqCst);
     });
 }
 
 /// Lets focus loss hide the bar again a moment after a move, once the focus has settled.
 fn settle_after_move() {
-    let generation = SHOW_GENERATION.load(Ordering::SeqCst);
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(400));
-        if SHOW_GENERATION.load(Ordering::SeqCst) == generation {
-            SUPPRESS_BLUR.store(false, Ordering::SeqCst);
-        }
+    SETTLE_BLUR.schedule(Duration::from_millis(400), || {
+        SUPPRESS_BLUR.store(false, Ordering::SeqCst);
     });
 }
 
@@ -125,6 +123,8 @@ fn drag_on_windows(app: &AppHandle, window: &tauri::WebviewWindow) -> Result<(),
     const SC_DRAGMOVE: usize = 0xF012;
     let hwnd = window.hwnd().map_err(|err| err.to_string())?;
     grid::begin(app, hwnd);
+    // SAFETY: plain Win32 calls on the bar's own window, from the UI thread that owns it;
+    // SendMessageW returns once the move loop ends.
     unsafe {
         let _ = ReleaseCapture();
         SendMessageW(
@@ -171,11 +171,14 @@ mod grid {
 
     /// The work area of the screen `rect` is mostly on.
     pub fn work_area(rect: &RECT) -> Option<(i32, i32, i32, i32)> {
+        // SAFETY: `rect` is a valid RECT; with MONITOR_DEFAULTTONEAREST a monitor always
+        // comes back.
         let monitor = unsafe { MonitorFromRect(rect, MONITOR_DEFAULTTONEAREST) };
         let mut info = MONITORINFO {
             cbSize: std::mem::size_of::<MONITORINFO>() as u32,
             ..Default::default()
         };
+        // SAFETY: `info` is a MONITORINFO with cbSize set, as the call requires.
         unsafe { GetMonitorInfoW(monitor, &mut info) }
             .as_bool()
             .then(|| {
@@ -190,6 +193,8 @@ mod grid {
     }
 
     fn place(grid: isize, bar: isize, area: (i32, i32, i32, i32)) {
+        // SAFETY: both are window handles taken from live windows; a stale one only makes
+        // the call fail.
         unsafe {
             // Right under the bar, so the bar stays on top of its own guides.
             let _ = SetWindowPos(
@@ -206,6 +211,7 @@ mod grid {
 
     pub fn begin(app: &AppHandle, bar: HWND) {
         let mut rect = RECT::default();
+        // SAFETY: `bar` is the bar's window handle and `rect` a RECT to fill.
         if unsafe { GetWindowRect(bar, &mut rect) }.is_err() {
             return;
         }
@@ -273,6 +279,7 @@ mod grid {
     pub fn end() -> Option<(i32, i32)> {
         let drag = DRAG.lock().ok()?.take()?;
         if drag.grid != 0 {
+            // SAFETY: the grid window's handle; a stale one only makes the call fail.
             unsafe {
                 let _ = ShowWindow(HWND(drag.grid as _), SW_HIDE);
             }
@@ -418,13 +425,8 @@ pub fn bar_moved(app: &AppHandle, position: PhysicalPosition<i32>) {
     if !DRAGGING.load(Ordering::SeqCst) {
         return;
     }
-    let generation = MOVE_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     let app = app.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(300));
-        if MOVE_GENERATION.load(Ordering::SeqCst) != generation {
-            return;
-        }
+    SAVE_POSITION.schedule(Duration::from_millis(300), move || {
         let state = app.state::<crate::state::AppState>();
         let saved = state.update(|persisted| {
             persisted.bar_position = Some(crate::state::BarPosition {
@@ -451,7 +453,7 @@ pub fn show_bar(app: &AppHandle) {
 
     // Still being drawn off screen at startup counts as hidden.
     let was_visible = !unseen::finish(app, &window) && window.is_visible().unwrap_or(false);
-    let generation = SHOW_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    SETTLE_BLUR.cancel();
     SUPPRESS_BLUR.store(true, Ordering::SeqCst);
 
     if !was_visible {
@@ -492,11 +494,8 @@ pub fn show_bar(app: &AppHandle) {
         crate::updater::check_if_stale(window.app_handle());
     }
 
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(350));
-        if SHOW_GENERATION.load(Ordering::SeqCst) == generation {
-            SUPPRESS_BLUR.store(false, Ordering::SeqCst);
-        }
+    SETTLE_BLUR.schedule(Duration::from_millis(350), || {
+        SUPPRESS_BLUR.store(false, Ordering::SeqCst);
     });
 }
 
@@ -679,8 +678,7 @@ pub(crate) fn reveal_soon(app: &AppHandle, window: tauri::WebviewWindow) {
     take_reported(window.label());
     unseen::draw(app, &window);
     let app = app.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(1500));
+    timer::after(Duration::from_millis(1500), move || {
         // A page that reported in was already shown; if it's hidden now, the user hid it.
         if take_reported(window.label()) {
             return;
@@ -696,6 +694,21 @@ pub(crate) fn reveal_soon(app: &AppHandle, window: tauri::WebviewWindow) {
                 focus_window(&app, window);
             }
         }
+    });
+}
+
+/// Has the bar draw its list again once the app scan is done (or after 3 s), then puts it
+/// away a moment later.
+fn redraw_once_scanned(app: AppHandle, window: tauri::WebviewWindow, started: std::time::Instant) {
+    if !crate::apps::index().scanned() && started.elapsed() < Duration::from_secs(3) {
+        timer::after(Duration::from_millis(50), move || {
+            redraw_once_scanned(app, window, started)
+        });
+        return;
+    }
+    let _ = app.emit_to("main", "bar-redraw", ());
+    timer::after(Duration::from_millis(300), move || {
+        unseen::put_away(&app, &window);
     });
 }
 
@@ -736,17 +749,7 @@ pub fn page_ready(app: &AppHandle, label: &str) {
         {
             // Its first list can predate the app scan, so once that's done it draws the list
             // again, and gets a moment longer for that to paint.
-            let app = app.clone();
-            std::thread::spawn(move || {
-                let started = std::time::Instant::now();
-                while !crate::apps::index().scanned() && started.elapsed() < Duration::from_secs(3)
-                {
-                    std::thread::sleep(Duration::from_millis(50));
-                }
-                let _ = app.emit_to("main", "bar-redraw", ());
-                std::thread::sleep(Duration::from_millis(300));
-                unseen::put_away(&app, &window);
-            });
+            redraw_once_scanned(app.clone(), window, std::time::Instant::now());
         }
         return;
     }
@@ -945,8 +948,7 @@ fn paint_offscreen(app: &AppHandle) {
         ns_window.orderBack(None);
     });
     let app = app.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(400));
+    timer::after(Duration::from_millis(400), move || {
         let _ = app.run_on_main_thread(move || {
             // SAFETY: as above.
             let ns_window = unsafe { &*(pointer as *const NSWindow) };
@@ -1567,8 +1569,7 @@ pub fn draw_bar_unseen(app: &AppHandle) {
     };
     unseen::draw(app, &window);
     let app = app.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_secs(5));
+    timer::after(Duration::from_secs(5), move || {
         if unseen::put_away(&app, &window) {
             log::info!("the bar never reported in; put away by the 5 s fallback");
         }
