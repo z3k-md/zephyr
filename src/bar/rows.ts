@@ -26,7 +26,7 @@ const SECTION_TITLES: Record<string, string> = {
   files: 'Files',
   settings: 'Settings',
   notes: 'Notes',
-  views: 'Views',
+  views: 'Utilities',
   commands: 'Commands',
   shell: 'Shell',
   power: 'Power',

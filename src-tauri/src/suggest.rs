@@ -643,9 +643,9 @@ fn starters(all: &[Setting], limit: usize) -> Vec<&Setting> {
     own.into_iter().chain(system).take(limit).collect()
 }
 
-/// The empty bar: the last three apps opened from the bar and the last two searches, newest
-/// first, with whichever kind you used last on top. The bar adds its commands below, and
-/// that is all that fits without scrolling.
+/// The empty bar: the last two searches (Recent) on top, then the last three apps opened from
+/// the bar, newest first. The bar adds its utilities below, and that is all that fits without
+/// scrolling.
 fn recent(history: &[HistoryEntry], catalog: &Catalog<'_>) -> SuggestResponse {
     let mut launches: Vec<&apps::LaunchEntry> = catalog.launches.iter().collect();
     launches.sort_by_key(|entry| std::cmp::Reverse(entry.last_used));
@@ -674,13 +674,7 @@ fn recent(history: &[HistoryEntry], catalog: &Catalog<'_>) -> SuggestResponse {
         .map(|entry| history_item(entry.clone()))
         .collect();
 
-    let last_launch = launches.first().map(|entry| entry.last_used);
-    let last_search = history.iter().map(|entry| entry.last_used).max();
-    let items = if apps_lead(last_launch, last_search) {
-        [apps, searches].concat()
-    } else {
-        [searches, apps].concat()
-    };
+    let items = [searches, apps].concat();
     SuggestResponse {
         mode: "recent".into(),
         items,
@@ -737,15 +731,6 @@ fn history_item(entry: HistoryEntry) -> Suggestion {
         // Google's G as a silhouette in the row's color.
         icon: if link { "glyph:link" } else { "glyph:google" }.into(),
         ..Default::default()
-    }
-}
-
-/// Whether the empty bar puts apps above searches: when an app was opened more recently than
-/// anything was searched.
-fn apps_lead(last_launch: Option<i64>, last_search: Option<i64>) -> bool {
-    match (last_launch, last_search) {
-        (Some(launch), Some(search)) => launch > search,
-        (launch, _) => launch.is_some(),
     }
 }
 
@@ -957,7 +942,7 @@ mod tests {
     }
 
     #[test]
-    fn the_empty_bar_leads_with_whatever_was_used_last() {
+    fn the_empty_bar_puts_recent_searches_above_apps() {
         let apps: Vec<App> = ["Alpha", "Beta", "Gamma", "Delta"]
             .iter()
             .map(|name| App {
@@ -1006,10 +991,11 @@ mod tests {
             labels(recent(&history, &catalog(&launches))),
             ["newest", "middle", "Beta", "Gamma", "Alpha"]
         );
+        // Recent stays on top even when an app was opened since.
         let history = [at("before", 15)];
         assert_eq!(
             labels(recent(&history, &catalog(&launches))),
-            ["Beta", "Gamma", "Alpha", "before"]
+            ["before", "Beta", "Gamma", "Alpha"]
         );
         assert_eq!(labels(recent(&history, &catalog(&[]))), ["before"]);
     }
