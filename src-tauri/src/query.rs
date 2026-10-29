@@ -156,7 +156,7 @@ pub fn decide(input: &str, interpret: bool, catalog: Catalog<'_>) -> Decision {
 }
 
 /// A link opens as typed; anything else is searched.
-fn web(query: &str) -> Decision {
+pub fn web(query: &str) -> Decision {
     if looks_like_url(query) {
         Decision::Link {
             url: ensure_scheme(query),

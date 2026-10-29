@@ -766,17 +766,16 @@
       })
     );
     unlistens.push(await listen<SystemStats>('stats', (event) => takeStats(event.payload)));
-    // A zephyr:// link: text to type in, and whether to do what Enter would with it.
+    // A zephyr:// link: text to type in, or why the link was refused. Links never run anything
+    // from the bar (search links open their page from the app), and the app refuses shell text.
     unlistens.push(
-      await listen<{ query: string; run: boolean }>('bar-input', (event) => {
-        const { query: text, run: send } = event.payload;
-        // A link from a web page must never stage a shell command for the user to run.
-        if (SHELL_PREFIX.test(text)) {
-          notice.value = "Links can't open the shell";
+      await listen<{ query: string; notice: string | null }>('bar-input', (event) => {
+        const { query: text, notice: refused } = event.payload;
+        if (refused) {
+          notice.value = refused;
           return;
         }
         query.value = text;
-        if (send && text) void run(text, true);
         void focusInput();
       })
     );

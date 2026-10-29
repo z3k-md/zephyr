@@ -13,7 +13,7 @@ Shift+Enter on a Google search opens it in Google's AI Mode instead of the usual
 
 Math, unit conversions and time zones answer in the top row as you type (`12 * 7`, `5 km to miles`, `time in tokyo`, `3pm pst to cet`); Enter copies the answer. Ctrl+K (⌘K on a Mac) lists more actions for the selected row: copy the link, text or path, or show a file in its folder.
 
-Other apps and scripts can drive Zephyr with links: `zephyr://open?q=text` shows the bar with text typed in, and `zephyr://search?q=crispr` does what Enter would with it. On macOS the link scheme comes from the installed app.
+Other apps and scripts can drive Zephyr with links: `zephyr://open?q=text` shows the bar with text typed in, and `zephyr://search?q=crispr` searches the web for it (or opens it, when it is a web address). Links never launch apps, open files or reach the shell. On macOS the link scheme comes from the installed app.
 
 **Clipboard history** (macOS for now): press ⌘⇧V or type `!clip` to search everything you've copied, including text, links, colors, images and files. Text in copied screenshots is searchable too. Enter pastes into the app you're in, ⌘Enter copies, ⇧Enter pastes as plain text, and ⌘K shows more. History stays on this computer, encrypted with a key in the system keychain, and copies from password managers are never recorded.
 
