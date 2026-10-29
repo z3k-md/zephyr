@@ -450,6 +450,11 @@ export function saveWeatherPlace(place: Place | null): Promise<Snapshot> {
   return invoke<Snapshot>('save_weather_place', { place });
 }
 
+/** With no city picked, whether the weather finds the computer by its IP address. */
+export function saveWeatherByIp(on: boolean): Promise<Snapshot> {
+  return invoke<Snapshot>('save_weather_by_ip', { on });
+}
+
 /** Celsius or Fahrenheit for the weather; null follows the region's own way. */
 export function saveWeatherUnit(unit: WeatherUnit | null): Promise<Snapshot> {
   return invoke<Snapshot>('save_weather_unit', { unit });

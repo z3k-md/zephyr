@@ -2,6 +2,7 @@
   import { computed, ref, watch } from 'vue';
   import {
     errorMessage,
+    saveWeatherByIp,
     saveWeatherPlace,
     saveWeatherUnit,
     weatherPlaces,
@@ -28,11 +29,12 @@
   const forecast = useWeather();
   const chosen = computed(() => props.snapshot.weatherPlace);
   /** With no city picked, where the last forecast was for. */
-  const automatic = computed(() =>
-    !chosen.value && forecast.value?.place.name
+  const automatic = computed(() => {
+    if (!props.snapshot.weatherByIp) return 'Search for a city';
+    return !chosen.value && forecast.value?.place.name
       ? `Automatic · ${label(forecast.value.place)}`
-      : 'Automatic'
-  );
+      : 'Automatic';
+  });
   const unit = computed(() => pickedUnit.value ?? regionUnit);
 
   const text = ref(chosen.value ? label(chosen.value) : '');
@@ -151,7 +153,7 @@
           :disabled="busy"
           @click="choose(null)"
         >
-          Use my location
+          {{ snapshot.weatherByIp ? 'Use my location' : 'Clear' }}
         </button>
         <ul v-if="open" class="select-menu place-list" role="listbox">
           <li
@@ -170,6 +172,18 @@
         </ul>
       </span>
     </div>
+    <label class="check" data-focus="locate">
+      <input
+        type="checkbox"
+        :checked="snapshot.weatherByIp"
+        :disabled="busy"
+        @change="save(saveWeatherByIp(!snapshot.weatherByIp))"
+      />
+      Locate by IP address
+      <InfoTip
+        text="With no city picked, asks ipapi.co once a day where your internet connection is. Off, the weather shows only for a city you pick."
+      />
+    </label>
     <div class="field" data-focus="units">
       <span class="field-label">
         Units

@@ -291,6 +291,7 @@ pub fn run() {
             commands::weather_warm,
             commands::weather_at,
             commands::save_weather_place,
+            commands::save_weather_by_ip,
             commands::save_weather_unit,
             commands::network_summary,
             commands::network_history,

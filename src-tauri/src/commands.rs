@@ -548,6 +548,21 @@ pub fn save_weather_place(
     publish(&app, snapshot)
 }
 
+/// Whether, with no city picked, the weather finds the computer by its IP address.
+#[tauri::command]
+pub fn save_weather_by_ip(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    on: bool,
+) -> Result<Persisted, String> {
+    let snapshot = state.update(|persisted| {
+        persisted.weather_by_ip = on;
+        Ok(())
+    })?;
+    crate::weather::refresh();
+    publish(&app, snapshot)
+}
+
 /// `c`, `f`, or none for the region's own way.
 #[tauri::command]
 pub fn save_weather_unit(

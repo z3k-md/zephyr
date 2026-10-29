@@ -2,7 +2,7 @@
 //! needs no key. A background thread fetches it at start and every 30 minutes after, never
 //! on summon, and the last reply is kept in the app's data folder so the bar has it at once
 //! after a restart. The place is the one set in Settings, or else where the computer's IP
-//! address says it is (asked once a day).
+//! address says it is (asked once a day, unless Settings turns that off).
 //!
 //! Everything is metric here; the bar converts for the locales that use °F.
 
@@ -149,6 +149,24 @@ fn run(app: AppHandle) {
     }
     let mut last_try = 0u64;
     loop {
+        let (chosen, by_ip) = app
+            .state::<AppState>()
+            .snapshot()
+            .map(|persisted| (persisted.weather_place.clone(), persisted.weather_by_ip))
+            .unwrap_or((None, true));
+        // No city picked and locating by IP turned off: nothing to fetch, and the place the
+        // IP address gave is forgotten. It waits for Settings to change that.
+        if chosen.is_none() && !by_ip {
+            let Ok(mut guard) = shared.lock() else { return };
+            guard.stale = false;
+            if guard.cache.forecast.is_some() || guard.cache.ip_place.is_some() {
+                guard.cache = Cache::default();
+                save(&guard);
+                let _ = app.emit("weather", None::<Forecast>);
+            }
+            drop(wake.wait_while(guard, |shared| !shared.stale));
+            continue;
+        }
         let (due, cache) = {
             let Ok(guard) = shared.lock() else { return };
             let fetched = guard
@@ -165,11 +183,6 @@ fn run(app: AppHandle) {
         };
         if due {
             last_try = now_ms();
-            let chosen = app
-                .state::<AppState>()
-                .snapshot()
-                .ok()
-                .and_then(|persisted| persisted.weather_place.clone());
             let result = tauri::async_runtime::block_on(fetch_for(chosen, &cache));
             if let Ok(mut guard) = shared.lock() {
                 guard.stale = false;
@@ -197,7 +210,7 @@ fn run(app: AppHandle) {
 fn save(shared: &Shared) {
     match serde_json::to_vec(&shared.cache) {
         Ok(bytes) => {
-            if let Err(err) = std::fs::write(&shared.file, bytes) {
+            if let Err(err) = crate::util::write_atomic(&shared.file, &bytes) {
                 log::warn!("weather: couldn't save: {err}");
             }
         }
@@ -211,25 +224,25 @@ async fn fetch_for(
     chosen: Option<Place>,
     cache: &Cache,
 ) -> Result<(Forecast, Option<Place>), String> {
-    let client = client()?;
+    let client = client();
     if let Some(place) = chosen {
-        return Ok((forecast(&client, place).await?, None));
+        return Ok((forecast(client, place).await?, None));
     }
     let fresh = now_ms().saturating_sub(cache.ip_place_at) < IP_PLACE_MS;
     let (place, asked) = match &cache.ip_place {
         Some(place) if fresh => (place.clone(), None),
         _ => {
-            let place = ip_place(&client).await?;
+            let place = ip_place(client).await?;
             (place.clone(), Some(place))
         }
     };
-    Ok((forecast(&client, place).await?, asked))
+    Ok((forecast(client, place).await?, asked))
 }
 
 /// One client for every request, so its connections (and their TLS) are reused: a city search
 /// that set up a new one each keystroke spent most of its time on the handshake.
-fn client() -> Result<reqwest::Client, String> {
-    Ok(crate::util::http().clone())
+fn client() -> &'static reqwest::Client {
+    crate::util::http()
 }
 
 /// How long a weather request may take.
@@ -293,13 +306,11 @@ async fn ip_place(client: &reqwest::Client) -> Result<Place, String> {
 /// Opens the connection to the city search when its field is focused, so the first letters
 /// typed don't wait on DNS and TLS (most of a cold search's second or so).
 pub async fn warm() {
-    if let Ok(client) = client() {
-        let _ = client
-            .head("https://geocoding-api.open-meteo.com/v1/search")
-            .timeout(TIMEOUT)
-            .send()
-            .await;
-    }
+    let _ = client()
+        .head("https://geocoding-api.open-meteo.com/v1/search")
+        .timeout(TIMEOUT)
+        .send()
+        .await;
 }
 
 /// Cities whose name starts with `text`, for the Settings field.
@@ -335,7 +346,7 @@ pub async fn places(text: &str) -> Result<Vec<Place>, String> {
     {
         return Ok(places);
     }
-    let found: Found = client()?
+    let found: Found = client()
         .get(format!(
             "https://geocoding-api.open-meteo.com/v1/search?name={}&count=20&language=en",
             urlencoding::encode(text)
@@ -389,7 +400,7 @@ pub async fn forecast_at(text: &str) -> Result<Option<Forecast>, String> {
     let Some(place) = places(&key).await?.into_iter().next() else {
         return Ok(None);
     };
-    let found = forecast(&client()?, place).await?;
+    let found = forecast(client(), place).await?;
     if let Ok(mut typed) = TYPED.lock() {
         typed.retain(|(name, _)| *name != key);
         typed.push((key, found.clone()));

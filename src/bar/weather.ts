@@ -13,7 +13,11 @@ export function useWeather() {
   let unlisten: UnlistenFn | null = null;
   onMounted(async () => {
     forecast.value = await weather().catch(() => null);
-    unlisten = await listen<Forecast>('weather', (event) => (forecast.value = event.payload));
+    // Null when there's no place to show weather for any more.
+    unlisten = await listen<Forecast | null>(
+      'weather',
+      (event) => (forecast.value = event.payload)
+    );
   });
   onUnmounted(() => unlisten?.());
   return forecast;

@@ -43,6 +43,8 @@ export interface Snapshot {
   weatherPlace: Place | null;
   /** Celsius or Fahrenheit; null follows the region's own way. */
   weatherUnit: WeatherUnit | null;
+  /** With no city picked, whether the weather asks ipapi.co where the IP address is. */
+  weatherByIp: boolean;
   /** Whether the connection monitor pings the router and 1.1.1.1 once a second. */
   watchConnection: boolean;
   lastSpeed: SpeedResult | null;

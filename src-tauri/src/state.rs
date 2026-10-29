@@ -92,6 +92,9 @@ pub struct Persisted {
     /// `c` or `f` for the weather's temperatures (and wind in km/h or mph); none follows
     /// the region's own way.
     pub weather_unit: Option<String>,
+    /// With no place picked, whether the weather asks ipapi.co where the IP address is.
+    #[serde(default = "yes")]
+    pub weather_by_ip: bool,
     /// Whether the connection monitor pings the router and 1.1.1.1 once a second.
     #[serde(default = "yes")]
     pub watch_connection: bool,
@@ -241,6 +244,7 @@ impl Persisted {
             launch_groups: Vec::new(),
             weather_place: None,
             weather_unit: None,
+            weather_by_ip: true,
             watch_connection: true,
             last_speed: None,
             cpu_temp: false,
