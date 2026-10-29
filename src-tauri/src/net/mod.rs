@@ -14,7 +14,7 @@ pub mod speed;
 use std::collections::VecDeque;
 use std::net::Ipv4Addr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock, mpsc};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
@@ -38,6 +38,8 @@ const BUCKETS: usize = 180;
 const BUCKET_SECONDS: f64 = 5.0;
 
 static ENABLED: AtomicBool = AtomicBool::new(true);
+/// The monitor's thread, woken when it's turned back on.
+static THREAD: OnceLock<std::thread::Thread> = OnceLock::new();
 
 struct Monitor {
     clock: Instant,
@@ -63,6 +65,9 @@ pub fn set_enabled(enabled: bool) {
         state.samples.clear();
         state.alert = None;
     }
+    if enabled && let Some(thread) = THREAD.get() {
+        thread.unpark();
+    }
 }
 
 pub fn enabled() -> bool {
@@ -84,10 +89,12 @@ pub fn mark(flag: u8) {
 }
 
 pub fn start() {
-    std::thread::Builder::new()
+    if let Ok(handle) = std::thread::Builder::new()
         .name("net-monitor".into())
         .spawn(run)
-        .ok();
+    {
+        let _ = THREAD.set(handle.thread().clone());
+    }
 }
 
 fn run() {
@@ -107,6 +114,20 @@ fn run() {
         log::warn!("network monitor: ICMP isn't available");
         return;
     };
+    // The router is pinged on a thread of its own while this one pings the internet, and DNS
+    // is timed on another (some routers take a second to resolve), its answer landing in
+    // whichever tick follows. Both live as long as the monitor, fed one job at a time.
+    let (router_jobs, router_answers) = worker("net-router", move |(tick, ip): (u64, Ipv4Addr)| {
+        (tick, router.ping(ip, TIMEOUT))
+    });
+    let (dns_jobs, dns_answers) = worker("net-dns", |server: Ipv4Addr| {
+        match platform::dns_rtt(server, DNS_TIMEOUT) {
+            Some(ms) => Ping::Ms(ms),
+            None => Ping::Lost,
+        }
+    });
+    let mut route_watch = platform::RouteWatch::new();
+    let mut tick = 0u64;
     let mut route = platform::Route::default();
     let mut dns: Option<Ipv4Addr> = None;
     let mut reread: Option<Instant> = None;
@@ -116,14 +137,16 @@ fn run() {
     let mut lost_in_a_row = 0u32;
     let mut tcp_until: Option<Instant> = None;
     let mut second_until: Option<Instant> = None;
-    let dns_result: std::sync::Arc<Mutex<Option<Ping>>> = Default::default();
     loop {
-        let started = Instant::now();
         if !enabled() {
             last_tick = None;
-            std::thread::sleep(TICK);
-            continue;
+            // Parked until Settings turns it back on.
+            while !enabled() {
+                std::thread::park_timeout(Duration::from_secs(30));
+            }
         }
+        let started = Instant::now();
+        tick += 1;
         let mut flags = 0u8;
         if last_tick.is_some_and(|last| last.elapsed() > GAP_AFTER) {
             flags |= metrics::GAP;
@@ -133,21 +156,23 @@ fn run() {
         let read_now = reread.is_none_or(|at| at.elapsed() >= REREAD);
         if read_now {
             reread = Some(started);
-            let next = platform::route();
-            if next.gateway != route.gateway && route.online {
-                flags |= metrics::NET_CHANGE;
-                lost_in_a_row = 0;
-                tcp_until = None;
-                second_until = None;
-                ip::forget_public();
-            }
-            route = next;
-            dns = platform::dns_servers().into_iter().next();
-            if let Ok(mut guard) = monitor().lock()
-                && let Some(state) = guard.as_mut()
-            {
-                state.route = route.clone();
-                state.dns = dns;
+            if route_watch.changed() {
+                let next = platform::route();
+                if next.gateway != route.gateway && route.online {
+                    flags |= metrics::NET_CHANGE;
+                    lost_in_a_row = 0;
+                    tcp_until = None;
+                    second_until = None;
+                    ip::forget_public();
+                }
+                route = next;
+                dns = platform::dns_servers().into_iter().next();
+                if let Ok(mut guard) = monitor().lock()
+                    && let Some(state) = guard.as_mut()
+                {
+                    state.route = route.clone();
+                    state.dns = dns;
+                }
             }
         }
 
@@ -178,32 +203,20 @@ fn run() {
             } else {
                 INTERNET
             };
-            let gateway = route.gateway;
-            // Some routers take a second to resolve, so DNS is timed on its own thread and
-            // lands in whichever tick follows it.
             if read_now && let Some(server) = dns {
-                let result = dns_result.clone();
-                std::thread::spawn(move || {
-                    let ping = match platform::dns_rtt(server, DNS_TIMEOUT) {
-                        Some(ms) => Ping::Ms(ms),
-                        None => Ping::Lost,
-                    };
-                    if let Ok(mut slot) = result.lock() {
-                        *slot = Some(ping);
-                    }
-                });
+                let _ = dns_jobs.send(server);
             }
-            let (router_ping, internet_ping) = std::thread::scope(|scope| {
-                let router_job = scope.spawn(|| gateway.map(|ip| router.ping(ip, TIMEOUT)));
-                let internet_result = if use_tcp {
-                    platform::tcp_rtt(target, TIMEOUT)
-                } else {
-                    internet.ping(target, TIMEOUT)
-                };
-                (router_job.join().ok().flatten(), internet_result)
-            });
+            let asked_router = route
+                .gateway
+                .is_some_and(|ip| router_jobs.send((tick, ip)).is_ok());
+            let internet_ping = if use_tcp {
+                platform::tcp_rtt(target, TIMEOUT)
+            } else {
+                internet.ping(target, TIMEOUT)
+            };
+            let router_ping = asked_router.then(|| answer_for(&router_answers, tick));
             sample.router = outcome(router_ping);
-            if let Some(ping) = dns_result.lock().ok().and_then(|mut slot| slot.take()) {
+            if let Some(ping) = dns_answers.try_iter().last() {
                 sample.dns = ping;
             }
             let mut internet_ping = internet_ping;
@@ -490,6 +503,47 @@ pub fn ping_internet() -> Option<f32> {
             std::cell::RefCell::new(platform::Pinger::new());
     }
     PINGER.with(|pinger| pinger.borrow_mut().as_mut()?.ping(INTERNET, TIMEOUT))
+}
+
+/// A thread that runs `job` on each input sent to it and sends back what it returns, until
+/// either end hangs up.
+fn worker<In, Out>(
+    name: &str,
+    mut job: impl FnMut(In) -> Out + Send + 'static,
+) -> (mpsc::Sender<In>, mpsc::Receiver<Out>)
+where
+    In: Send + 'static,
+    Out: Send + 'static,
+{
+    let (jobs, inbox) = mpsc::channel::<In>();
+    let (outbox, answers) = mpsc::channel::<Out>();
+    let spawned = std::thread::Builder::new()
+        .name(name.into())
+        .spawn(move || {
+            for input in inbox {
+                if outbox.send(job(input)).is_err() {
+                    break;
+                }
+            }
+        });
+    if let Err(err) = spawned {
+        log::warn!("network monitor: couldn't start {name}: {err}");
+    }
+    (jobs, answers)
+}
+
+/// The router's answer for `tick`, skipping any that came back too late for an earlier one.
+/// None when it got no reply.
+fn answer_for(answers: &mpsc::Receiver<(u64, Option<f32>)>, tick: u64) -> Option<f32> {
+    let deadline = Instant::now() + TIMEOUT + Duration::from_millis(500);
+    loop {
+        let left = deadline.checked_duration_since(Instant::now())?;
+        match answers.recv_timeout(left) {
+            Ok((answered, ms)) if answered == tick => return ms,
+            Ok(_) => continue,
+            Err(_) => return None,
+        }
+    }
 }
 
 fn outcome(ping: Option<Option<f32>>) -> Ping {

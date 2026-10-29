@@ -16,7 +16,7 @@ pub struct Route {
     pub online: bool,
 }
 
-pub use imp::{Pinger, dns_servers, route};
+pub use imp::{Pinger, RouteWatch, dns_servers, route};
 
 #[cfg(windows)]
 mod imp {
@@ -108,6 +108,19 @@ mod imp {
                 interface: name,
                 online: true,
             }
+        }
+    }
+
+    /// Reading the route is a cheap call here, so it's read every time.
+    pub struct RouteWatch;
+
+    impl RouteWatch {
+        pub fn new() -> Self {
+            RouteWatch
+        }
+
+        pub fn changed(&mut self) -> bool {
+            true
         }
     }
 
@@ -238,26 +251,63 @@ mod imp {
         if !output.status.success() {
             return Route::default();
         }
-        let text = String::from_utf8_lossy(&output.stdout);
-        let field = |name: &str| {
-            text.lines()
-                .find_map(|line| line.trim().strip_prefix(name))
-                .map(|value| value.trim().to_string())
-        };
-        Route {
-            gateway: field("gateway:").and_then(|value| value.parse().ok()),
-            interface: field("interface:"),
-            online: true,
-        }
+        super::parse_route(&String::from_utf8_lossy(&output.stdout))
     }
 
     pub fn dns_servers() -> Vec<Ipv4Addr> {
-        std::fs::read_to_string("/etc/resolv.conf")
-            .unwrap_or_default()
-            .lines()
-            .filter_map(|line| line.trim().strip_prefix("nameserver"))
-            .filter_map(|value| value.trim().parse().ok())
-            .collect()
+        super::parse_resolv_conf(&std::fs::read_to_string("/etc/resolv.conf").unwrap_or_default())
+    }
+
+    /// Listens on a routing socket, so `route` (a process each time) only runs again when the
+    /// kernel says a route or address changed, and every few minutes besides.
+    pub struct RouteWatch {
+        socket: Option<Socket>,
+        checked: Option<Instant>,
+    }
+
+    impl RouteWatch {
+        const ANYWAY: Duration = Duration::from_secs(5 * 60);
+
+        pub fn new() -> Self {
+            let socket = Socket::new_raw(
+                Domain::from(libc::AF_ROUTE),
+                Type::from(libc::SOCK_RAW),
+                None,
+            )
+            .and_then(|socket| socket.set_nonblocking(true).map(|()| socket));
+            if let Err(err) = &socket {
+                log::warn!(
+                    "network monitor: no routing socket, reading the route each time: {err}"
+                );
+            }
+            RouteWatch {
+                socket: socket.ok(),
+                checked: None,
+            }
+        }
+
+        /// Whether the route may have changed since last asked.
+        pub fn changed(&mut self) -> bool {
+            let mut changed = self.checked.is_none_or(|at| at.elapsed() >= Self::ANYWAY);
+            match &self.socket {
+                Some(socket) => {
+                    let mut socket: &Socket = socket;
+                    let mut buffer = [0u8; 2048];
+                    // Drained every time, so messages don't pile up between checks.
+                    while let Ok(read) = socket.read(&mut buffer) {
+                        if read == 0 {
+                            break;
+                        }
+                        changed |= super::route_message_matters(&buffer[..read]);
+                    }
+                }
+                None => changed = true,
+            }
+            if changed {
+                self.checked = Some(Instant::now());
+            }
+            changed
+        }
     }
 }
 
@@ -287,6 +337,67 @@ mod imp {
     pub fn dns_servers() -> Vec<Ipv4Addr> {
         Vec::new()
     }
+
+    pub struct RouteWatch;
+
+    impl RouteWatch {
+        pub fn new() -> Self {
+            RouteWatch
+        }
+
+        pub fn changed(&mut self) -> bool {
+            true
+        }
+    }
+}
+
+/// `route -n get default`'s output: the gateway and interface lines.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn parse_route(text: &str) -> Route {
+    let field = |name: &str| {
+        text.lines()
+            .find_map(|line| line.trim().strip_prefix(name))
+            .map(|value| value.trim().to_string())
+    };
+    Route {
+        gateway: field("gateway:").and_then(|value| value.parse().ok()),
+        interface: field("interface:"),
+        online: true,
+    }
+}
+
+/// The IPv4 `nameserver` lines of a resolv.conf.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn parse_resolv_conf(text: &str) -> Vec<Ipv4Addr> {
+    text.lines()
+        .filter_map(|line| line.trim().strip_prefix("nameserver"))
+        .filter_map(|value| value.trim().parse().ok())
+        .collect()
+}
+
+/// Whether a BSD routing-socket message could move the default route: route additions,
+/// removals and changes (but not the per-host entries ARP and neighbour discovery churn
+/// through), interfaces going up or down, and addresses coming and going.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn route_message_matters(message: &[u8]) -> bool {
+    const RTM_ADD: u8 = 0x1;
+    const RTM_DELETE: u8 = 0x2;
+    const RTM_CHANGE: u8 = 0x3;
+    const RTM_NEWADDR: u8 = 0xc;
+    const RTM_DELADDR: u8 = 0xd;
+    const RTM_IFINFO: u8 = 0xe;
+    const RTF_HOST: i32 = 0x4;
+    // rt_msghdr: u16 length, u8 version, u8 type, u16 index, then i32 flags at offset 8.
+    let Some(&kind) = message.get(3) else {
+        return false;
+    };
+    match kind {
+        RTM_ADD | RTM_DELETE | RTM_CHANGE => message
+            .get(8..12)
+            .is_some_and(|flags| i32::from_ne_bytes(flags.try_into().unwrap()) & RTF_HOST == 0),
+        RTM_NEWADDR | RTM_DELADDR | RTM_IFINFO => true,
+        _ => false,
+    }
 }
 
 /// The time to open a TCP connection to `ip:443`, for when ICMP gets no answer: the
@@ -306,19 +417,80 @@ pub fn tcp_rtt(ip: Ipv4Addr, timeout: Duration) -> Option<f32> {
 /// The time to resolve example.com through `server`, by a hand-built A query.
 pub fn dns_rtt(server: Ipv4Addr, timeout: Duration) -> Option<f32> {
     let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
-    socket.set_read_timeout(Some(timeout)).ok()?;
     let id = (std::process::id() as u16) ^ (crate::util::now_ms() as u16);
     let query = super::dns::query(id, "example.com");
     let started = std::time::Instant::now();
     socket.send_to(&query, (server, 53)).ok()?;
     let mut buffer = [0u8; 512];
     loop {
-        let (read, _) = socket.recv_from(&mut buffer).ok()?;
-        if super::dns::answers(&buffer[..read], id) {
+        // One deadline for the whole lookup, however many stray packets arrive meanwhile.
+        let left = timeout.checked_sub(started.elapsed())?;
+        socket
+            .set_read_timeout(Some(left.max(Duration::from_millis(1))))
+            .ok()?;
+        let (read, from) = socket.recv_from(&mut buffer).ok()?;
+        if from == std::net::SocketAddr::from((server, 53))
+            && super::dns::answers(&buffer[..read], id)
+        {
             return Some(started.elapsed().as_secs_f32() * 1000.0);
         }
-        if started.elapsed() >= timeout {
-            return None;
-        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn route_get_default_gives_the_gateway_and_interface() {
+        let text = "   route to: default
+destination: default
+       mask: default
+    gateway: 192.168.1.1
+  interface: en0
+      flags: <UP,GATEWAY,DONE,STATIC,PRCLONING,GLOBAL>
+ recvpipe  sendpipe  ssthresh  rtt,msec    rttvar  hopcount      mtu     expire
+       0         0         0         0         0         0      1500         0
+";
+        assert_eq!(
+            parse_route(text),
+            Route {
+                gateway: Some(Ipv4Addr::new(192, 168, 1, 1)),
+                interface: Some("en0".into()),
+                online: true,
+            }
+        );
+        // A VPN's route names a link, not an address: no router, but still online.
+        let tunnel = parse_route("    gateway: utun3\n  interface: utun3\n");
+        assert_eq!(tunnel.gateway, None);
+        assert_eq!(tunnel.interface.as_deref(), Some("utun3"));
+    }
+
+    #[test]
+    fn resolv_conf_gives_the_ipv4_nameservers() {
+        let text = "#\n# macOS Notice\n#\nsearch lan\nnameserver 192.168.1.1\nnameserver fe80::1%en0\n  nameserver\t1.1.1.1\n";
+        assert_eq!(
+            parse_resolv_conf(text),
+            [Ipv4Addr::new(192, 168, 1, 1), Ipv4Addr::new(1, 1, 1, 1)]
+        );
+        assert!(parse_resolv_conf("").is_empty());
+    }
+
+    #[test]
+    fn only_route_messages_that_could_move_the_default_count() {
+        let message = |kind: u8, flags: i32| {
+            let mut bytes = vec![0u8; 92];
+            bytes[3] = kind;
+            bytes[8..12].copy_from_slice(&flags.to_ne_bytes());
+            bytes
+        };
+        assert!(route_message_matters(&message(0x1, 0x1 | 0x2)));
+        assert!(route_message_matters(&message(0x2, 0x2)));
+        assert!(route_message_matters(&message(0xe, 0)));
+        // An ARP entry for some host on the network.
+        assert!(!route_message_matters(&message(0x1, 0x4 | 0x400)));
+        // RTM_MISS, and a message cut short.
+        assert!(!route_message_matters(&message(0x7, 0)));
+        assert!(!route_message_matters(&[0, 0]));
     }
 }
