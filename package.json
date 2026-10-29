@@ -12,6 +12,7 @@
   },
   "scripts": {
     "dev": "tauri dev",
+    "check": "bash scripts/check.sh",
     "build": "dotenv -e .env -- tauri build",
     "typecheck": "node node_modules/vue-tsc/bin/vue-tsc.js --noEmit",
     "test": "vitest run && cargo test --manifest-path src-tauri/Cargo.toml --locked",

@@ -42,13 +42,15 @@ bun install
 bun dev
 ```
 
-`bun run lint` runs Prettier, vue-tsc, the frontend build, rustfmt, and Clippy with warnings as errors. `bun run test` runs the Rust tests, and `bun run test:scripts` the release script tests. Together they are what Checks runs, with the same `--locked` Cargo flags; Checks also lints the workflow files with actionlint. `bun run format` fixes formatting.
+Before pushing, run `bun run check` (`scripts/check.sh`). It runs what Checks runs, but only for the half of the app your branch touches compared with `origin/develop`, uncommitted files included: Prettier always, vue-tsc and the frontend tests for frontend changes, rustfmt, Clippy and the Rust tests for Rust changes. Changes to the toolchain, `package.json` or the workflows check both. On Windows a Rust change is also linted for macOS (`--target aarch64-apple-darwin`; `cargo clippy` doesn't link, so no Mac SDK is needed), which catches most Mac-only breakage before CI does. `--all` checks everything and `--no-mac` skips the macOS lint.
+
+`bun run lint` and `bun run test` still run every check unconditionally, and `bun run test:scripts` the release script tests. `bun run format` fixes formatting. A shared compile cache such as [sccache](https://github.com/mozilla/sccache) (`build.rustc-wrapper` in `~/.cargo/config.toml`) makes fresh checkouts and worktrees reuse each other's dependency builds.
 
 The version in `package.json` and `src-tauri/Cargo.toml` is the last release's, for local builds. Releases stamp both from the tag, so they aren't bumped by hand. `rust-version` in `Cargo.toml` follows the toolchain in `rust-toolchain.toml`; a test fails if they differ.
 
 ## Branches
 
-Work lands on `develop`. Checks run on Windows and macOS for every push to `develop` and every pull request to `develop` or `main`, next to the release script tests and a lint of the workflow files. CodeQL scans `develop` on each push (Rust weekly), and the Prune caches workflow keeps only the newest cargo cache per job and OS. Pushes to `main` aren't checked again: `main` moves only when `develop` is promoted, by fast-forwarding it once `develop`'s checks are green:
+Work lands on `develop`. Checks run on Windows and macOS for every push to `develop` and every pull request to `develop` or `main`, next to the release script tests and a lint of the workflow files. A running check on `develop` always finishes; of the pushes that arrive meanwhile, only the newest is checked next, against the last commit whose checks passed, so nothing goes unchecked. Like `scripts/check.sh`, a push skips the Rust or frontend half when it doesn't touch it, and the platform-independent checks (formatting, vue-tsc, frontend tests) run on macOS only. Windows builds on a Dev Drive. CodeQL scans `develop` on each push (Rust weekly), and the Prune caches workflow keeps only the newest cargo cache per job and OS. Pushes to `main` aren't checked again: `main` moves only when `develop` is promoted, by fast-forwarding it once `develop`'s checks are green:
 
 ```bash
 git push origin develop:main
