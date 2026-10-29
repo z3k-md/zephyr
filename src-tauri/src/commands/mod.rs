@@ -58,8 +58,17 @@ pub fn get_snapshot(state: State<'_, AppState>) -> Result<Persisted, String> {
     state.snapshot().map(|snapshot| Persisted::clone(&snapshot))
 }
 
-/// Saves a settings change and sends every window the new snapshot.
-fn save(
+/// Saves a settings change and sends every window the new snapshot. The write is synced to
+/// disk, so it runs on a worker thread, never the main one (see [`blocking`]).
+async fn save(
+    app: AppHandle,
+    change: impl FnOnce(&mut Persisted) -> Result<(), String> + Send + 'static,
+) -> Result<Persisted, String> {
+    blocking(move || save_now(&app, change)).await
+}
+
+/// [`save`] for work already on a worker thread.
+fn save_now(
     app: &AppHandle,
     change: impl FnOnce(&mut Persisted) -> Result<(), String>,
 ) -> Result<Persisted, String> {

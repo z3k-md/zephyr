@@ -28,40 +28,43 @@ pub async fn weather_at(text: String) -> Result<Option<crate::weather::Forecast>
 }
 
 #[tauri::command]
-pub fn save_weather_place(
+pub async fn save_weather_place(
     app: AppHandle,
     place: Option<crate::weather::Place>,
 ) -> Result<Persisted, String> {
-    let snapshot = save(&app, |persisted| {
+    let snapshot = save(app, |persisted| {
         persisted.weather_place = place;
         Ok(())
-    })?;
+    })
+    .await?;
     crate::weather::refresh();
     Ok(snapshot)
 }
 
 /// Whether, with no city picked, the weather finds the computer by its IP address.
 #[tauri::command]
-pub fn save_weather_by_ip(app: AppHandle, on: bool) -> Result<Persisted, String> {
-    let snapshot = save(&app, |persisted| {
+pub async fn save_weather_by_ip(app: AppHandle, on: bool) -> Result<Persisted, String> {
+    let snapshot = save(app, move |persisted| {
         persisted.weather_by_ip = on;
         Ok(())
-    })?;
+    })
+    .await?;
     crate::weather::refresh();
     Ok(snapshot)
 }
 
 /// `c`, `f`, or none for the region's own way.
 #[tauri::command]
-pub fn save_weather_unit(app: AppHandle, unit: Option<String>) -> Result<Persisted, String> {
+pub async fn save_weather_unit(app: AppHandle, unit: Option<String>) -> Result<Persisted, String> {
     if unit
         .as_deref()
         .is_some_and(|unit| unit != "c" && unit != "f")
     {
         return Err("Pick Celsius or Fahrenheit".into());
     }
-    save(&app, |persisted| {
+    save(app, |persisted| {
         persisted.weather_unit = unit;
         Ok(())
     })
+    .await
 }

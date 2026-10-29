@@ -1,6 +1,6 @@
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use super::publish;
+use super::{blocking, publish};
 use crate::shortcut;
 use crate::state::{AppState, Persisted};
 use crate::window;
@@ -24,11 +24,15 @@ pub fn pause_shortcuts(
 /// Saves a hotkey and alias for one command, app, bookmark, launch group or settings page
 /// (both empty removes it), then registers the hotkeys again.
 #[tauri::command]
-pub fn save_binding(
+pub async fn save_binding(
     app: AppHandle,
-    state: State<'_, AppState>,
     binding: crate::state::Binding,
 ) -> Result<Persisted, String> {
+    blocking(move || save_binding_now(&app, binding)).await
+}
+
+fn save_binding_now(app: &AppHandle, binding: crate::state::Binding) -> Result<Persisted, String> {
+    let state = app.state::<AppState>();
     let current = state.snapshot()?;
     let clipboard = if current.clipboard.enabled {
         current.clipboard.shortcut.as_str()
@@ -45,8 +49,8 @@ pub fn save_binding(
         persisted.bindings = updated;
         Ok(())
     })?;
-    shortcut::register(&app, &snapshot.summon_shortcut, snapshot.extra_shortcuts())?;
-    publish(&app, snapshot)
+    shortcut::register(app, &snapshot.summon_shortcut, snapshot.extra_shortcuts())?;
+    publish(app, snapshot)
 }
 
 /// The targets whose hotkey couldn't be registered because another app holds it.

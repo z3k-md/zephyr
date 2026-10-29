@@ -77,11 +77,12 @@ pub async fn resources_reveal(app: AppHandle, path: String) -> Result<(), String
 }
 
 #[tauri::command]
-pub fn save_show_stats(app: AppHandle, show: bool) -> Result<Persisted, String> {
-    save(&app, |persisted| {
+pub async fn save_show_stats(app: AppHandle, show: bool) -> Result<Persisted, String> {
+    save(app, move |persisted| {
         persisted.show_stats = show;
         Ok(())
     })
+    .await
 }
 
 /// Show info for one Resources row.
@@ -123,10 +124,11 @@ pub async fn save_cpu_temp(app: AppHandle, enabled: bool) -> Result<Persisted, S
     })
     .await
     .map_err(|err| err.to_string())??;
-    save(&app, |persisted| {
+    save(app, move |persisted| {
         persisted.cpu_temp = enabled;
         Ok(())
     })
+    .await
 }
 
 /// Whether PawnIO is installed, and the helper's latest reading.

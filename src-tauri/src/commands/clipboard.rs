@@ -1,4 +1,4 @@
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager};
 
 use super::{blocking, publish};
 use crate::clipboard;
@@ -73,17 +73,21 @@ pub async fn clip_stats() -> std::collections::HashMap<&'static str, usize> {
 }
 
 #[tauri::command]
-pub fn save_clipboard_settings(
+pub async fn save_clipboard_settings(
     app: AppHandle,
-    state: State<'_, AppState>,
     settings: clipboard::ClipboardSettings,
 ) -> Result<Persisted, String> {
-    let snapshot = state.update(|persisted| persisted.set_clipboard(settings))?;
-    if let Err(err) =
-        shortcut::register(&app, &snapshot.summon_shortcut, snapshot.extra_shortcuts())
-    {
-        log::error!("{err}");
-    }
-    clipboard::apply_settings(snapshot.clipboard.clone());
-    publish(&app, snapshot)
+    blocking(move || {
+        let snapshot = app
+            .state::<AppState>()
+            .update(|persisted| persisted.set_clipboard(settings))?;
+        if let Err(err) =
+            shortcut::register(&app, &snapshot.summon_shortcut, snapshot.extra_shortcuts())
+        {
+            log::error!("{err}");
+        }
+        clipboard::apply_settings(snapshot.clipboard.clone());
+        publish(&app, snapshot)
+    })
+    .await
 }

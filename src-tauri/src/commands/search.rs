@@ -1,7 +1,7 @@
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_opener::OpenerExt;
 
-use super::record;
+use super::{blocking, record};
 use crate::apps::{self, Catalog};
 use crate::files;
 use crate::query::{self, Decision, DispatchOutcome};
@@ -13,13 +13,17 @@ use crate::window;
 
 /// A view was opened, for the empty bar's Views to follow what's used.
 #[tauri::command]
-pub fn record_view_open(app: AppHandle, state: State<'_, AppState>, view: String) {
+pub async fn record_view_open(app: AppHandle, view: String) {
     if view.is_empty() || view.len() > 32 {
         return;
     }
-    record(&app, &state, "the view", |persisted| {
-        persisted.record_view_open(&view, now_secs());
-    });
+    let _ = blocking(move || {
+        record(&app, &app.state::<AppState>(), "the view", |persisted| {
+            persisted.record_view_open(&view, now_secs());
+        });
+        Ok(())
+    })
+    .await;
 }
 
 #[tauri::command]

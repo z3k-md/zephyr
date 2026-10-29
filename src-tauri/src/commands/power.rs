@@ -1,5 +1,6 @@
 use tauri::AppHandle;
 
+use super::blocking;
 use crate::window;
 
 /// What typed text like "shutdown in 30m" would do, for the bar's Power row.
@@ -26,6 +27,11 @@ pub async fn power_run(
 }
 
 #[tauri::command]
-pub fn power_cancel(app: AppHandle) {
-    crate::power::cancel(&app);
+pub async fn power_cancel(app: AppHandle) {
+    // Off the main thread: dropping the schedule saves the settings file.
+    let _ = blocking(move || {
+        crate::power::cancel(&app);
+        Ok(())
+    })
+    .await;
 }

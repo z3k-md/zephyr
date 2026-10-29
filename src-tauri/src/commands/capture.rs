@@ -35,11 +35,12 @@ pub fn capture_snapshot(app: AppHandle, state: State<'_, AppState>) -> Result<()
 
 /// Turns bug captures on or off; turning them off ends a running recording.
 #[tauri::command]
-pub fn save_bug_capture(app: AppHandle, enabled: bool) -> Result<Persisted, String> {
-    let snapshot = save(&app, |persisted| {
+pub async fn save_bug_capture(app: AppHandle, enabled: bool) -> Result<Persisted, String> {
+    let snapshot = save(app.clone(), move |persisted| {
         persisted.bug_capture = enabled;
         Ok(())
-    })?;
+    })
+    .await?;
     if !enabled && crate::capture::recording() {
         crate::capture::toggle(&app);
     }

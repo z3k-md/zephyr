@@ -1,4 +1,4 @@
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Manager};
 
 use super::{blocking, publish, record};
 use crate::apps;
@@ -140,25 +140,27 @@ pub fn app_quit(app_id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn save_launch_groups(
+pub async fn save_launch_groups(
     app: AppHandle,
-    state: State<'_, AppState>,
     groups: Vec<crate::state::LaunchGroup>,
 ) -> Result<Persisted, String> {
     crate::launch_groups::validate(&groups)?;
-    let snapshot = state.update(|persisted| {
-        // A deleted group's hotkey and alias go with it.
-        persisted
-            .bindings
-            .retain(|binding| match binding.target.strip_prefix("group:") {
-                Some(id) => groups.iter().any(|group| group.id == id),
-                None => true,
-            });
-        persisted.launch_groups = groups;
-        Ok(())
-    })?;
-    shortcut::register(&app, &snapshot.summon_shortcut, snapshot.extra_shortcuts())?;
-    publish(&app, snapshot)
+    blocking(move || {
+        let snapshot = app.state::<AppState>().update(|persisted| {
+            // A deleted group's hotkey and alias go with it.
+            persisted
+                .bindings
+                .retain(|binding| match binding.target.strip_prefix("group:") {
+                    Some(id) => groups.iter().any(|group| group.id == id),
+                    None => true,
+                });
+            persisted.launch_groups = groups;
+            Ok(())
+        })?;
+        shortcut::register(&app, &snapshot.summon_shortcut, snapshot.extra_shortcuts())?;
+        publish(&app, snapshot)
+    })
+    .await
 }
 
 /// Opens everything in a launch group; the bar closes at once.

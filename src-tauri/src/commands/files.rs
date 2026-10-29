@@ -3,7 +3,7 @@ use std::time::UNIX_EPOCH;
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_opener::OpenerExt;
 
-use super::{blocking, publish, record};
+use super::{blocking, record, save};
 use crate::clipboard;
 use crate::files;
 use crate::query::DispatchOutcome;
@@ -79,30 +79,30 @@ pub fn rebuild_file_index() {
 }
 
 #[tauri::command]
-pub fn save_file_folders(
+pub async fn save_file_folders(
     app: AppHandle,
-    state: State<'_, AppState>,
     roots: Option<Vec<String>>,
     excludes: Vec<String>,
 ) -> Result<Persisted, String> {
-    let snapshot = state.update(|persisted| persisted.set_file_folders(roots, excludes))?;
+    let snapshot = save(app.clone(), |persisted| {
+        persisted.set_file_folders(roots, excludes)
+    })
+    .await?;
     files::index().configure(snapshot.file_config(), file_cache_path(&app));
-    publish(&app, snapshot)
+    Ok(snapshot)
 }
 
 /// Lets file search into Desktop, Documents and Downloads; macOS asks for each as the index
 /// first reads it. Called when file search is first used, or from Settings › Permissions.
 #[tauri::command]
-pub fn allow_protected_folders(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<Persisted, String> {
-    let snapshot = state.update(|persisted| {
+pub async fn allow_protected_folders(app: AppHandle) -> Result<Persisted, String> {
+    let snapshot = save(app.clone(), |persisted| {
         persisted.protected_folders = true;
         Ok(())
-    })?;
+    })
+    .await?;
     files::index().configure(snapshot.file_config(), file_cache_path(&app));
-    publish(&app, snapshot)
+    Ok(snapshot)
 }
 
 pub fn file_cache_path(app: &AppHandle) -> Option<std::path::PathBuf> {

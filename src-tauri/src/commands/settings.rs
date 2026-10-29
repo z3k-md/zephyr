@@ -2,7 +2,7 @@ use tauri::{AppHandle, Manager, State};
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_opener::OpenerExt;
 
-use super::{blocking, publish, save};
+use super::{blocking, publish, save, save_now};
 use crate::files;
 use crate::shortcut;
 use crate::state::{AppState, Persisted};
@@ -16,26 +16,31 @@ pub async fn open_onboarding(app: AppHandle) -> Result<(), String> {
 
 /// Finishing or skipping setup: it won't show again (except with the dev switch).
 #[tauri::command]
-pub fn finish_onboarding(app: AppHandle, state: State<'_, AppState>) -> Result<Persisted, String> {
-    let snapshot = state.update(|persisted| {
+pub async fn finish_onboarding(app: AppHandle) -> Result<Persisted, String> {
+    let snapshot = save(app.clone(), |persisted| {
         persisted.onboarding_done = true;
         Ok(())
-    })?;
+    })
+    .await?;
     if let Some(window) = app.get_webview_window("onboarding") {
         let _ = window.hide();
         window::regular_while_open(&app);
         let _ = window.close();
     }
-    publish(&app, snapshot)
+    Ok(snapshot)
 }
 
 /// Dev builds: show setup on every launch.
 #[tauri::command]
-pub fn save_onboarding_every_launch(app: AppHandle, every: bool) -> Result<Persisted, String> {
-    save(&app, |persisted| {
+pub async fn save_onboarding_every_launch(
+    app: AppHandle,
+    every: bool,
+) -> Result<Persisted, String> {
+    save(app, move |persisted| {
         persisted.onboarding_every_launch = every;
         Ok(())
     })
+    .await
 }
 
 /// Each permission the app can use on this system and whether it has it.
@@ -78,12 +83,12 @@ pub async fn permission_request(
             }
         }
         "files" => {
-            let snapshot = state.update(|persisted| {
+            let snapshot = save(app.clone(), |persisted| {
                 persisted.protected_folders = true;
                 Ok(())
-            })?;
+            })
+            .await?;
             files::index().configure(snapshot.file_config(), super::files::file_cache_path(&app));
-            let _ = publish(&app, snapshot);
             let status = tauri::async_runtime::spawn_blocking(permissions::probe_files)
                 .await
                 .map_err(|err| err.to_string())?;
@@ -155,7 +160,7 @@ pub async fn save_instant_startup(app: AppHandle, enabled: bool) -> Result<Persi
         let state = app.state::<AppState>();
         let current = state.snapshot()?;
         apply_autostart(&app, current.launch_at_startup, enabled)?;
-        save(&app, |persisted| {
+        save_now(&app, |persisted| {
             persisted.instant_startup = enabled;
             Ok(())
         })
@@ -203,30 +208,33 @@ fn autolaunch(app: &AppHandle, enabled: bool) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn save_resume_seconds(app: AppHandle, seconds: u32) -> Result<Persisted, String> {
-    save(&app, |persisted| {
+pub async fn save_resume_seconds(app: AppHandle, seconds: u32) -> Result<Persisted, String> {
+    save(app, move |persisted| {
         persisted.resume_seconds = seconds.min(24 * 60 * 60);
         Ok(())
     })
+    .await
 }
 
 /// Switches the palette; every window repaints from the published snapshot.
 #[tauri::command]
-pub fn save_theme(app: AppHandle, theme: String) -> Result<Persisted, String> {
+pub async fn save_theme(app: AppHandle, theme: String) -> Result<Persisted, String> {
     if !crate::state::THEMES.contains(&theme.as_str()) {
         return Err(format!("Unknown theme {theme}"));
     }
-    save(&app, |persisted| {
+    save(app, |persisted| {
         persisted.theme = theme;
         persisted.theme_chosen = true;
         Ok(())
     })
+    .await
 }
 
 #[tauri::command]
-pub fn save_open_behavior(app: AppHandle, return_to_mode: bool) -> Result<Persisted, String> {
-    save(&app, |persisted| {
+pub async fn save_open_behavior(app: AppHandle, return_to_mode: bool) -> Result<Persisted, String> {
+    save(app, move |persisted| {
         persisted.return_to_mode = return_to_mode;
         Ok(())
     })
+    .await
 }

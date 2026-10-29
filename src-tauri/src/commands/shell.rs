@@ -1,7 +1,7 @@
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, State};
 
-use super::{blocking, publish};
+use super::{blocking, publish, save};
 use crate::shell::{self, ShellEvent, ShellInfo};
 use crate::state::{AppState, Persisted};
 use crate::window;
@@ -69,11 +69,6 @@ pub async fn shell_info(state: State<'_, AppState>) -> Result<ShellInfo, String>
 }
 
 #[tauri::command]
-pub fn save_shell_program(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    program: String,
-) -> Result<Persisted, String> {
-    let snapshot = state.update(|persisted| persisted.shell.set_program(&program))?;
-    publish(&app, snapshot)
+pub async fn save_shell_program(app: AppHandle, program: String) -> Result<Persisted, String> {
+    save(app, move |persisted| persisted.shell.set_program(&program)).await
 }

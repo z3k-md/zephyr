@@ -28,11 +28,12 @@ pub async fn network_public_ip() -> Option<String> {
 }
 
 #[tauri::command]
-pub fn save_watch_connection(app: AppHandle, watch: bool) -> Result<Persisted, String> {
-    let snapshot = save(&app, |persisted| {
+pub async fn save_watch_connection(app: AppHandle, watch: bool) -> Result<Persisted, String> {
+    let snapshot = save(app, move |persisted| {
         persisted.watch_connection = watch;
         Ok(())
-    })?;
+    })
+    .await?;
     crate::net::set_enabled(watch);
     Ok(snapshot)
 }
@@ -41,10 +42,12 @@ pub fn save_watch_connection(app: AppHandle, watch: bool) -> Result<Persisted, S
 #[tauri::command]
 pub async fn speed_test(app: AppHandle) -> Result<crate::net::speed::SpeedResult, String> {
     let result = crate::net::speed::run(&app).await?;
-    save(&app, |persisted| {
-        persisted.last_speed = Some(result.clone());
+    let saved = result.clone();
+    save(app, move |persisted| {
+        persisted.last_speed = Some(saved);
         Ok(())
-    })?;
+    })
+    .await?;
     Ok(result)
 }
 

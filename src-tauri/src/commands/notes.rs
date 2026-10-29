@@ -1,4 +1,4 @@
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager};
 use tauri_plugin_opener::OpenerExt;
 
 use super::{blocking, publish};
@@ -82,22 +82,28 @@ pub fn keep_note_window(window: tauri::WebviewWindow) {
 }
 
 /// From a note's window, once it has saved: closes that window. The note stays.
+// Async: forgetting the window saves the settings file.
 #[tauri::command]
-pub fn close_note_window(app: AppHandle, window: tauri::WebviewWindow) {
-    crate::note_windows::close(&app, &window);
+pub async fn close_note_window(app: AppHandle, window: tauri::WebviewWindow) {
+    let _ = blocking(move || {
+        crate::note_windows::close(&app, &window);
+        Ok(())
+    })
+    .await;
 }
 
 #[tauri::command]
-pub fn save_notes_shortcut(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    shortcut: String,
-) -> Result<Persisted, String> {
-    let snapshot = state.update(|persisted| persisted.set_notes_shortcut(shortcut))?;
-    if let Err(err) =
-        shortcut::register(&app, &snapshot.summon_shortcut, snapshot.extra_shortcuts())
-    {
-        log::error!("{err}");
-    }
-    publish(&app, snapshot)
+pub async fn save_notes_shortcut(app: AppHandle, shortcut: String) -> Result<Persisted, String> {
+    blocking(move || {
+        let snapshot = app
+            .state::<AppState>()
+            .update(|persisted| persisted.set_notes_shortcut(shortcut))?;
+        if let Err(err) =
+            shortcut::register(&app, &snapshot.summon_shortcut, snapshot.extra_shortcuts())
+        {
+            log::error!("{err}");
+        }
+        publish(&app, snapshot)
+    })
+    .await
 }

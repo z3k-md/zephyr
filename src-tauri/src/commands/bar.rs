@@ -1,6 +1,6 @@
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager};
 
-use super::publish;
+use super::{blocking, publish};
 use crate::state::AppState;
 use crate::window;
 
@@ -59,20 +59,22 @@ pub fn page_ready(app: AppHandle, window: tauri::WebviewWindow) {
 
 /// Records a finished typing test; true when it is a new personal best for its mode.
 #[tauri::command]
-pub fn save_typing_result(
+pub async fn save_typing_result(
     app: AppHandle,
-    state: State<'_, AppState>,
     result: crate::state::TypingBest,
 ) -> Result<bool, String> {
-    let mut best = false;
-    let snapshot = state.update(|persisted| {
-        best = persisted.record_typing(result.clone())?;
-        Ok(())
-    })?;
-    if best {
-        let _ = publish(&app, snapshot);
-    }
-    Ok(best)
+    blocking(move || {
+        let mut best = false;
+        let snapshot = app.state::<AppState>().update(|persisted| {
+            best = persisted.record_typing(result.clone())?;
+            Ok(())
+        })?;
+        if best {
+            let _ = publish(&app, snapshot);
+        }
+        Ok(best)
+    })
+    .await
 }
 
 /// Makes the snap grid's window when Ctrl is first held on the bar, before any drag.
@@ -109,10 +111,13 @@ pub fn bar_move_end(app: AppHandle) {
 /// Remembers the view the bar should come back to (`notes`, `clipboard`, …; empty for
 /// the search bar), so it survives hiding and restarts.
 #[tauri::command]
-pub fn set_active_mode(state: State<'_, AppState>, mode: String) -> Result<(), String> {
-    state.update(|persisted| {
-        persisted.active_mode = mode.chars().take(32).collect();
+pub async fn set_active_mode(app: AppHandle, mode: String) -> Result<(), String> {
+    blocking(move || {
+        app.state::<AppState>().update(|persisted| {
+            persisted.active_mode = mode.chars().take(32).collect();
+            Ok(())
+        })?;
         Ok(())
-    })?;
-    Ok(())
+    })
+    .await
 }
