@@ -301,7 +301,13 @@
     return item.kind === 'time' ? `${item.amount}s` : `${item.amount} words`;
   }
 
-  defineExpose({ onKey });
+  /** The bar hid: a test under way is dropped, as Esc drops it, so it can't finish unseen. */
+  function pause() {
+    window.clearInterval(ticker);
+    if (startedAt.value && !result.value) restart();
+  }
+
+  defineExpose({ onKey, pause });
 </script>
 
 <template>

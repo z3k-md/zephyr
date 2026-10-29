@@ -46,6 +46,11 @@
     if (document.visibilityState === 'visible') void update();
   }
 
+  /** The bar's webview still counts as visible once hidden, so the lap would keep painting. */
+  function pause() {
+    lap?.pause();
+  }
+
   watch(
     () => props.text,
     () => void nextTick(update)
@@ -56,8 +61,9 @@
     observer = new ResizeObserver(() => void update());
     if (box.value) observer.observe(box.value);
     still.addEventListener('change', update);
-    // The lap keeps going while the window is hidden; each time it's back (the bar summoned),
-    // the text starts over from rest rather than mid-scroll.
+    // The lap stops when the bar loses focus (it's hidden); each time it's back (the bar
+    // summoned), the text starts over from rest rather than mid-scroll.
+    window.addEventListener('blur', pause);
     window.addEventListener('focus', restart);
     document.addEventListener('visibilitychange', restart);
   });
@@ -66,6 +72,7 @@
     lap?.cancel();
     observer?.disconnect();
     still.removeEventListener('change', update);
+    window.removeEventListener('blur', pause);
     window.removeEventListener('focus', restart);
     document.removeEventListener('visibilitychange', restart);
   });

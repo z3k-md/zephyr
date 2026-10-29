@@ -1,5 +1,5 @@
 <script setup lang="ts">
-  import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+  import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue';
   import RowIcon from './RowIcon.vue';
   import { GLYPHS } from './glyphs';
   import { vTip } from '../tip';
@@ -97,7 +97,8 @@
   const inputEl = ref<HTMLInputElement | null>(null);
   const filter = ref(props.initialFilter ?? '');
   const sort = ref<ResourceSort>('cpu');
-  const data = ref<ResourceSnapshot | null>(null);
+  // Replaced whole each tick, never edited, so it needs no deep tracking.
+  const data = shallowRef<ResourceSnapshot | null>(null);
   const rows = ref<ResourceRow[]>([]);
   const selectedKey = ref('');
   const shown = ref(Infinity);
@@ -176,7 +177,9 @@
     if (schedule) window.clearTimeout(timer);
     try {
       const started = performance.now();
-      const next = await resourcesSnapshot(sort.value, filter.value, 60);
+      // Only the rows that can show, and a few to spare for scrolling the selection.
+      const rowsWanted = Number.isFinite(shown.value) ? Math.min(60, shown.value + 5) : 60;
+      const next = await resourcesSnapshot(sort.value, filter.value, rowsWanted);
       if (ticket !== generation) return;
       data.value = next;
       apply(next.rows);
@@ -287,6 +290,14 @@
     }
   }
 
+  /** The list leaves command lines out, so this asks for the row's. */
+  async function copyCommand(row: ResourceRow) {
+    const found =
+      detail.value?.key === row.key ? detail.value : await resourcesDetail(row.key, row.pids);
+    if (found?.command) await copy(found.command, 'command');
+    else notice.value = `${row.name}'s command line needs administrator rights to read.`;
+  }
+
   async function copy(text: string, what: string) {
     try {
       await navigator.clipboard.writeText(text);
@@ -334,8 +345,8 @@
       },
       {
         label: 'Copy command',
-        disabled: row.command ? undefined : noPath,
-        run: () => copy(row.command, 'command'),
+        disabled: row.locked ? noPath : undefined,
+        run: () => copyCommand(row),
       },
     ];
     const nextRate = RATES[(RATES.indexOf(rate.value) + 1) % RATES.length];
@@ -513,7 +524,8 @@
     const runs: string[][] = [];
     let previous: number | null = null;
     for (const point of points) {
-      if (previous === null || previous - point.age > 3) runs.push([]);
+      // Points come a stretch apart (7.5 s); a wider gap is the computer asleep.
+      if (previous === null || previous - point.age > 12) runs.push([]);
       previous = point.age;
       const x = width - (Math.min(point.age, WINDOW) / WINDOW) * width;
       const y = height - 1 - Math.min(1, value(point) / top) * (height - 3);

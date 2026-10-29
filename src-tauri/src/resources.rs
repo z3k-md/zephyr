@@ -180,7 +180,8 @@ impl Identity {
             gpu: None,
             user: self.user.clone(),
             path: self.path.clone(),
-            command: self.command.clone(),
+            // Left out of the list; Show info reads it (`detail`).
+            command: String::new(),
             protected: PROTECTED
                 .iter()
                 .any(|protected| protected.eq_ignore_ascii_case(&self.name)),
@@ -301,7 +302,7 @@ pub fn snapshot(sort: &str, filter: &str, limit: usize) -> Snapshot {
     Snapshot {
         totals,
         cores: stats::cores(),
-        history: stats::history(),
+        history: stats::history_buckets(120),
         rows,
         processes,
         uptime: System::uptime(),
@@ -513,7 +514,10 @@ pub struct Detail {
     /// Bytes read and written since each process started, summed.
     pub read: u64,
     pub written: u64,
-    /// Oldest first: seconds ago, CPU %, memory bytes.
+    /// What it was started with; the list leaves this out to keep each tick small.
+    pub command: String,
+    /// Oldest first, in up to 120 stretches (each the highest in it): seconds ago, CPU %,
+    /// memory bytes.
     pub history: Vec<(f32, f32, u64)>,
 }
 
@@ -545,17 +549,42 @@ pub fn detail(key: &str, pids: &[u32]) -> Option<Detail> {
             .iter()
             .map(|process| process.disk_usage().total_written_bytes)
             .sum(),
+        command: pids
+            .iter()
+            .find_map(|pid| table.identities.get(pid))
+            .map(|identity| identity.command.clone())
+            .unwrap_or_default(),
         history: table
             .histories
             .get(key)
-            .map(|history| {
-                history
-                    .iter()
-                    .map(|(at, cpu, memory)| (at.elapsed().as_secs_f32(), *cpu, *memory))
-                    .collect()
-            })
+            .map(|history| buckets(history, 120))
             .unwrap_or_default(),
     })
+}
+
+/// A row's history in `count` stretches over the window, each the highest CPU and memory in
+/// it at its newest reading's age; empty stretches are left out.
+fn buckets(history: &VecDeque<(Instant, f32, u64)>, count: usize) -> Vec<(f32, f32, u64)> {
+    let window = HISTORY.as_secs_f32();
+    let span = window / count.max(1) as f32;
+    let mut found: Vec<Option<(f32, f32, u64)>> = vec![None; count];
+    for (at, cpu, memory) in history {
+        let age = at.elapsed().as_secs_f32();
+        let index = ((window - age) / span).floor();
+        if index < 0.0 {
+            continue;
+        }
+        let slot = &mut found[(index as usize).min(count - 1)];
+        *slot = Some(match *slot {
+            None => (age, *cpu, *memory),
+            Some((kept_age, kept_cpu, kept_memory)) => (
+                kept_age.min(age),
+                kept_cpu.max(*cpu),
+                kept_memory.max(*memory),
+            ),
+        });
+    }
+    found.into_iter().flatten().collect()
 }
 
 /// The battery, read at most every 30 seconds.

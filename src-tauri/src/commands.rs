@@ -144,9 +144,14 @@ fn start_private(
     Ok(DispatchOutcome::Launched { app_id: target.id })
 }
 
-fn remember_launch(app: &AppHandle, state: &AppState, app_id: &str) {
-    record(app, state, "the launch", |persisted| {
-        persisted.record_launch(app_id, now_secs())
+/// Saves the launch on a thread of its own: the write (with its retries) shouldn't hold up the
+/// bar, which has already hidden.
+fn remember_launch(app: &AppHandle, _state: &AppState, app_id: &str) {
+    let (app, app_id) = (app.clone(), app_id.to_string());
+    std::thread::spawn(move || {
+        record(&app, &app.state::<AppState>(), "the launch", |persisted| {
+            persisted.record_launch(&app_id, now_secs())
+        });
     });
 }
 
@@ -213,12 +218,12 @@ fn open_setting_page(app: &AppHandle, setting_id: &str) -> Result<DispatchOutcom
 }
 
 #[tauri::command]
-pub fn open_file(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    path: String,
-) -> Result<DispatchOutcome, String> {
-    open_file_path(&app, &state, &path)
+pub async fn open_file(app: AppHandle, path: String) -> Result<DispatchOutcome, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        open_file_path(&app, &app.state::<AppState>(), &path)
+    })
+    .await
+    .map_err(|err| err.to_string())?
 }
 
 /// Only paths the bar could have shown are opened: indexed ones and ones opened before.
@@ -319,6 +324,7 @@ pub async fn resources_snapshot(
     filter: String,
     limit: usize,
 ) -> Result<crate::resources::Snapshot, String> {
+    crate::stats::set_resources_open(true);
     tauri::async_runtime::spawn_blocking(move || {
         crate::resources::snapshot(&sort, &filter, limit.clamp(1, 200))
     })
@@ -329,6 +335,7 @@ pub async fn resources_snapshot(
 /// The view closed; its process table goes after half a minute unless it reopens.
 #[tauri::command]
 pub fn resources_closed() {
+    crate::stats::set_resources_open(false);
     std::thread::spawn(|| {
         std::thread::sleep(std::time::Duration::from_secs(31));
         crate::resources::idle();
@@ -396,8 +403,10 @@ pub fn save_launch_groups(
 
 /// Opens everything in a launch group; the bar closes at once.
 #[tauri::command]
-pub fn launch_group(app: AppHandle, id: String) -> Result<(), String> {
-    crate::launch_groups::launch(&app, &id)
+pub async fn launch_group(app: AppHandle, id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || crate::launch_groups::launch(&app, &id))
+        .await
+        .map_err(|err| err.to_string())?
 }
 
 /// Installed apps matching `text` as the bar ranks them, for Settings' app picker; with no
@@ -1082,15 +1091,19 @@ pub fn power_preview(query: String) -> Option<crate::power::Preview> {
 
 /// Runs a power action now, or schedules it for `at` (unix seconds).
 #[tauri::command]
-pub fn power_run(
+pub async fn power_run(
     app: AppHandle,
     action: crate::power::Action,
     at: Option<i64>,
 ) -> Result<(), String> {
-    if at.is_none() {
-        window::hide_bar(&app);
-    }
-    crate::power::run(&app, action, at)
+    tauri::async_runtime::spawn_blocking(move || {
+        if at.is_none() {
+            window::hide_bar(&app);
+        }
+        crate::power::run(&app, action, at)
+    })
+    .await
+    .map_err(|err| err.to_string())?
 }
 
 #[tauri::command]
@@ -1100,7 +1113,13 @@ pub fn power_cancel(app: AppHandle) {
 
 /// Opens a web address (a bookmark) in the default browser and closes the bar.
 #[tauri::command]
-pub fn open_url(app: AppHandle, url: String) -> Result<(), String> {
+pub async fn open_url(app: AppHandle, url: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || open_url_now(&app, url))
+        .await
+        .map_err(|err| err.to_string())?
+}
+
+fn open_url_now(app: &AppHandle, url: String) -> Result<(), String> {
     if !(url.starts_with("https://") || url.starts_with("http://")) {
         return Err("Only web addresses open from here".into());
     }
@@ -1109,7 +1128,7 @@ pub fn open_url(app: AppHandle, url: String) -> Result<(), String> {
     // extension can still catch (or which simply redirects without it).
     let found = crate::browser::focus(&url);
     if found == Some(true) {
-        window::hide_bar(&app);
+        window::hide_bar(app);
         return Ok(());
     }
     let port = crate::handoff::port();
@@ -1124,7 +1143,7 @@ pub fn open_url(app: AppHandle, url: String) -> Result<(), String> {
     app.opener()
         .open_url(&target, None::<&str>)
         .map_err(|err| err.to_string())?;
-    window::hide_bar(&app);
+    window::hide_bar(app);
     Ok(())
 }
 
@@ -1220,23 +1239,27 @@ pub fn shell_stop(id: u64) {
 }
 
 #[tauri::command]
-pub fn shell_open_terminal(
+pub async fn shell_open_terminal(
     app: AppHandle,
-    state: State<'_, AppState>,
     command: String,
     dir: Option<String>,
 ) -> Result<(), String> {
-    let settings = state.snapshot()?.shell.clone();
-    shell::open_in_terminal(&settings, &command, dir.as_deref())?;
-    if !command.trim().is_empty() {
-        let snapshot = state.update(|persisted| {
-            persisted.shell.record(&command);
-            Ok(())
-        })?;
-        publish(&app, snapshot)?;
-    }
-    window::hide_bar(&app);
-    Ok(())
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let settings = state.snapshot()?.shell.clone();
+        shell::open_in_terminal(&settings, &command, dir.as_deref())?;
+        if !command.trim().is_empty() {
+            let snapshot = state.update(|persisted| {
+                persisted.shell.record(&command);
+                Ok(())
+            })?;
+            publish(&app, snapshot)?;
+        }
+        window::hide_bar(&app);
+        Ok(())
+    })
+    .await
+    .map_err(|err| err.to_string())?
 }
 
 /// Async because finding WSL or Git Bash runs programs on Windows, which would otherwise
@@ -1546,7 +1569,7 @@ pub fn run_binding(app: &AppHandle, target: &str) {
                 .map_err(|err| err.to_string())
         }
         ("app", id) => launch(app, &app.state::<AppState>(), id).map(|_| ()),
-        ("bookmark", url) => open_url(app.clone(), url.to_string()),
+        ("bookmark", url) => open_url_now(app, url.to_string()),
         ("group", id) => crate::launch_groups::launch(app, id),
         ("setting", id) => open_setting_page(app, id).map(|_| ()),
         _ => Err(format!("Nothing to run for {target}")),
@@ -1746,14 +1769,20 @@ pub fn quick_look(state: State<'_, AppState>, path: String) -> Result<(), String
 
 /// The connection's grade, numbers and sparkline, for the bar's network card and footer.
 #[tauri::command]
-pub fn network_summary() -> Option<crate::net::Summary> {
-    crate::net::summary()
+pub async fn network_summary() -> Option<crate::net::Summary> {
+    tauri::async_runtime::spawn_blocking(crate::net::summary)
+        .await
+        .ok()
+        .flatten()
 }
 
 /// The last 15 minutes in detail, for the Network view.
 #[tauri::command]
-pub fn network_history() -> Option<crate::net::History> {
-    crate::net::history()
+pub async fn network_history() -> Option<crate::net::History> {
+    tauri::async_runtime::spawn_blocking(crate::net::history)
+        .await
+        .ok()
+        .flatten()
 }
 
 /// The address the internet sees, fetched while the IP card or Network view shows.
@@ -1821,14 +1850,19 @@ pub fn network_addresses() -> Vec<NetworkAddress> {
 
 /// Show info for one Resources row.
 #[tauri::command]
-pub fn resources_detail(key: String, pids: Vec<u32>) -> Option<crate::resources::Detail> {
-    crate::resources::detail(&key, &pids)
+pub async fn resources_detail(key: String, pids: Vec<u32>) -> Option<crate::resources::Detail> {
+    tauri::async_runtime::spawn_blocking(move || crate::resources::detail(&key, &pids))
+        .await
+        .ok()
+        .flatten()
 }
 
 /// The CPU drill-in: each logical processor over the last 15 minutes.
 #[tauri::command]
-pub fn resources_cores() -> crate::stats::CoreHeat {
-    crate::stats::core_heat()
+pub async fn resources_cores() -> Result<crate::stats::CoreHeat, String> {
+    tauri::async_runtime::spawn_blocking(crate::stats::core_heat)
+        .await
+        .map_err(|err| err.to_string())
 }
 
 /// The Memory drill-in.

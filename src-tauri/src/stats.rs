@@ -69,6 +69,8 @@ struct Sampler {
     /// The CPU and GPU temperatures and when they were read: every other second is plenty,
     /// and a read walks a few dozen sensors.
     temps: Option<(Instant, Temps)>,
+    /// Windows: each process's GPU load from the last read, for Resources' GPU column.
+    gpu_by_process: std::collections::HashMap<u32, f32>,
 }
 
 /// The hottest CPU and GPU sensors, in °C.
@@ -112,12 +114,63 @@ pub fn history() -> Vec<Point> {
         .collect()
 }
 
+/// The history in `count` stretches, oldest first, each the highest of every reading in it
+/// (so a spike survives) at the newest one's age. A stretch with no reading (asleep) is left
+/// out, so the gap shows. 120 of them draw the same sparkline as 900 points, for an eighth of
+/// what crosses to the page.
+pub fn history_buckets(count: usize) -> Vec<Point> {
+    let span = WINDOW.as_secs_f32() / count.max(1) as f32;
+    let mut buckets: Vec<Option<Point>> = vec![None; count];
+    for point in history() {
+        let index = ((WINDOW.as_secs_f32() - point.age) / span).floor();
+        let Some(slot) = (index >= 0.0)
+            .then_some(index as usize)
+            .and_then(|index| buckets.get_mut(index.min(count - 1)))
+        else {
+            continue;
+        };
+        *slot = Some(match *slot {
+            None => point,
+            Some(kept) => Point {
+                age: kept.age.min(point.age),
+                cpu: kept.cpu.max(point.cpu),
+                memory: kept.memory.max(point.memory),
+                gpu: kept.gpu.max(point.gpu),
+                down: kept.down.max(point.down),
+                up: kept.up.max(point.up),
+            },
+        });
+    }
+    buckets.into_iter().flatten().map(Point::rounded).collect()
+}
+
+impl Point {
+    /// Trimmed to what a sparkline can show, which roughly halves the JSON.
+    fn rounded(self) -> Point {
+        let tenth = |value: f32| (value * 10.0).round() / 10.0;
+        Point {
+            age: tenth(self.age),
+            cpu: tenth(self.cpu),
+            memory: (self.memory * 1000.0).round() / 1000.0,
+            gpu: tenth(self.gpu),
+            ..self
+        }
+    }
+}
+
 /// How often the thread reads while the bar shows, so the footer's meters move smoothly.
 const EVERY_SHOWN: Duration = Duration::from_millis(500);
 /// The shortest gap between reads: CPU use over less means little.
 const AT_LEAST: Duration = Duration::from_millis(250);
 
 static BAR_VISIBLE: AtomicBool = AtomicBool::new(false);
+/// Whether System Resources is open, which reads the full set even with the bar hidden.
+static RESOURCES_OPEN: AtomicBool = AtomicBool::new(false);
+
+pub fn set_resources_open(open: bool) {
+    RESOURCES_OPEN.store(open, Ordering::SeqCst);
+}
+
 static THREAD: OnceLock<std::thread::Thread> = OnceLock::new();
 
 /// Called as the bar shows and hides. Showing wakes the thread, so the footer gets a fresh
@@ -143,10 +196,7 @@ pub fn start(app: AppHandle) {
             }
             last = Instant::now();
             let visible = BAR_VISIBLE.load(Ordering::SeqCst);
-            let reading = SAMPLER
-                .lock()
-                .ok()
-                .map(|mut guard| record(guard.get_or_insert_with(Sampler::new)));
+            let reading = tick(visible || RESOURCES_OPEN.load(Ordering::SeqCst));
             if visible && let Some(stats) = reading {
                 let _ = app.emit_to("main", "stats", stats);
             }
@@ -190,14 +240,14 @@ pub fn sample() -> Stats {
 
 /// The latest reading, without the dev build's own use, which walks every process.
 pub fn totals() -> Stats {
-    let Ok(mut guard) = SAMPLER.lock() else {
+    let Ok(guard) = SAMPLER.lock() else {
         return empty();
     };
-    let sampler = guard.get_or_insert_with(Sampler::new);
-    match &sampler.latest {
-        Some(stats) => stats.clone(),
-        None => record(sampler),
+    if let Some(stats) = guard.as_ref().and_then(|sampler| sampler.latest.clone()) {
+        return stats;
     }
+    drop(guard);
+    tick(true).unwrap_or_else(empty)
 }
 
 impl Sampler {
@@ -215,6 +265,7 @@ impl Sampler {
             cores: std::collections::VecDeque::new(),
             app: None,
             temps: None,
+            gpu_by_process: std::collections::HashMap::new(),
         }
     }
 }
@@ -231,9 +282,32 @@ fn recent_app_usage(sampler: &mut Sampler) -> AppUsage {
     usage
 }
 
+/// One reading. The GPU's counters (a couple of milliseconds) are read with the reader taken
+/// out of the sampler, so nothing waits on the lock meanwhile. `full` is false while the bar
+/// is hidden and Resources closed: then only what the history keeps is read.
+fn tick(full: bool) -> Option<Stats> {
+    let mut reader = SAMPLER
+        .lock()
+        .ok()?
+        .get_or_insert_with(Sampler::new)
+        .gpu
+        .take();
+    let gpu = reader.as_mut().and_then(crate::gpu::Reader::read);
+    let mut guard = SAMPLER.lock().ok()?;
+    let sampler = guard.get_or_insert_with(Sampler::new);
+    #[cfg(windows)]
+    if let Some(reader) = reader.as_ref() {
+        sampler.gpu_by_process = reader.by_process();
+    }
+    if sampler.gpu.is_none() {
+        sampler.gpu = reader;
+    }
+    Some(record(sampler, gpu, full))
+}
+
 /// Reads the totals and adds them to the history, a point a second. CPU usage and network
 /// rates compare against the previous reading, so the very first reads them as zero.
-fn record(sampler: &mut Sampler) -> Stats {
+fn record(sampler: &mut Sampler, gpu: Option<crate::gpu::Gpu>, full: bool) -> Stats {
     sampler.system.refresh_cpu_usage();
     sampler.system.refresh_memory();
     sampler.networks.refresh(true);
@@ -241,23 +315,35 @@ fn record(sampler: &mut Sampler) -> Stats {
     sampler.last = Instant::now();
 
     let mount = system_mount();
+    // Free space and temperatures only show on screen, so a hidden tick keeps the last ones.
+    let previous = sampler.latest.as_ref().map(|stats| {
+        (
+            stats.disk_free,
+            stats.disk_total,
+            stats.cpu_temp,
+            stats.gpu_temp,
+            stats.network,
+        )
+    });
     let disk = sampler
         .disks
         .list_mut()
         .iter_mut()
         .find(|disk| disk.mount_point() == Path::new(&mount));
-    let (disk_free, disk_total) = match disk {
-        Some(disk) => {
+    let (disk_free, disk_total) = match (disk, previous) {
+        (_, Some((free, total, ..))) if !full => (free, total),
+        (Some(disk), _) => {
             disk.refresh();
             (disk.available_space(), disk.total_space())
         }
-        None => (0, 0),
+        (None, _) => (0, 0),
     };
     let (down, up) = throughput(&sampler.networks);
-    let gpu = sampler.gpu.as_mut().and_then(crate::gpu::Reader::read);
     // Windows: the GPU's from its driver, the CPU's from the PawnIO helper (cputemp.rs).
     // macOS: both from the SMC (temps.rs), read at most every two seconds.
-    let (cpu_temp, gpu_temp) = if cfg!(windows) {
+    let (cpu_temp, gpu_temp) = if let (false, Some((_, _, cpu, gpu, _))) = (full, previous) {
+        (cpu, gpu)
+    } else if cfg!(windows) {
         (
             crate::cputemp::read(),
             gpu.as_ref().and_then(|gpu| gpu.temperature),
@@ -283,7 +369,11 @@ fn record(sampler: &mut Sampler) -> Stats {
         gpu,
         cpu_temp,
         gpu_temp,
-        network: crate::net::alert(),
+        network: if full {
+            crate::net::alert()
+        } else {
+            previous.and_then(|(.., network)| network)
+        },
         app: None,
     };
     while sampler
@@ -395,13 +485,11 @@ pub fn core_heat() -> CoreHeat {
 
 /// Windows: each process's GPU load (its busiest engine), 0–100. Empty elsewhere.
 pub fn gpu_by_process() -> std::collections::HashMap<u32, f32> {
-    #[cfg(windows)]
-    if let Ok(guard) = SAMPLER.lock()
-        && let Some(reader) = guard.as_ref().and_then(|sampler| sampler.gpu.as_ref())
-    {
-        return reader.by_process();
-    }
-    std::collections::HashMap::new()
+    SAMPLER
+        .lock()
+        .ok()
+        .and_then(|guard| guard.as_ref().map(|sampler| sampler.gpu_by_process.clone()))
+        .unwrap_or_default()
 }
 /// Bytes moved since the last refresh on one interface: the one the internet goes through,
 /// or without the monitor the busiest real one. Summing them all counts a VPN's traffic twice

@@ -761,6 +761,7 @@
         hiddenAtWall = Date.now();
         resourcesView.value?.stop();
         networkView.value?.stop();
+        typingView.value?.pause();
       })
     );
     unlistens.push(await listen<SystemStats>('stats', (event) => takeStats(event.payload)));
@@ -778,8 +779,7 @@
         void focusInput();
       })
     );
-    void loadDevices();
-    devicePoll = window.setInterval(() => void loadDevices(), DEVICE_POLL_MS);
+    void loadDevices(true);
     unlistens.push(await listen('clipboard-shown', () => openClip('')));
     // A hotkey the user gave a mode or scoped search (Settings > Shortcuts).
     unlistens.push(
@@ -840,20 +840,20 @@
   // Timers that only matter while the bar shows: the countdown clock, the check for computers
   // asking to join sync, and what's-playing's clock. They stop while it's hidden.
   const DEVICE_POLL_MS = 60000;
+  let timersRunning = true;
   function pauseTimers() {
+    timersRunning = false;
     window.clearInterval(clockTimer);
-    window.clearInterval(devicePoll);
-    window.clearInterval(clockTimer);
-    window.removeEventListener('blur', onBlur);
     clockTimer = 0;
-    devicePoll = 0;
+    pollDevices();
     media.pause();
   }
 
   function resumeTimers() {
     clock.value = Date.now();
     if (!clockTimer) clockTimer = window.setInterval(() => (clock.value = Date.now()), 15000);
-    if (!devicePoll) devicePoll = window.setInterval(() => void loadDevices(), DEVICE_POLL_MS);
+    timersRunning = true;
+    pollDevices();
     media.resume();
   }
   onUnmounted(() => {
@@ -993,11 +993,30 @@
     }
   }
 
-  async function loadDevices() {
+  // Computers asking to join sync: asked on a summon at most every five minutes while none
+  // are waiting, and every minute while one is (so its card goes once it's answered elsewhere).
+  const DEVICE_CHECK_MS = 5 * 60 * 1000;
+  let devicesCheckedAt = 0;
+  async function loadDevices(force = false) {
+    const recent = Date.now() - devicesCheckedAt < DEVICE_CHECK_MS;
+    if (!force && recent && devicesWaiting.value.length === 0) return;
+    devicesCheckedAt = Date.now();
     try {
       devicesWaiting.value = await syncPending();
     } catch {
       devicesWaiting.value = [];
+    }
+    pollDevices();
+  }
+
+  /** The minute's check runs only while a computer is waiting and the bar shows. */
+  function pollDevices() {
+    const wanted = timersRunning && devicesWaiting.value.length > 0;
+    if (wanted && !devicePoll) {
+      devicePoll = window.setInterval(() => void loadDevices(true), DEVICE_POLL_MS);
+    } else if (!wanted && devicePoll) {
+      window.clearInterval(devicePoll);
+      devicePoll = 0;
     }
   }
 
@@ -1012,7 +1031,7 @@
     try {
       if (decision === 'allow') await syncApprove(device.id);
       else await syncRevoke(device.id);
-      await loadDevices();
+      await loadDevices(true);
     } catch (error) {
       notice.value = errorMessage(error);
     } finally {

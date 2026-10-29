@@ -81,7 +81,7 @@
       <RowIcon :icon="row.icon" :label="row.name" :size="32" />
       <div class="res-detail-title">
         <b>{{ row.name }}</b>
-        <span>{{ row.path || row.command || 'Path needs administrator rights' }}</span>
+        <span>{{ row.path || detail?.command || 'Path needs administrator rights' }}</span>
       </div>
       <button type="button" class="chip" @mousedown.prevent @click="emit('close')">
         <Keys keys="shift+space" small /> Close

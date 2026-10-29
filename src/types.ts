@@ -605,6 +605,8 @@ export interface ResourceDetail {
   started: number;
   read: number;
   written: number;
+  /** What it was started with; empty where it can't be read. */
+  command: string;
   /** Oldest first: seconds ago, CPU %, memory bytes. */
   history: [number, number, number][];
 }
