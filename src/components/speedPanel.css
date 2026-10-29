@@ -1,0 +1,75 @@
+.speed-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--stroke);
+  border-radius: 10px;
+  background: var(--panel);
+}
+
+.speed-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.speed-panel-bar {
+  position: relative;
+  flex: 1;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.speed-panel-bar span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 2px;
+  background: var(--active);
+  transition: width 240ms linear;
+}
+
+.speed-panel-main {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.speed-panel-main > b {
+  color: var(--fg);
+  font-size: 24px;
+  font-weight: 600;
+}
+
+.speed-panel-main > span {
+  margin-left: auto;
+}
+
+/* The bufferbloat grade, with its explanation on hover. */
+.speed-panel-grade {
+  cursor: help;
+}
+
+.speed-panel-grade b {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.speed-panel-grade.grade-C b {
+  color: var(--warn);
+}
+
+.speed-panel-grade.grade-D b {
+  color: var(--bad);
+}
+
+.speed-panel-sub {
+  color: var(--muted);
+  font-size: 12px;
+}

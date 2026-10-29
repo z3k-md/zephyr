@@ -2183,58 +2183,9 @@ button.res-tile:hover {
   color: var(--bad);
 }
 
-.net-speed {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+/* The speed test panel (components/SpeedPanel.vue), inset like the hop table. */
+.network > .speed-panel {
   margin: 6px 16px;
-  padding: 12px 14px;
-  border: 1px solid var(--stroke);
-  border-radius: 10px;
-  background: var(--panel);
-}
-
-.net-speed-head {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.net-speed-bar {
-  position: relative;
-  flex: 1;
-  height: 4px;
-  overflow: hidden;
-  border-radius: 2px;
-  background: rgba(255, 255, 255, 0.1);
-}
-
-.net-speed-bar span {
-  position: absolute;
-  inset: 0 auto 0 0;
-  border-radius: 2px;
-  background: var(--active);
-  transition: width 240ms linear;
-}
-
-.net-speed-main {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  color: var(--muted);
-  font-size: 13px;
-}
-
-.net-speed-main b {
-  color: var(--fg);
-  font-size: 24px;
-  font-weight: 600;
-}
-
-.net-speed-main span {
-  margin-left: auto;
 }
 
 /* The footer's chip: amber while the line is slow or dropping, red offline. */

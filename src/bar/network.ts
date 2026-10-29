@@ -42,16 +42,44 @@ export function note(summary: NetworkSummary): string {
   return rest || (summary.grade === 'good' ? 'Steady, no drops' : summary.verdict);
 }
 
-/** "412↓ / 38↑ Mb/s, bloat B". */
+/** "412↓ / 38↑ Mb/s, lag under load B (good)". */
 export function speedLine(result: SpeedResult): string {
-  return `${mbps(result.downMbps)}↓ / ${mbps(result.upMbps)}↑ Mb/s, bloat ${result.bloat}`;
+  const lag = BLOAT_WORDS[result.bloat]
+    ? `lag under load ${result.bloat} (${bloatWord(result.bloat)})`
+    : 'lag under load not measured';
+  return `${mbps(result.downMbps)}↓ / ${mbps(result.upMbps)}↑ Mb/s, ${lag}`;
 }
+
+/**
+ * The bufferbloat grade in words. The test grades how much the ping grows while the line is
+ * busy downloading or uploading (see bloat_grade in net/speed.rs).
+ */
+const BLOAT_WORDS: Record<string, string> = {
+  A: 'excellent',
+  B: 'good',
+  C: 'noticeable',
+  D: 'poor',
+};
+
+export function bloatWord(grade: string): string {
+  return BLOAT_WORDS[grade] ?? 'not measured';
+}
+
+export const BLOAT_TIP = [
+  'How much slower the connection reacts while it is busy (known as bufferbloat).',
+  'When it is high, calls and games stutter while something downloads.',
+  '',
+  'A  under 30 ms extra · B  under 60 ms',
+  'C  under 200 ms · D  200 ms or more',
+  '',
+  'C or D: turn on Smart Queue (SQM, fq_codel or CAKE) on your router.',
+].join('\n');
 
 export function mbps(value: number): string {
   return value < 10 ? value.toFixed(1) : String(Math.round(value));
 }
 
-/** "Last test 12 min ago: 412↓ / 38↑ Mb/s, bloat B". */
+/** "Last test 12 min ago: 412↓ / 38↑ Mb/s, lag under load B (good)". */
 export function lastTestLine(result: SpeedResult | null | undefined): string {
   if (!result) return '';
   return `Last test ${ago(result.at / 1000)}: ${speedLine(result)}`;

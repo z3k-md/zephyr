@@ -1,31 +1,23 @@
 <script setup lang="ts">
   import { computed, onMounted, onUnmounted, ref } from 'vue';
-  import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { GLYPHS } from './glyphs';
   import { vTip } from '../tip';
   import { bytes, elapsed } from '../format';
   import { usePoll } from '../poll';
   import KeyHints from '../components/KeyHints.vue';
   import ActionMenu from '../components/ActionMenu.vue';
+  import SpeedPanel from '../components/SpeedPanel.vue';
   import { MENU_HINTS, useActionMenu, type MenuAction } from '../components/actionMenu';
-  import {
-    errorMessage,
-    networkAddresses,
-    networkHistory,
-    networkPublicIp,
-    openUrl,
-    speedTest,
-    speedTestCancel,
-  } from '../api';
+  import { errorMessage, networkAddresses, networkHistory, networkPublicIp, openUrl } from '../api';
   import type {
     HopStats,
     NetworkAddress,
     NetworkBucket,
     NetworkHistory,
-    SpeedProgress,
     SpeedResult,
   } from '../types';
-  import { GRADE_NAMES, lastTestLine, lossText, mbps, ms, speedLine } from './network';
+  import { GRADE_NAMES, lastTestLine, lossText, ms, speedLine } from './network';
+  import { useSpeedTest } from '../speedTest';
 
   // The Network view: how the connection has been over the last 15 minutes. A verdict, this
   // computer's addresses, a chart of latency (median and p95), loss and throughput, and the
@@ -48,27 +40,15 @@
   const live = ref(false);
 
   /** The speed test: running with its latest reading, or finished with its result. */
-  const testing = ref<SpeedProgress | null>(null);
-  const testRunning = ref(false);
-  const result = ref<SpeedResult | null>(null);
-
-  let unlisten: UnlistenFn | null = null;
+  const speed = useSpeedTest();
+  const { running: testRunning, testing, result } = speed;
 
   // The history every second and the public address every 30, while live.
   const history = usePoll(tick, 1000, live);
   const publicAddress = usePoll(loadPublic, 30000, live);
 
-  onMounted(async () => {
-    start();
-    unlisten = await listen<SpeedProgress>('speed-test', (event) => {
-      if (testRunning.value) testing.value = event.payload;
-    });
-  });
-
-  onUnmounted(() => {
-    stop();
-    unlisten?.();
-  });
+  onMounted(start);
+  onUnmounted(stop);
 
   /** Refreshes while the bar shows; the bar stops it when it hides. */
   function start() {
@@ -320,48 +300,15 @@
     ];
   });
 
-  const PHASES: Record<SpeedProgress['phase'], string> = {
-    ping: 'Measuring idle ping',
-    download: 'Download',
-    upload: 'Upload',
-  };
-
   async function runSpeedTest() {
     if (testRunning.value) return;
     actionsOpen.value = false;
     notice.value = null;
-    result.value = null;
-    testRunning.value = true;
-    testing.value = { phase: 'ping', mbps: null, ping: null, done: 0 };
-    try {
-      result.value = await speedTest();
-    } catch (error) {
-      const message = errorMessage(error);
-      if (message !== 'Cancelled') notice.value = message;
-    } finally {
-      testRunning.value = false;
-      testing.value = null;
-    }
+    const error = await speed.run();
+    if (error) notice.value = error;
   }
 
-  function cancelSpeedTest() {
-    void speedTestCancel().catch(() => undefined);
-  }
-
-  const shownResult = computed(() => result.value);
-  const resultDetail = computed(() => {
-    const done = shownResult.value;
-    if (!done) return '';
-    const loaded = Math.max(done.downMs ?? 0, done.upMs ?? 0);
-    const added = done.idleMs !== null && loaded ? Math.max(0, loaded - done.idleMs) : null;
-    return [
-      done.idleMs !== null ? `Idle ping ${ms(done.idleMs)} ms` : '',
-      added !== null ? `+${Math.round(added)} ms when busy` : '',
-      `bloat ${done.bloat}`,
-    ]
-      .filter(Boolean)
-      .join(' · ');
-  });
+  const cancelSpeedTest = speed.cancel;
 
   async function copy(text: string, what: string) {
     try {
@@ -592,25 +539,7 @@
         <div v-if="tip" class="net-tip" :style="{ left: tip.left }">{{ tip.text }}</div>
       </div>
 
-      <div v-if="testing || shownResult" class="net-speed" aria-live="polite">
-        <template v-if="testing">
-          <div class="net-speed-head">
-            <span>{{ PHASES[testing.phase] }}</span>
-            <span class="net-speed-bar"><span :style="{ width: `${testing.done * 100}%` }" /></span>
-          </div>
-          <div class="net-speed-main">
-            <b>{{ testing.mbps !== null ? mbps(testing.mbps) : '—' }}</b> Mb/s
-            <span>ping {{ ms(testing.ping) }} ms</span>
-          </div>
-        </template>
-        <template v-else-if="shownResult">
-          <div class="net-speed-head"><span>Speed test</span></div>
-          <div class="net-speed-main">
-            <b>{{ mbps(shownResult.downMbps) }}</b> ↓ <b>{{ mbps(shownResult.upMbps) }}</b> ↑ Mb/s
-            <span>{{ resultDetail }}</span>
-          </div>
-        </template>
-      </div>
+      <SpeedPanel v-if="testing || result" :testing="testing" :result="result" />
       <div v-else class="net-hops" role="table" aria-label="Hops">
         <div class="h" role="columnheader">Hop</div>
         <div class="h num" role="columnheader">Now</div>
@@ -643,9 +572,7 @@
 
     <footer class="footer">
       <KeyHints :hints="actionsOpen ? MENU_HINTS : testRunning ? TEST_HINTS : LIST_HINTS" />
-      <span v-if="props.lastSpeed && !testing && !shownResult">{{
-        lastTestLine(props.lastSpeed)
-      }}</span>
+      <span v-if="props.lastSpeed && !testing && !result">{{ lastTestLine(props.lastSpeed) }}</span>
     </footer>
   </div>
 </template>

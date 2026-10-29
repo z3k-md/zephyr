@@ -23,7 +23,6 @@
     saveWatchConnection,
     saveCpuTemp,
     cpuTempStatus,
-    speedTest,
     openOnboarding,
     hideSettings,
     windowChrome,
@@ -51,6 +50,8 @@
   import Keys from '../components/Keys.vue';
   import ShortcutRecorder from '../components/ShortcutRecorder.vue';
   import InfoTip from '../components/InfoTip.vue';
+  import SpeedPanel from '../components/SpeedPanel.vue';
+  import { useSpeedTest } from '../speedTest';
   import { vTip } from '../tip';
   import ShortcutsSection from './ShortcutsSection.vue';
   import BootChoice from './BootChoice.vue';
@@ -581,19 +582,14 @@
     if (snapshot.value) await save(saveWatchConnection(!snapshot.value.watchConnection));
   }
 
-  // The speed test from Settings: the result lands in the state, and so on this page.
-  const speedRunning = ref(false);
+  // The speed test from Settings, shown as it runs like in the Network view. The result also
+  // lands in the state, so the last-test line below updates too.
+  const speed = useSpeedTest();
+  const { running: speedRunning, testing: speedTesting, result: speedResult } = speed;
   const speedError = ref('');
   async function runSpeed() {
-    speedRunning.value = true;
     speedError.value = '';
-    try {
-      await speedTest();
-    } catch (error) {
-      speedError.value = errorMessage(error);
-    } finally {
-      speedRunning.value = false;
-    }
+    speedError.value = await speed.run();
   }
 
   async function toggleBugCapture() {
@@ -1083,7 +1079,12 @@
         </label>
         <div class="speed-field">
           <span class="speed-text">
-            <b>Speed test</b>
+            <b>
+              Speed test
+              <InfoTip
+                text="Download and upload speed, and how much slower the connection reacts while busy (bufferbloat). About 15 seconds, up to 250 MB."
+              />
+            </b>
             <span class="hint-text">
               {{
                 speedRunning
@@ -1093,8 +1094,10 @@
               }}
             </span>
           </span>
-          <button type="button" :disabled="speedRunning" @click="runSpeed">Run speed test</button>
+          <button v-if="speedRunning" type="button" @click="speed.cancel">Cancel</button>
+          <button v-else type="button" @click="runSpeed">Run speed test</button>
         </div>
+        <SpeedPanel :testing="speedTesting" :result="speedResult" />
       </section>
 
       <section v-if="snapshot" v-show="!search && active === 'terminal'" id="section-terminal">

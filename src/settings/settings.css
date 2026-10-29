@@ -48,6 +48,10 @@
   font-size: 12.5px;
 }
 
+.speed-field + .speed-panel {
+  margin: -6px 0 18px;
+}
+
 /* ---- Sync ---- */
 
 .recovery-key {

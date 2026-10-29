@@ -40,7 +40,8 @@ pub struct SpeedResult {
     pub bloat: String,
 }
 
-/// Where a running test is, sent as "speed-test" events to the bar.
+/// Where a running test is, sent as "speed-test" events to every window (the bar and Settings
+/// both show it).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Progress {
@@ -133,13 +134,12 @@ enum Direction {
 }
 
 /// Pings 1.1.1.1 four times a second for `length` (or until told to stop), sending each
-/// to the bar when it's the only thing running.
+/// to whichever window ran the test when it's the only thing running.
 async fn pings(app: &AppHandle, phase: &'static str, length: Duration) -> Vec<f32> {
     let stop = Arc::new(AtomicBool::new(false));
     let app = app.clone();
     let found = ping_loop(stop.clone(), move |ping, elapsed| {
-        let _ = app.emit_to(
-            "main",
+        let _ = app.emit(
             "speed-test",
             Progress {
                 phase,
@@ -232,8 +232,7 @@ async fn phase(
             recent.pop_front();
         }
         let ping = latest_ping.load(Ordering::SeqCst);
-        let _ = app.emit_to(
-            "main",
+        let _ = app.emit(
             "speed-test",
             Progress {
                 phase: name,
