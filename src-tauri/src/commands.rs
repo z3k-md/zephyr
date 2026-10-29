@@ -376,10 +376,7 @@ pub async fn resources_snapshot(
 #[tauri::command]
 pub fn resources_closed() {
     crate::stats::set_resources_open(false);
-    std::thread::spawn(|| {
-        std::thread::sleep(std::time::Duration::from_secs(31));
-        crate::resources::idle();
-    });
+    crate::timer::after(std::time::Duration::from_secs(31), crate::resources::idle);
 }
 
 #[tauri::command]
@@ -930,7 +927,7 @@ pub fn clip_copy(app: AppHandle, id: u64) -> Result<(), String> {
     Ok(())
 }
 
-// These rewrite the encrypted history file, so they run off the main thread.
+// Off the main thread: these wait on the history, which can be busy loading.
 #[tauri::command]
 pub async fn clip_pin(id: u64, pinned: bool) -> Result<(), String> {
     blocking(move || clipboard::set_pinned(id, pinned)).await
