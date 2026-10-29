@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicIsize, Ordering};
 use std::time::Duration;
 
-use ::windows::Win32::Foundation::{CloseHandle, GlobalFree, HANDLE, HGLOBAL, HWND};
+use ::windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL, HWND};
 use ::windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, GetClipboardData, GetClipboardOwner,
     GetClipboardSequenceNumber, IsClipboardFormatAvailable, OpenClipboard,
@@ -14,15 +14,12 @@ use ::windows::Win32::System::DataExchange::{
 use ::windows::Win32::System::Memory::{
     GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock,
 };
-use ::windows::Win32::System::Threading::{
-    OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
-};
 use ::windows::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput,
     VIRTUAL_KEY, VK_CONTROL, VK_V,
 };
 use ::windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
-use ::windows::core::{PCWSTR, PWSTR};
+use ::windows::core::PCWSTR;
 
 use super::{Capture, Content, Platform};
 
@@ -76,8 +73,11 @@ impl Open {
         let global = HGLOBAL(handle.0);
         unsafe {
             let size = GlobalSize(global);
+            if size == 0 {
+                return None;
+            }
             let data = GlobalLock(global) as *const u8;
-            if data.is_null() || size == 0 {
+            if data.is_null() {
                 return None;
             }
             let bytes = std::slice::from_raw_parts(data, size).to_vec();
@@ -353,20 +353,7 @@ fn source() -> Option<(String, String)> {
     if pid == 0 {
         return None;
     }
-    let path = unsafe {
-        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
-        let mut buffer = [0u16; 1024];
-        let mut size = buffer.len() as u32;
-        let found = QueryFullProcessImageNameW(
-            process,
-            PROCESS_NAME_WIN32,
-            PWSTR(buffer.as_mut_ptr()),
-            &mut size,
-        );
-        let _ = CloseHandle(process);
-        found.ok()?;
-        String::from_utf16_lossy(&buffer[..size as usize])
-    };
+    let path = crate::util::process_path(pid)?;
     let path = Path::new(&path);
     let exe = path.file_name()?.to_string_lossy().into_owned();
     let name = path.file_stem()?.to_string_lossy().into_owned();
