@@ -1,6 +1,6 @@
 <script setup lang="ts">
   import { computed } from 'vue';
-  import type { NetworkSummary, SpeedResult, Suggestion } from '../types';
+  import type { NetworkSummary, SpeedResult, SuggestionRow } from '../types';
   import KeyHints from '../components/KeyHints.vue';
   import { GRADE_NAMES, headline, lastTestLine, ms, note, sparkPath } from './network';
 
@@ -8,7 +8,7 @@
   // Network view), and for "ip", where the local address leads (Enter copies it). Both draw
   // the last 15 minutes of latency at the right.
   const props = defineProps<{
-    row: Suggestion;
+    row: SuggestionRow;
     selected: boolean;
     summary: NetworkSummary | null;
     lastSpeed: SpeedResult | null;

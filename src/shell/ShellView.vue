@@ -155,7 +155,6 @@
   }
 
   // The run script's last line: the folder it ended in (shell.rs).
-  // eslint-disable-next-line no-control-regex
   const CWD_LINE = /\n?\x1e\x1eZCWD:([^\n]*)\n?/g;
 
   function endedIn(raw: string): string | null {
@@ -167,7 +166,6 @@
   function clean(raw: string): string {
     const plain = raw
       .replace(CWD_LINE, '')
-      // eslint-disable-next-line no-control-regex
       .replace(/\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '');
     return plain
       .replace(/\r\n/g, '\n')

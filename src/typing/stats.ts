@@ -6,7 +6,7 @@ export function wpm(chars: number, ms: number): number {
   return chars / 5 / (ms / 60000);
 }
 
-export interface Tally {
+interface Tally {
   /** Characters of correctly typed words, plus the spaces after them. */
   correctWordChars: number;
   /** Every character typed, spaces included. */

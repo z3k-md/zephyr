@@ -1,13 +1,13 @@
 <script setup lang="ts">
   import { computed } from 'vue';
-  import type { Suggestion } from '../types';
+  import type { SuggestionRow } from '../types';
   import RowIcon from './RowIcon.vue';
   import KeyHints from '../components/KeyHints.vue';
 
   // "port 3000": the process with the port open, as the list's first row. Enter shows it
   // in Resources; a quit waiting for its second Enter says so here.
   const props = defineProps<{
-    row: Suggestion;
+    row: SuggestionRow;
     selected: boolean;
     /** "Quit node?" while a quit waits for Enter. */
     confirm: string;

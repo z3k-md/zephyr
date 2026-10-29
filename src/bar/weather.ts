@@ -50,7 +50,7 @@ export function windSpeed(kmh: number): string {
   return imperial() ? `${Math.round(kmh / 1.609)} mph` : `${Math.round(kmh)} km/h`;
 }
 
-export type Wet = 'rain' | 'snow' | null;
+type Wet = 'rain' | 'snow' | null;
 
 interface Kind {
   text: string;

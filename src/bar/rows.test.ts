@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Binding, Snapshot, Suggestion, SuggestResponse } from '../types';
+import type { Binding, Snapshot, SuggestionRow, SuggestResponse } from '../types';
 import { bindingForAlias, bindingTarget, buildRows, groups, type RowCtx } from './rows';
 
 function snapshot(extra: Partial<Snapshot> = {}): Snapshot {
@@ -17,8 +17,8 @@ function ctx(typed: string, extra: Partial<RowCtx> = {}): RowCtx {
   return { snapshot: snapshot(), parked: '', parkedName: '', typed, ...extra };
 }
 
-function row(kind: Suggestion['kind'], label: string, extra: Partial<Suggestion> = {}) {
-  return { kind, label, query: label, target: '', hint: '', ...extra } as Suggestion;
+function row(kind: SuggestionRow['kind'], label: string, extra: Partial<SuggestionRow> = {}) {
+  return { kind, label, query: label, target: '', hint: '', ...extra } as SuggestionRow;
 }
 
 function response(extra: Partial<SuggestResponse> = {}): SuggestResponse {
@@ -33,7 +33,7 @@ function response(extra: Partial<SuggestResponse> = {}): SuggestResponse {
   };
 }
 
-const labels = (rows: Suggestion[]) => rows.map((item) => item.label);
+const labels = (rows: SuggestionRow[]) => rows.map((item) => item.label);
 
 describe('buildRows', () => {
   it('lists recent items, then views, on the empty bar', () => {

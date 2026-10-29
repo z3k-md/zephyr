@@ -6,7 +6,7 @@
   import { vFit } from '../fit';
   import { dragGesture } from './dragOut';
   import { rowKey, type Group } from './rows';
-  import type { Suggestion } from '../types';
+  import type { SuggestionRow } from '../types';
 
   const props = defineProps<{
     groups: Group[];
@@ -39,7 +39,7 @@
 
   // A card (the network card, a port's process) renders in the bar (#card), as the
   // list's first row.
-  defineSlots<{ card(props: { row: Suggestion; selected: boolean }): unknown }>();
+  defineSlots<{ card(props: { row: SuggestionRow; selected: boolean }): unknown }>();
 
   // WebKit sends a synthetic mousemove when the list scrolls under a still pointer; only a
   // real move selects, and a click only runs the row the pointer actually moved onto.
@@ -47,7 +47,7 @@
   let lastY = -1;
   let pointerKey = '';
 
-  function onMove(event: MouseEvent, index: number, row: Suggestion) {
+  function onMove(event: MouseEvent, index: number, row: SuggestionRow) {
     if (event.screenX === lastX && event.screenY === lastY) return;
     lastX = event.screenX;
     lastY = event.screenY;
@@ -55,7 +55,7 @@
     emit('hover', index);
   }
 
-  function onClick(index: number, row: Suggestion) {
+  function onClick(index: number, row: SuggestionRow) {
     if (rowKey(row) === pointerKey) emit('choose', index);
     else emit('hover', index);
   }

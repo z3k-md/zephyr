@@ -4,7 +4,7 @@ export const isMac = navigator.userAgent.includes('Mac');
 
 const MOD = isMac ? '⌘' : 'Ctrl';
 const ALT = isMac ? '⌥' : 'Alt';
-export const CTRL = isMac ? '⌃' : 'Ctrl';
+const CTRL = isMac ? '⌃' : 'Ctrl';
 /** The command key as the start of a keycap hint: "⌘K" on a Mac, "Ctrl+K" elsewhere. */
 export const MOD_KEY = isMac ? '⌘' : 'Ctrl+';
 

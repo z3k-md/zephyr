@@ -2,7 +2,7 @@
 // section headers. Pure functions, so the bar only wires them up.
 
 import { shortcutKeys } from '../keys';
-import type { Binding, LaunchGroup, Snapshot, Suggestion, SuggestResponse } from '../types';
+import type { Binding, LaunchGroup, Snapshot, SuggestionRow, SuggestResponse } from '../types';
 
 export interface RowCtx {
   snapshot: Snapshot | null;
@@ -16,7 +16,7 @@ export interface RowCtx {
 export interface Group {
   title: string;
   start: number;
-  rows: Suggestion[];
+  rows: SuggestionRow[];
 }
 
 const SECTION_TITLES: Record<string, string> = {
@@ -35,7 +35,7 @@ const SECTION_TITLES: Record<string, string> = {
   ports: 'Ports',
 };
 
-export function rowKey(row: Suggestion): string {
+export function rowKey(row: SuggestionRow): string {
   if (row.kind === 'query') return 'query';
   if (row.kind === 'netCard') return `netCard-${row.target}`;
   if (row.portUse) {
@@ -62,7 +62,12 @@ export function targetKind(target: string): string {
   return 'Command';
 }
 
-function view(id: string, label: string, icon: string, extra: Partial<Suggestion>): Suggestion {
+function view(
+  id: string,
+  label: string,
+  icon: string,
+  extra: Partial<SuggestionRow>
+): SuggestionRow {
   return {
     label,
     hint: '',
@@ -100,8 +105,8 @@ function offeredViews(ctx: RowCtx): string[] {
 }
 
 /** Rows on the empty bar that open a view (or type in a question with an answer). */
-function jumpRows(ctx: RowCtx): Suggestion[] {
-  const rows: Suggestion[] = [];
+function jumpRows(ctx: RowCtx): SuggestionRow[] {
+  const rows: SuggestionRow[] = [];
   const settings = ctx.snapshot;
   if (ctx.parked && ctx.parkedName) {
     rows.push(
@@ -209,11 +214,11 @@ const COMMANDS: Command[] = [
  * Commands whose name starts with the typed text (at least two letters), with whether the
  * text is exactly one of its names; only an exact name may take Enter.
  */
-function commandRows(ctx: RowCtx): { rows: Suggestion[]; exact: number | null } {
+function commandRows(ctx: RowCtx): { rows: SuggestionRow[]; exact: number | null } {
   const typed = ctx.typed.trim().toLowerCase().replace(/\s+/g, ' ');
   if (typed.length < 2 || /^[!>]/.test(typed)) return { rows: [], exact: null };
   const settings = ctx.snapshot;
-  const rows: Suggestion[] = [];
+  const rows: SuggestionRow[] = [];
   let exact: number | null = null;
   for (const command of COMMANDS) {
     if (command.id === 'clip' && !settings?.clipboard.enabled) continue;
@@ -256,16 +261,16 @@ function commandRows(ctx: RowCtx): { rows: Suggestion[]; exact: number | null } 
 const NET_WORDS = ['network', 'net', 'ping', 'internet', 'connection', 'latency', 'lag', 'jitter'];
 
 /** The network card as the list's first row; `ip` makes it the addresses card. */
-function netCard(target: 'network' | 'ip'): Suggestion {
+function netCard(target: 'network' | 'ip'): SuggestionRow {
   return { kind: 'netCard', target, label: 'Network', query: '', hint: '', section: 'card' };
 }
 
-function commandRow(command: Command): Suggestion {
+function commandRow(command: Command): SuggestionRow {
   return view(command.id, command.label, command.icon, {});
 }
 
 /** A launch group's row: its name, its icon, and its apps' icons small beside it. */
-function groupRow(group: LaunchGroup, hint = ''): Suggestion {
+function groupRow(group: LaunchGroup, hint = ''): SuggestionRow {
   const apps = group.items.filter((item) => item.kind === 'app');
   return view(
     `group:${group.id}`,
@@ -282,12 +287,12 @@ function groupRow(group: LaunchGroup, hint = ''): Suggestion {
 export function buildRows(
   response: SuggestResponse,
   ctx: RowCtx
-): { rows: Suggestion[]; preselect: number | null } {
+): { rows: SuggestionRow[]; preselect: number | null } {
   if (response.mode === 'recent' && !response.text) {
     // Recent apps and searches lead (the suggester orders them); commands sit below.
     return { rows: [...response.items, ...jumpRows(ctx)], preselect: null };
   }
-  const rows = [...response.items];
+  const rows: SuggestionRow[] = [...response.items];
   let preselect = response.preselect;
   // Free text going to the web gets its own row at the top, selected. When a settings page
   // leads ("wifi settings"), the web row comes second, under the best page.
@@ -360,7 +365,7 @@ export function buildRows(
   return { rows, preselect };
 }
 
-function titleFor(row: Suggestion): string {
+function titleFor(row: SuggestionRow): string {
   const section = row.section ?? '';
   if (section === 'card') return '';
   if (section === 'web') {
@@ -371,7 +376,7 @@ function titleFor(row: Suggestion): string {
 }
 
 /** Splits rows into titled groups; a header starts wherever the section changes. */
-export function groups(rows: Suggestion[]): Group[] {
+export function groups(rows: SuggestionRow[]): Group[] {
   const result: Group[] = [];
   rows.forEach((row, index) => {
     const title = titleFor(row);
@@ -405,7 +410,7 @@ function commandFor(target: string): Command | undefined {
 }
 
 /** A row for whatever a binding points at, as the bar would show it. */
-function bindingRow(binding: Binding, groups: LaunchGroup[] = []): Suggestion | null {
+function bindingRow(binding: Binding, groups: LaunchGroup[] = []): SuggestionRow | null {
   const [kind, ...rest] = binding.target.split(':');
   const value = rest.join(':');
   const hint = binding.alias ? `Alias “${binding.alias}”` : '';
@@ -446,7 +451,7 @@ function bindingRow(binding: Binding, groups: LaunchGroup[] = []): Suggestion | 
   }
 }
 
-function aliasRow(ctx: RowCtx): Suggestion | null {
+function aliasRow(ctx: RowCtx): SuggestionRow | null {
   const binding = bindingForAlias(ctx, ctx.typed);
   return binding ? bindingRow(binding, ctx.snapshot?.launchGroups) : null;
 }
@@ -455,7 +460,7 @@ function aliasRow(ctx: RowCtx): Suggestion | null {
  * The binding target for a row, when the row can have a hotkey or alias: an app, a
  * bookmark, a settings page, or a command (a mode or scoped search).
  */
-export function bindingTarget(row: Suggestion): { target: string; label: string } | null {
+export function bindingTarget(row: SuggestionRow): { target: string; label: string } | null {
   if (row.kind === 'app' && row.appId) return { target: `app:${row.appId}`, label: row.label };
   if (row.kind === 'bookmark') return { target: `bookmark:${row.query}`, label: row.label };
   if (row.kind === 'setting' && row.settingId) {

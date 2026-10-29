@@ -1,4 +1,4 @@
-export interface HistoryEntry {
+interface HistoryEntry {
   query: string;
   /** 'google' for a search, 'url' for a link. */
   destinationId: string;
@@ -150,7 +150,7 @@ export interface ClipboardSettings {
 
 export type ClipKind = 'text' | 'link' | 'color' | 'image' | 'files';
 
-export interface ClipImage {
+interface ClipImage {
   width: number;
   height: number;
   bytes: number;
@@ -202,6 +202,7 @@ export interface LaunchEntry {
   lastUsed: number;
 }
 
+/** A result as Rust sends it (suggest.rs). */
 export interface Suggestion {
   label: string;
   query: string;
@@ -241,6 +242,15 @@ export interface Suggestion {
   icon?: string;
   /** A browser's private window (Incognito, InPrivate); Shift+Enter opens one. */
   privateWindow?: string;
+  /** An open app's windows, front to back; Enter switches to the first. */
+  windows?: WindowRef[];
+  /** The window a window row switches to. */
+  window?: number;
+}
+
+/** A row as the bar lists it: a result, or one the bar adds itself (views, commands, power,
+ *  the search row), with what only the bar draws. */
+export interface SuggestionRow extends Suggestion {
   /** Small icons for what a row holds (a launch group's apps). */
   icons?: string[];
   /** Keycaps shown instead of the hint. */
@@ -250,10 +260,6 @@ export interface Suggestion {
   keyHints?: { keys: string; label: string }[];
   /** For power rows: what Enter runs. */
   power?: PowerPreview;
-  /** An open app's windows, front to back; Enter switches to the first. */
-  windows?: WindowRef[];
-  /** The window a window row switches to. */
-  window?: number;
 }
 
 export interface NoteSummary {
@@ -302,7 +308,7 @@ export type SyncPhase =
   | { kind: 'awaitingApproval'; words: string }
   | { kind: 'ready' };
 
-export interface SyncDevice {
+interface SyncDevice {
   id: string;
   platform: string;
   displayName: string;
@@ -385,7 +391,7 @@ export type FilePreview =
   | { kind: 'info'; size: number; modified: number; folder: boolean };
 
 /** The GPU: its busiest engine, and the main GPU's own memory. */
-export interface GpuStats {
+interface GpuStats {
   /** Empty where it isn't known (macOS). */
   name: string;
   /** 0–100. */
@@ -485,7 +491,7 @@ export interface GroupItem {
 }
 
 /** Trouble on the line: much slower than usual, probes lost in a row, or no route at all. */
-export type NetworkAlert = { kind: 'slow'; ms: number } | { kind: 'drop' } | { kind: 'offline' };
+type NetworkAlert = { kind: 'slow'; ms: number } | { kind: 'drop' } | { kind: 'offline' };
 
 export type NetworkGrade = 'good' | 'fair' | 'poor';
 

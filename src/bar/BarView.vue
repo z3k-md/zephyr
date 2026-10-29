@@ -82,7 +82,7 @@
     type Binding,
     type SyncPending,
     type Snapshot,
-    type Suggestion,
+    type SuggestionRow,
     type SystemStats,
     type SuggestResponse,
     type PowerPreview,
@@ -255,8 +255,8 @@
     firmware: 'Restarting to BIOS',
   };
 
-  function powerRows(): Suggestion[] {
-    const rows: Suggestion[] = [];
+  function powerRows(): SuggestionRow[] {
+    const rows: SuggestionRow[] = [];
     const pending = snapshot.value?.power;
     if (pending) {
       rows.push({
@@ -324,7 +324,7 @@
   }
 
   const built = computed(() => {
-    if (!lastResponse.value) return { rows: [] as Suggestion[], preselect: null };
+    if (!lastResponse.value) return { rows: [] as SuggestionRow[], preselect: null };
     const result = buildRows(lastResponse.value, rowCtx.value);
     // Power rows lead; a command named outright ("shutdown") takes Enter.
     const power = powerRows();
@@ -1139,10 +1139,10 @@
   }
 
   /** Web suggestions by text, so going back to a text shows them at once. */
-  const remembered = new Map<string, Suggestion[]>();
+  const remembered = new Map<string, SuggestionRow[]>();
 
   /** The web rows to keep up until this text's own arrive: only ones that still match. */
-  function stillMatching(typed: string): Suggestion[] {
+  function stillMatching(typed: string): SuggestionRow[] {
     const prefix = typed.trim().toLowerCase();
     if (!prefix) return [];
     return (lastResponse.value?.items ?? []).filter(
@@ -1629,7 +1629,7 @@
     }
   }
 
-  async function openNote(item: Suggestion) {
+  async function openNote(item: SuggestionRow) {
     try {
       if (item.kind === 'note') await openNotes(item.noteId);
       else await openNotes(undefined, item.query);
