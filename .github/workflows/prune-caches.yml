@@ -24,15 +24,16 @@ jobs:
     permissions:
       actions: write
     steps:
-      # Keys end in hash segments (v0-rust-checks-Windows_NT-x64-ca17c645-337d32f0); what comes
-      # before them names the job and OS. Within each prefix and branch, the newest entry stays.
+      # Keys end in hash and run number segments (v0-rust-checks-Windows_NT-x64-ca17c645-337d32f0,
+      # codeql-overlay-base-database-…-javascript-2.27.3-<sha>-<run id>-1); what comes before
+      # them names the job and OS. Within each prefix and branch, the newest entry stays.
       - name: Delete replaced caches
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
           gh cache list --limit 1000 --json id,key,ref,createdAt --jq '
-            group_by(.ref + " " + (.key | sub("(-[0-9a-f]{8,})+$"; "")))
+            group_by(.ref + " " + (.key | sub("(-([0-9a-f]{8,}|[0-9]+))+$"; "")))
             | map(sort_by(.createdAt) | reverse | .[1:]) | flatten
             | .[] | "\(.id) \(.ref) \(.key)"' |
             while read -r id ref key; do
