@@ -89,9 +89,10 @@ pub fn run() {
                             }
                         });
                     } else if let Some(target) = shortcut::binding_for(pressed) {
-                        // Off the main thread: a note or a launch may build a window.
+                        // Off the main thread, on one that may block: a note or a launch may
+                        // build a window, and a bookmark waits on the browser extension.
                         let app = app.clone();
-                        tauri::async_runtime::spawn(async move {
+                        tauri::async_runtime::spawn_blocking(move || {
                             commands::run_binding(&app, &target);
                         });
                     } else {

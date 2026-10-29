@@ -5,6 +5,7 @@
 //! Windows only for now; on macOS the list stays empty, so app rows launch as before.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock, RwLock};
 
 use serde::Serialize;
@@ -31,27 +32,42 @@ pub struct WindowRef {
     pub title: String,
 }
 
-fn open() -> &'static RwLock<Vec<OpenWindow>> {
-    static OPEN: OnceLock<RwLock<Vec<OpenWindow>>> = OnceLock::new();
+/// The open windows, and which refresh listed them.
+fn open() -> &'static RwLock<(u64, Vec<OpenWindow>)> {
+    static OPEN: OnceLock<RwLock<(u64, Vec<OpenWindow>)>> = OnceLock::new();
     OPEN.get_or_init(Default::default)
 }
 
 /// Lists the open windows again, off the calling thread. Called as the bar is summoned, so the
 /// list is in front-to-back order from before the bar took the front.
 pub fn refresh() {
-    std::thread::spawn(|| {
-        let found = platform::list();
-        if let Ok(mut windows) = open().write() {
-            *windows = found;
-        }
-    });
+    static STARTED: AtomicU64 = AtomicU64::new(0);
+    let generation = STARTED.fetch_add(1, Ordering::SeqCst) + 1;
+    std::thread::spawn(move || store(generation, platform::list()));
+}
+
+/// Keeps the list from refresh number `generation`, unless a later refresh already finished:
+/// the threads can finish out of order, and an older list mustn't overwrite a newer one.
+fn store(generation: u64, found: Vec<OpenWindow>) {
+    if let Ok(mut open) = open().write()
+        && generation > open.0
+    {
+        *open = (generation, found);
+    }
+}
+
+/// Errs where open windows can't be listed or acted on (macOS, for now), so Close and Quit
+/// say so instead of quietly doing nothing.
+pub fn supported() -> Result<(), String> {
+    if cfg!(windows) {
+        Ok(())
+    } else {
+        Err("Zephyr can't close or switch windows on this system yet.".into())
+    }
 }
 
 pub fn all() -> Vec<OpenWindow> {
-    open()
-        .read()
-        .map(|windows| windows.clone())
-        .unwrap_or_default()
+    open().read().map(|open| open.1.clone()).unwrap_or_default()
 }
 
 /// Brings a window to the front (restoring it when minimized).
@@ -542,6 +558,14 @@ mod platform {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_late_older_list_doesnt_overwrite_a_newer_one() {
+        let newer = vec![window("New", r"C:\new.exe", "")];
+        store(1_000_002, newer.clone());
+        store(1_000_001, vec![window("Old", r"C:\old.exe", "")]);
+        assert_eq!(all(), newer);
+    }
 
     fn window(title: &str, exe: &str, app_id: &str) -> OpenWindow {
         OpenWindow {

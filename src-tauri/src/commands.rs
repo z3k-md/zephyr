@@ -18,6 +18,17 @@ use crate::suggest::{self, SuggestResponse};
 use crate::util::now_secs;
 use crate::{updater, window};
 
+/// Runs blocking work (files, processes, the registry, the keychain) on a worker thread.
+/// Sync commands run on the main thread, which every window's event loop shares, so a slow
+/// one would freeze them all.
+async fn blocking<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(work)
+        .await
+        .map_err(|err| err.to_string())?
+}
+
 fn publish(app: &AppHandle, snapshot: Persisted) -> Result<Persisted, String> {
     let _ = app.emit("state-changed", &snapshot);
     Ok(snapshot)
@@ -88,20 +99,23 @@ fn catalog<'a>(installed: &'a [apps::App], snapshot: &'a Persisted) -> Catalog<'
 }
 
 #[tauri::command]
-pub fn launch_app(
+pub async fn launch_app(
     app: AppHandle,
-    state: State<'_, AppState>,
     app_id: String,
     new_window: Option<bool>,
     private: Option<bool>,
 ) -> Result<DispatchOutcome, String> {
-    if private == Some(true) {
-        return start_private(&app, &state, &app_id);
-    }
-    if new_window == Some(true) {
-        return start(&app, &state, &app_id);
-    }
-    launch(&app, &state, &app_id)
+    blocking(move || {
+        let state = app.state::<AppState>();
+        if private == Some(true) {
+            return start_private(&app, &state, &app_id);
+        }
+        if new_window == Some(true) {
+            return start(&app, &state, &app_id);
+        }
+        launch(&app, &state, &app_id)
+    })
+    .await
 }
 
 /// Opens an app for a launch group: the same as Enter on its row, but the bar is already
@@ -169,6 +183,7 @@ fn remember_launch(app: &AppHandle, _state: &AppState, app_id: &str) {
 /// Switches to an open window (a "Windows" row, or one picked from an app's actions).
 #[tauri::command]
 pub fn window_focus(app: AppHandle, handle: i64) -> Result<(), String> {
+    crate::running::supported()?;
     if !crate::running::focus(handle) {
         return Err("That window is gone.".into());
     }
@@ -179,24 +194,35 @@ pub fn window_focus(app: AppHandle, handle: i64) -> Result<(), String> {
 /// Asks an open window to close, as its own close button would.
 #[tauri::command]
 pub fn window_close(handle: i64) -> Result<(), String> {
-    crate::running::close(handle);
+    crate::running::supported()?;
+    let asked = crate::running::close(handle);
     crate::running::refresh();
-    Ok(())
+    if asked {
+        Ok(())
+    } else {
+        Err("That window is gone.".into())
+    }
 }
 
 /// Quits an app gracefully: every one of its windows is asked to close, so it can still
 /// offer to save. Nothing is force-killed.
 #[tauri::command]
 pub fn app_quit(app_id: String) -> Result<(), String> {
+    crate::running::supported()?;
     let target = apps::index()
         .find(&app_id)
         .ok_or_else(|| "That app is no longer installed.".to_string())?;
     let windows = crate::running::all();
+    let mut asked = false;
     for window in crate::running::of_app(&target, &windows) {
-        crate::running::close(window.handle);
+        asked |= crate::running::close(window.handle);
     }
     crate::running::refresh();
-    Ok(())
+    if asked {
+        Ok(())
+    } else {
+        Err(format!("{} has no windows open.", target.name))
+    }
 }
 
 // Async: opening an app setting may build the settings webview, which deadlocks a sync
@@ -273,13 +299,16 @@ fn open_file_path(
 }
 
 #[tauri::command]
-pub fn reveal_file(app: AppHandle, state: State<'_, AppState>, path: String) -> Result<(), String> {
-    known_file(&state, &path)?;
-    app.opener()
-        .reveal_item_in_dir(&path)
-        .map_err(|err| format!("Couldn't show it: {err}"))?;
-    window::hide_bar(&app);
-    Ok(())
+pub async fn reveal_file(app: AppHandle, path: String) -> Result<(), String> {
+    blocking(move || {
+        known_file(&app.state::<AppState>(), &path)?;
+        app.opener()
+            .reveal_item_in_dir(&path)
+            .map_err(|err| format!("Couldn't show it: {err}"))?;
+        window::hide_bar(&app);
+        Ok(())
+    })
+    .await
 }
 
 #[tauri::command]
@@ -379,15 +408,18 @@ pub fn resources_switch(app: AppHandle, pids: Vec<u32>) -> bool {
 }
 
 #[tauri::command]
-pub fn resources_reveal(app: AppHandle, path: String) -> Result<(), String> {
-    if path.is_empty() || !std::path::Path::new(&path).exists() {
-        return Err("Its file isn't there anymore".into());
-    }
-    app.opener()
-        .reveal_item_in_dir(&path)
-        .map_err(|err| format!("Couldn't show it: {err}"))?;
-    window::hide_bar(&app);
-    Ok(())
+pub async fn resources_reveal(app: AppHandle, path: String) -> Result<(), String> {
+    blocking(move || {
+        if path.is_empty() || !std::path::Path::new(&path).exists() {
+            return Err("Its file isn't there anymore".into());
+        }
+        app.opener()
+            .reveal_item_in_dir(&path)
+            .map_err(|err| format!("Couldn't show it: {err}"))?;
+        window::hide_bar(&app);
+        Ok(())
+    })
+    .await
 }
 
 #[tauri::command]
@@ -671,70 +703,74 @@ pub async fn dispatch(
     Ok(DispatchOutcome::Opened)
 }
 
+// Async: turning startup on or off runs schtasks on Windows, which takes a moment.
 #[tauri::command]
-pub fn save_settings(
+pub async fn save_settings(
     app: AppHandle,
-    state: State<'_, AppState>,
     summon_shortcut: String,
     launch_at_startup: bool,
 ) -> Result<Persisted, String> {
-    let shortcut = shortcut::canonical_shortcut(&summon_shortcut)?;
-    let previous = state.snapshot()?;
-    let shortcut_changed = shortcut != previous.summon_shortcut;
-    if shortcut == previous.clipboard.shortcut {
-        return Err("That shortcut already opens clipboard history".into());
-    }
-    if shortcut == previous.notes_shortcut {
-        return Err("That shortcut already opens notes".into());
-    }
-    let clip = previous.extra_shortcuts();
-
-    // Registering unregisters the old shortcut first, so every failure path has to put it back.
-    let restore_shortcut = || {
-        if shortcut_changed
-            && let Err(err) = shortcut::register(&app, &previous.summon_shortcut, clip)
-        {
-            log::error!("couldn't restore the summon shortcut: {err}");
+    blocking(move || {
+        let state = app.state::<AppState>();
+        let shortcut = shortcut::canonical_shortcut(&summon_shortcut)?;
+        let previous = state.snapshot()?;
+        let shortcut_changed = shortcut != previous.summon_shortcut;
+        if shortcut == previous.clipboard.shortcut {
+            return Err("That shortcut already opens clipboard history".into());
         }
-    };
+        if shortcut == previous.notes_shortcut {
+            return Err("That shortcut already opens notes".into());
+        }
+        let clip = previous.extra_shortcuts();
 
-    if shortcut_changed && let Err(err) = shortcut::register(&app, &shortcut, clip) {
-        restore_shortcut();
-        return Err(err);
-    }
-    if let Err(err) = apply_autostart(&app, launch_at_startup, previous.instant_startup) {
-        restore_shortcut();
-        return Err(err);
-    }
+        // Registering unregisters the old shortcut first, so every failure path has to put it back.
+        let restore_shortcut = || {
+            if shortcut_changed
+                && let Err(err) = shortcut::register(&app, &previous.summon_shortcut, clip)
+            {
+                log::error!("couldn't restore the summon shortcut: {err}");
+            }
+        };
 
-    match state.update(|persisted| {
-        persisted.set_general(shortcut.clone(), launch_at_startup);
-        Ok(())
-    }) {
-        Ok(snapshot) => publish(&app, snapshot),
-        Err(err) => {
+        if shortcut_changed && let Err(err) = shortcut::register(&app, &shortcut, clip) {
             restore_shortcut();
-            let _ = apply_autostart(&app, previous.launch_at_startup, previous.instant_startup);
-            Err(err)
+            return Err(err);
         }
-    }
+        if let Err(err) = apply_autostart(&app, launch_at_startup, previous.instant_startup) {
+            restore_shortcut();
+            return Err(err);
+        }
+
+        match state.update(|persisted| {
+            persisted.set_general(shortcut.clone(), launch_at_startup);
+            Ok(())
+        }) {
+            Ok(snapshot) => publish(&app, snapshot),
+            Err(err) => {
+                restore_shortcut();
+                let _ = apply_autostart(&app, previous.launch_at_startup, previous.instant_startup);
+                Err(err)
+            }
+        }
+    })
+    .await
 }
 
 /// Windows: start from a logon task the moment you sign in, instead of the startup list
 /// Windows holds back for a few seconds. Opt-in, since Defender may flag it.
 #[tauri::command]
-pub fn save_instant_startup(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    enabled: bool,
-) -> Result<Persisted, String> {
-    let current = state.snapshot()?;
-    apply_autostart(&app, current.launch_at_startup, enabled)?;
-    let snapshot = state.update(|persisted| {
-        persisted.instant_startup = enabled;
-        Ok(())
-    })?;
-    publish(&app, snapshot)
+pub async fn save_instant_startup(app: AppHandle, enabled: bool) -> Result<Persisted, String> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        let current = state.snapshot()?;
+        apply_autostart(&app, current.launch_at_startup, enabled)?;
+        let snapshot = state.update(|persisted| {
+            persisted.instant_startup = enabled;
+            Ok(())
+        })?;
+        publish(&app, snapshot)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -899,19 +935,20 @@ pub fn clip_copy(app: AppHandle, id: u64) -> Result<(), String> {
     Ok(())
 }
 
+// These rewrite the encrypted history file, so they run off the main thread.
 #[tauri::command]
-pub fn clip_pin(id: u64, pinned: bool) -> Result<(), String> {
-    clipboard::set_pinned(id, pinned)
+pub async fn clip_pin(id: u64, pinned: bool) -> Result<(), String> {
+    blocking(move || clipboard::set_pinned(id, pinned)).await
 }
 
 #[tauri::command]
-pub fn clip_delete(id: u64) -> Result<(), String> {
-    clipboard::delete(id)
+pub async fn clip_delete(id: u64) -> Result<(), String> {
+    blocking(move || clipboard::delete(id)).await
 }
 
 #[tauri::command]
-pub fn clip_clear(pinned_too: bool) -> Result<usize, String> {
-    clipboard::clear(pinned_too)
+pub async fn clip_clear(pinned_too: bool) -> Result<usize, String> {
+    blocking(move || clipboard::clear(pinned_too)).await
 }
 
 #[tauri::command]
@@ -957,31 +994,35 @@ pub async fn notes_list(query: String) -> Vec<notes::NoteSummary> {
         .unwrap_or_default()
 }
 
+// Notes are files, so reading and writing them stays off the main thread.
 #[tauri::command]
-pub fn note_get(id: String) -> Result<notes::Note, String> {
-    notes::get(&id)
+pub async fn note_get(id: String) -> Result<notes::Note, String> {
+    blocking(move || notes::get(&id)).await
 }
 
 #[tauri::command]
-pub fn note_create(body: String) -> Result<String, String> {
-    notes::create(&body)
+pub async fn note_create(body: String) -> Result<String, String> {
+    blocking(move || notes::create(&body)).await
 }
 
 #[tauri::command]
-pub fn note_save(id: String, body: String) -> Result<i64, String> {
-    notes::save(&id, &body)
+pub async fn note_save(id: String, body: String) -> Result<i64, String> {
+    blocking(move || notes::save(&id, &body)).await
 }
 
 #[tauri::command]
-pub fn note_delete(id: String) -> Result<(), String> {
-    notes::delete(&id)
+pub async fn note_delete(id: String) -> Result<(), String> {
+    blocking(move || notes::delete(&id)).await
 }
 
 #[tauri::command]
-pub fn reveal_notes(app: AppHandle) -> Result<(), String> {
-    app.opener()
-        .open_path(notes::folder()?, None::<&str>)
-        .map_err(|err| err.to_string())
+pub async fn reveal_notes(app: AppHandle) -> Result<(), String> {
+    blocking(move || {
+        app.opener()
+            .open_path(notes::folder()?, None::<&str>)
+            .map_err(|err| err.to_string())
+    })
+    .await
 }
 
 /// Opens the notes window, on `id` when given, or on a new note holding `body`.
@@ -994,7 +1035,7 @@ pub async fn open_notes(
 ) -> Result<(), String> {
     let id = match (id, body) {
         (Some(id), _) => Some(id),
-        (None, Some(body)) => Some(notes::create(&body)?),
+        (None, Some(body)) => Some(blocking(move || notes::create(&body)).await?),
         (None, None) => None,
     };
     window::hide_bar(&app);
@@ -1008,7 +1049,7 @@ pub async fn open_notes(
 pub async fn open_note_window(app: AppHandle, id: Option<String>) -> Result<String, String> {
     let id = match id {
         Some(id) => id,
-        None => notes::create("")?,
+        None => blocking(|| notes::create("")).await?,
     };
     crate::note_windows::open(&app, &id, true)?;
     Ok(id)
@@ -1232,22 +1273,25 @@ pub async fn now_playing_focus(app: AppHandle) -> Result<bool, String> {
 
 /// Runs a command typed in the bar after `>`; output streams through `on_event`.
 #[tauri::command]
-pub fn shell_run(
+pub async fn shell_run(
     app: AppHandle,
-    state: State<'_, AppState>,
     command: String,
     dir: Option<String>,
     on_event: Channel<ShellEvent>,
 ) -> Result<(), String> {
-    let settings = state.snapshot()?.shell.clone();
-    shell::run(&settings, &command, dir.as_deref(), move |event| {
-        let _ = on_event.send(event);
-    })?;
-    let snapshot = state.update(|persisted| {
-        persisted.shell.record(&command);
-        Ok(())
-    })?;
-    publish(&app, snapshot).map(|_| ())
+    blocking(move || {
+        let state = app.state::<AppState>();
+        let settings = state.snapshot()?.shell.clone();
+        shell::run(&settings, &command, dir.as_deref(), move |event| {
+            let _ = on_event.send(event);
+        })?;
+        let snapshot = state.update(|persisted| {
+            persisted.shell.record(&command);
+            Ok(())
+        })?;
+        publish(&app, snapshot).map(|_| ())
+    })
+    .await
 }
 
 #[tauri::command]
@@ -1279,8 +1323,8 @@ pub async fn shell_open_terminal(
     .map_err(|err| err.to_string())?
 }
 
-/// Async because finding WSL or Git Bash runs programs on Windows, which would otherwise
-/// hold up the main thread while Settings opens.
+/// Async because finding WSL or Git Bash reads the registry and looks on disk on Windows,
+/// which would otherwise hold up the main thread while Settings opens.
 #[tauri::command]
 pub async fn shell_info(state: State<'_, AppState>) -> Result<ShellInfo, String> {
     let settings = state.snapshot()?.shell.clone();
@@ -1346,11 +1390,14 @@ pub fn save_bug_capture(
 }
 
 #[tauri::command]
-pub fn reveal_captures(app: AppHandle) -> Result<(), String> {
-    let folder = crate::capture::folder()?;
-    app.opener()
-        .open_path(folder.to_string_lossy(), None::<&str>)
-        .map_err(|err| err.to_string())
+pub async fn reveal_captures(app: AppHandle) -> Result<(), String> {
+    blocking(move || {
+        let folder = crate::capture::folder()?;
+        app.opener()
+            .open_path(folder.to_string_lossy(), None::<&str>)
+            .map_err(|err| err.to_string())
+    })
+    .await
 }
 
 /// Makes the snap grid's window when Ctrl is first held on the bar, before any drag.
@@ -1487,9 +1534,10 @@ pub async fn sync_revoke(device_id: String) -> Result<(), String> {
     crate::sync::revoke(&device_id).await
 }
 
+// Async: it reads the keychain, which can wait on a system prompt.
 #[tauri::command]
-pub fn sync_recovery_key() -> Result<String, String> {
-    crate::sync::recovery_key()
+pub async fn sync_recovery_key() -> Result<String, String> {
+    blocking(crate::sync::recovery_key).await
 }
 
 #[tauri::command]
@@ -1606,40 +1654,43 @@ pub struct DragOut {
 
 /// Gets a file result (`path`, which must be in the file index) or a clipboard history item
 /// (`clip`) ready to drag into another app, and keeps the bar up until the drag ends.
+// Async: drawing the file's icon and writing the copies takes a moment.
 #[tauri::command]
-pub fn drag_prepare(
+pub async fn drag_prepare(
     app: AppHandle,
-    state: State<'_, AppState>,
     path: Option<String>,
     clip: Option<u64>,
 ) -> Result<DragOut, String> {
-    let dir = app
-        .path()
-        .app_cache_dir()
-        .map_err(|err| err.to_string())?
-        .join("drag");
-    let files = match (path, clip) {
-        (Some(path), _) => {
-            known_file(&state, &path)?;
-            vec![path]
-        }
-        // Earlier drags' copies are done with: whatever they were dropped on has read them.
-        (None, Some(id)) => {
-            let _ = std::fs::remove_dir_all(&dir);
-            clipboard::drag_files(id, &dir)?
-        }
-        (None, None) => return Err("Nothing to drag".into()),
-    };
-    let first = files.first().ok_or("Nothing to drag")?;
-    let png = crate::icons::file_icon_png(first, 64).ok_or("Couldn't draw the drag picture")?;
-    std::fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
-    let icon = dir.join("pointer.png");
-    std::fs::write(&icon, png).map_err(|err| err.to_string())?;
-    window::begin_drag_out();
-    Ok(DragOut {
-        files,
-        icon: icon.to_string_lossy().into_owned(),
+    blocking(move || {
+        let dir = app
+            .path()
+            .app_cache_dir()
+            .map_err(|err| err.to_string())?
+            .join("drag");
+        let files = match (path, clip) {
+            (Some(path), _) => {
+                known_file(&app.state::<AppState>(), &path)?;
+                vec![path]
+            }
+            // Earlier drags' copies are done with: whatever they were dropped on has read them.
+            (None, Some(id)) => {
+                let _ = std::fs::remove_dir_all(&dir);
+                clipboard::drag_files(id, &dir)?
+            }
+            (None, None) => return Err("Nothing to drag".into()),
+        };
+        let first = files.first().ok_or("Nothing to drag")?;
+        let png = crate::icons::file_icon_png(first, 64).ok_or("Couldn't draw the drag picture")?;
+        std::fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
+        let icon = dir.join("pointer.png");
+        std::fs::write(&icon, png).map_err(|err| err.to_string())?;
+        window::begin_drag_out();
+        Ok(DragOut {
+            files,
+            icon: icon.to_string_lossy().into_owned(),
+        })
     })
+    .await
 }
 
 /// The drag ended: dropped somewhere hides the bar, cancelled keeps it.
