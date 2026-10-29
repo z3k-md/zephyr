@@ -3,7 +3,7 @@
   "explorer.fileNesting.patterns": {
     "vite.config.*": "vite.config.*, tsconfig.*",
     "package.json": "bun.lock, package-lock.json, .gitignore, .prettierrc, .prettierignore, .releaserc.json",
-    "README.md": "TODO.md, CHANGELOG.md",
+    "README.md": "TODO.md",
     ".env": ".env.*"
   },
   "editor.formatOnSave": true,

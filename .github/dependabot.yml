@@ -1,4 +1,5 @@
-# Version updates land on develop, where Checks runs on PRs. Security updates still target main.
+# Version updates land on develop, the default branch, where Checks runs on PRs. Security updates
+# target the default branch, so they land on develop too.
 version: 2
 updates:
   - package-ecosystem: github-actions

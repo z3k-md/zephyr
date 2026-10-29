@@ -29,21 +29,26 @@ Reopening the bar soon after closing it returns to the view you were in. The win
 
 Download the latest installer from [Releases](https://github.com/z3k-md/zephyr/releases/latest): the `-setup.exe` for Windows, or the `.dmg` for macOS. Installed copies check for updates at launch and every six hours, and install them automatically. Settings and the tray menu also have **Check for updates**.
 
+The Windows installer isn't Authenticode-signed, so SmartScreen warns about an unrecognized app the first time: choose **More info > Run anyway**. Updates are still verified against Zephyr's own updater key.
+
 ## Develop
 
 - [Rust](https://www.rust-lang.org/tools/install) through rustup, which installs the version pinned in `rust-toolchain.toml` on the first build
 - [Bun](https://bun.sh/)
+- [Node](https://nodejs.org/) 22.14 or later, for vue-tsc (under Bun on Windows it skips `.vue` files) and the release script tests
 
 ```bash
 bun install
 bun dev
 ```
 
-`bun run test` runs the Rust tests. `bun run lint` runs every check CI runs: Prettier, vue-tsc, rustfmt, and Clippy with warnings as errors. `bun run format` fixes formatting.
+`bun run lint` runs Prettier, vue-tsc, the frontend build, rustfmt, and Clippy with warnings as errors. `bun run test` runs the Rust tests, and `bun run test:scripts` the release script tests. Together they are what Checks runs, with the same `--locked` Cargo flags; Checks also lints the workflow files with actionlint. `bun run format` fixes formatting.
+
+The version in `package.json` and `src-tauri/Cargo.toml` is the last release's, for local builds. Releases stamp both from the tag, so they aren't bumped by hand. `rust-version` in `Cargo.toml` follows the toolchain in `rust-toolchain.toml`; a test fails if they differ.
 
 ## Branches
 
-Work lands on `develop`. Checks run on Windows and macOS for every push to `develop` and every pull request to `develop` or `main`, next to a lint of the workflow files. Pushes to `main` aren't checked again: `main` moves only when `develop` is promoted, by fast-forwarding it once `develop`'s checks are green:
+Work lands on `develop`. Checks run on Windows and macOS for every push to `develop` and every pull request to `develop` or `main`, next to the release script tests and a lint of the workflow files. CodeQL scans `develop` on each push (Rust weekly), and the Prune caches workflow keeps only the newest cargo cache per job and OS. Pushes to `main` aren't checked again: `main` moves only when `develop` is promoted, by fast-forwarding it once `develop`'s checks are green:
 
 ```bash
 git push origin develop:main
@@ -53,7 +58,7 @@ git push origin develop:main
 
 ## Release
 
-Releases are cut on demand from `main`: run the **Release** workflow from the Actions tab. It has no checks of its own, since `main` only holds commits already checked on `develop`; run from any other branch, it fails. If [semantic-release](https://semantic-release.gitbook.io/) finds a `feat:` or `fix:` commit since the last tag, it tags the next version and creates a draft GitHub release with its notes. Nothing is committed back to `main`: the build stamps the version from the tag, and the release notes replace `CHANGELOG.md`, which stops at 2.7.0. Windows and macOS (Apple silicon only) installers are then built, signed for the updater, and uploaded. A final job writes `latest.json` and publishes the release, and installed copies pick it up from there. With no `feat:` or `fix:` commit to release, the run ends with a warning and changes nothing.
+Releases are cut on demand from `main`: run the **Release** workflow from the Actions tab. It has no checks of its own, since `main` only holds commits already checked on `develop`; run from any other branch, it fails. If [semantic-release](https://semantic-release.gitbook.io/) finds a `feat:` or `fix:` commit since the last tag, it tags the next version and creates a draft GitHub release with its notes. Nothing is committed back to `main`: the build stamps the version from the tag, and the notes on each [GitHub release](https://github.com/z3k-md/zephyr/releases) are the changelog. Windows and macOS (Apple silicon only) installers are then built, signed for the updater, and uploaded. A final job writes `latest.json` and publishes the release, and installed copies pick it up from there. With no `feat:` or `fix:` commit to release, the run ends with a warning and changes nothing.
 
 Repository secrets:
 
@@ -63,3 +68,12 @@ Repository secrets:
 | `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY` | Optional. A self-signed certificate for the macOS app, so it keeps the same identity and its permissions across updates. Without them it is ad-hoc signed and asks for permissions again after every update. Either way it isn't notarized, so first launch needs right-click > Open. |
 
 For a local signed build, copy `.env.example` to `.env`, fill in the signing key, and run `bun run build`.
+
+### Windows code signing
+
+Windows builds aren't Authenticode-signed yet, hence the SmartScreen warning; the updater signature above is separate and doesn't affect it. Signing needs a code signing certificate, and then one of:
+
+- A certificate in the build machine's store: set `bundle.windows.certificateThumbprint` (with `digestAlgorithm` and `timestampUrl`) in `src-tauri/tauri.conf.json`, and import the `.pfx` from a secret in the Windows build job before `tauri-action` runs.
+- [Azure Trusted Signing](https://learn.microsoft.com/azure/trusted-signing/), which needs no certificate file: set `bundle.windows.signCommand` to a `trusted-signing-cli` command and give the job the Azure credentials as secrets.
+
+Neither is configured, since either one fails the build without its certificate or credentials. A new certificate still builds SmartScreen reputation over time; an EV certificate or Trusted Signing skips most of that.
