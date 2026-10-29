@@ -6,14 +6,18 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
 /// How many commands the bar remembers.
 const HISTORY_LIMIT: usize = 50;
+
+/// The most output one command sends the bar. Past it the rest is read and dropped, so a
+/// command like `yes` can't flood the page.
+const OUTPUT_LIMIT: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -302,6 +306,9 @@ pub enum ShellEvent {
 struct Running {
     pid: u32,
     stopped: bool,
+    /// Windows: the job holding the command and everything it starts.
+    #[cfg(windows)]
+    job: Option<job::Job>,
 }
 
 fn running() -> &'static Mutex<HashMap<u64, Running>> {
@@ -363,6 +370,8 @@ pub fn run(
             Running {
                 pid: child.id(),
                 stopped: false,
+                #[cfg(windows)]
+                job: job::Job::holding(&child),
             },
         );
     }
@@ -375,12 +384,19 @@ pub fn run(
         child.stdout.take().map(|out| Box::new(out) as _),
         child.stderr.take().map(|err| Box::new(err) as _),
     ];
+    let budget = Arc::new(Budget::new(OUTPUT_LIMIT));
     let readers: Vec<_> = streams
         .into_iter()
         .flatten()
         .map(|stream| {
-            let send = send.clone();
-            std::thread::spawn(move || pipe(stream, |text| send(ShellEvent::Output { text })))
+            let (send, budget) = (send.clone(), budget.clone());
+            std::thread::spawn(move || {
+                pipe(stream, |text| {
+                    if let Some(text) = budget.take(text) {
+                        send(ShellEvent::Output { text });
+                    }
+                })
+            })
         })
         .collect();
 
@@ -389,11 +405,16 @@ pub fn run(
             let _ = reader.join();
         }
         let status = child.wait();
-        let stopped = running()
+        let entry = running()
             .lock()
             .ok()
-            .and_then(|mut running| running.remove(&id))
-            .is_some_and(|entry| entry.stopped);
+            .and_then(|mut running| running.remove(&id));
+        let stopped = entry.as_ref().is_some_and(|entry| entry.stopped);
+        // What the command left running on purpose (an editor it opened) carries on.
+        #[cfg(windows)]
+        if let Some(job) = entry.and_then(|entry| entry.job) {
+            job.release();
+        }
         match status {
             Ok(status) => send(ShellEvent::Exit {
                 code: status.code(),
@@ -406,6 +427,48 @@ pub fn run(
         }
     });
     Ok(())
+}
+
+/// What's left of a command's output allowance, shared by its stdout and stderr.
+struct Budget {
+    left: AtomicUsize,
+    told: AtomicBool,
+}
+
+impl Budget {
+    fn new(limit: usize) -> Self {
+        Self {
+            left: AtomicUsize::new(limit),
+            told: AtomicBool::new(false),
+        }
+    }
+
+    /// The part of `text` that still fits (cut on a character boundary), with a notice the
+    /// first time the allowance runs out; none once there's nothing left to send.
+    fn take(&self, text: String) -> Option<String> {
+        let wanted = text.len();
+        let left = self
+            .left
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                Some(left.saturating_sub(wanted))
+            })
+            .unwrap_or(0);
+        if left >= wanted {
+            return Some(text);
+        }
+        let mut keep = left;
+        while !text.is_char_boundary(keep) {
+            keep -= 1;
+        }
+        let mut sent = text[..keep].to_string();
+        if !self.told.swap(true, Ordering::SeqCst) {
+            sent.push_str(&format!(
+                "\n[Output truncated: Zephyr shows the first {} MB]\n",
+                OUTPUT_LIMIT / (1024 * 1024)
+            ));
+        }
+        (!sent.is_empty()).then_some(sent)
+    }
 }
 
 /// Forwards a stream as text, never splitting a UTF-8 character across two chunks.
@@ -439,23 +502,135 @@ fn incomplete_tail(bytes: &[u8]) -> usize {
 
 /// Stops a running command and everything it started.
 pub fn stop(id: u64) {
-    let pid = running().lock().ok().and_then(|mut running| {
-        running.get_mut(&id).map(|entry| {
+    if let Ok(mut running) = running().lock()
+        && let Some(entry) = running.get_mut(&id)
+    {
+        entry.stopped = true;
+        end(entry);
+    }
+}
+
+/// Stops every running command, as Zephyr quits.
+pub fn stop_all() {
+    if let Ok(mut running) = running().lock() {
+        for entry in running.values_mut() {
             entry.stopped = true;
-            entry.pid
-        })
-    });
-    let Some(pid) = pid else {
-        return;
-    };
+            end(entry);
+        }
+    }
+}
+
+fn end(entry: &Running) {
     #[cfg(windows)]
-    let _ = crate::util::hidden_command("taskkill")
-        .args(["/T", "/F", "/PID", &pid.to_string()])
-        .status();
+    {
+        if let Some(job) = &entry.job {
+            job.kill();
+            return;
+        }
+        let _ = crate::util::spawn_detached(crate::util::hidden_command("taskkill").args([
+            "/T",
+            "/F",
+            "/PID",
+            &entry.pid.to_string(),
+        ]));
+    }
+    // SAFETY: kill only sends a signal; the negative pid is the command's own process group.
     #[cfg(unix)]
     unsafe {
-        libc::kill(-(pid as i32), libc::SIGTERM);
+        libc::kill(-(entry.pid as i32), libc::SIGTERM);
     }
+}
+
+/// Windows: a Job Object that a command runs in, so stopping it ends everything it started,
+/// and Zephyr exiting (even crashing) ends whatever is still running: Windows closes the
+/// job's last handle then, and the job kills what's in it.
+#[cfg(windows)]
+mod job {
+    use std::os::windows::io::AsRawHandle;
+
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JobObjectExtendedLimitInformation, SetInformationJobObject, TerminateJobObject,
+    };
+    use windows::core::PCWSTR;
+
+    pub struct Job(HANDLE);
+
+    // SAFETY: a job handle can be used and closed from any thread.
+    unsafe impl Send for Job {}
+
+    impl Job {
+        /// A new job holding `child`. None when it couldn't be made; stopping then falls back
+        /// to taskkill.
+        pub fn holding(child: &std::process::Child) -> Option<Job> {
+            // SAFETY: the job is a fresh handle owned by the Job (closed on drop), and the
+            // child's handle stays open while `child` is borrowed.
+            unsafe {
+                let job = Job(CreateJobObjectW(None, PCWSTR::null()).ok()?);
+                job.limit(JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE).ok()?;
+                AssignProcessToJobObject(job.0, HANDLE(child.as_raw_handle())).ok()?;
+                Some(job)
+            }
+        }
+
+        /// Ends everything in the job.
+        pub fn kill(&self) {
+            // SAFETY: the handle is open until the Job drops.
+            unsafe {
+                let _ = TerminateJobObject(self.0, 1);
+            }
+        }
+
+        /// Lets go of the job without ending what's still in it.
+        pub fn release(self) {
+            let _ = self.limit(JOB_OBJECT_LIMIT(0));
+        }
+
+        fn limit(&self, flags: JOB_OBJECT_LIMIT) -> windows::core::Result<()> {
+            let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+            info.BasicLimitInformation.LimitFlags = flags;
+            // SAFETY: `info` is the struct this information class reads, at its own size.
+            unsafe {
+                SetInformationJobObject(
+                    self.0,
+                    JobObjectExtendedLimitInformation,
+                    &info as *const _ as *const core::ffi::c_void,
+                    size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                )
+            }
+        }
+    }
+
+    impl Drop for Job {
+        fn drop(&mut self) {
+            // SAFETY: the Job owns the handle and closes it once.
+            unsafe {
+                let _ = CloseHandle(self.0);
+            }
+        }
+    }
+}
+
+/// macOS: removes Terminal scripts a crash or a quit left behind; each one normally removes
+/// itself as it starts.
+pub fn clean_terminal_scripts() {
+    #[cfg(target_os = "macos")]
+    if let Ok(entries) = std::fs::read_dir(terminal_scripts()) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with("run-") && name.ends_with(".command") {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn terminal_scripts() -> PathBuf {
+    std::env::temp_dir().join("zephyr-shell")
 }
 
 /// Opens a terminal window in `dir` that runs `command` and stays open at a prompt afterwards.
@@ -532,21 +707,26 @@ pub fn open_in_terminal(
     #[cfg(target_os = "macos")]
     {
         use std::os::unix::fs::PermissionsExt;
-        let scripts = std::env::temp_dir().join("zephyr-shell");
+        let scripts = terminal_scripts();
         std::fs::create_dir_all(&scripts).map_err(|err| err.to_string())?;
         let script = scripts.join(format!(
             "run-{}.command",
             NEXT_ID.fetch_add(1, Ordering::SeqCst)
         ));
+        let quote = |text: &str| format!("'{}'", text.replace('\'', "'\\''"));
         let program = shell.program.to_string_lossy();
         let folder = match dir {
-            Some(dir) => format!("'{}'", dir.replace('\'', "'\\''")),
+            Some(dir) => quote(dir),
             None => "~".into(),
         };
-        // Terminal runs the file with the login shell, then leaves that shell open.
+        // Terminal runs the file with the login shell, then leaves that shell open. The file
+        // removes itself first: the shell already has it open, so it still reads to the end.
+        let remove = quote(&script.to_string_lossy());
         std::fs::write(
             &script,
-            format!("#!{program} -il\ncd {folder}\n{command}\nexec {program} -il\n"),
+            format!(
+                "#!{program} -il\nrm -f {remove}\ncd {folder}\n{command}\nexec {program} -il\n"
+            ),
         )
         .map_err(|err| err.to_string())?;
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700))
@@ -564,6 +744,36 @@ pub fn open_in_terminal(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn output_stops_at_the_limit_with_one_notice() {
+        let budget = Budget::new(10);
+        assert_eq!(budget.take("hello".into()).as_deref(), Some("hello"));
+        let cut = budget.take("worldwide!".into()).unwrap();
+        assert!(cut.starts_with("world\n[Output truncated"));
+        assert_eq!(budget.take("more".into()), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_job_ends_the_command_and_what_it_started() {
+        let mut child = crate::util::hidden_command("cmd")
+            .args(["/C", "ping -n 30 127.0.0.1 >NUL"])
+            .spawn()
+            .unwrap();
+        let job = job::Job::holding(&child).expect("a job");
+        let started = Instant::now();
+        job.kill();
+        child.wait().unwrap();
+        assert!(started.elapsed().as_secs() < 5);
+    }
+
+    #[test]
+    fn output_is_cut_on_a_character_boundary() {
+        let budget = Budget::new(4);
+        let cut = budget.take("ab€".into()).unwrap();
+        assert!(cut.starts_with("ab\n[Output truncated"));
+    }
 
     #[test]
     fn history_keeps_the_newest_first_without_repeats() {

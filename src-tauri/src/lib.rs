@@ -118,6 +118,7 @@ pub fn run() {
 
             startup::mark("setup began");
             move_from_old_identifier(app.handle());
+            shell::clean_terminal_scripts();
             let config_dir = app.path().app_config_dir()?;
             let state = AppState::load(config_dir.join("state.json"));
             let snapshot = state
@@ -393,7 +394,10 @@ pub fn run() {
                 startup::mark("event loop running, the summon shortcut works");
             }
             // Tray Quit and an update's restart both come through here.
-            tauri::RunEvent::Exit => clipboard::flush(),
+            tauri::RunEvent::Exit => {
+                clipboard::flush();
+                shell::stop_all();
+            }
             _ => {}
         });
 }
