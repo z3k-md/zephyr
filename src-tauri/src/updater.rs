@@ -1,10 +1,11 @@
 //! Updates from GitHub Releases, checked at launch, whenever the bar is summoned and the last
 //! check is over three minutes old, and from "Check for updates". A small card in the
 //! screen's corner shows the download, then counts down a few seconds before installing:
-//! Install now skips the wait, and Later keeps the download, with a button in the bar to
-//! install it whenever suits.
+//! Install now skips the wait, and Later puts it off, with a button in the bar to install it
+//! whenever suits. The installer isn't held in memory meanwhile: installing a put-off update
+//! downloads it again, and checks its signature again.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -12,6 +13,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
+use crate::timer::Debounce;
 use crate::util::now_ms;
 
 const FIRST_CHECK_DELAY: Duration = Duration::from_secs(5);
@@ -27,8 +29,8 @@ const COUNTDOWN: Duration = Duration::from_secs(5);
 static CHECKING: AtomicBool = AtomicBool::new(false);
 /// When the last check started.
 static LAST_CHECK: Mutex<Option<Instant>> = Mutex::new(None);
-/// Bumped by Later and Install now, so a countdown already running stands down.
-static COUNTDOWN_GENERATION: AtomicU64 = AtomicU64::new(0);
+/// Installs when the countdown runs out; Later and Install now cancel it.
+static COUNTDOWN_TIMER: Debounce = Debounce::new();
 /// Later pressed while downloading: keep the download, but don't count down when it's done.
 static DEFERRED: AtomicBool = AtomicBool::new(false);
 
@@ -63,7 +65,25 @@ pub enum Status {
 struct Downloaded {
     version: String,
     update: Option<Update>,
-    bytes: Vec<u8>,
+    /// The verified installer, while the countdown runs. Later lets it go (it's tens of MB),
+    /// and installing downloads it again, checking its signature again.
+    bytes: Option<Vec<u8>>,
+}
+
+impl Downloaded {
+    /// Put off with Later: only what's needed to fetch it again stays.
+    fn put_off(&mut self) {
+        self.bytes = None;
+    }
+}
+
+/// Lets go of a put-off update's installer.
+fn put_off_download() {
+    if let Ok(mut saved) = downloaded_slot().lock()
+        && let Some(saved) = saved.as_mut()
+    {
+        saved.put_off();
+    }
 }
 
 fn status_slot() -> &'static Mutex<Option<Status>> {
@@ -182,6 +202,7 @@ async fn download_latest(app: &AppHandle, by_hand: bool) -> Result<String, Strin
     };
     keep(&version, Some(update), bytes);
     if DEFERRED.swap(false, Ordering::SeqCst) {
+        put_off_download();
         announce_waiting(app);
         return Ok(format!(
             "Update {version} is downloaded; the button in the bar installs it."
@@ -199,7 +220,7 @@ fn keep(version: &str, update: Option<Update>, bytes: Vec<u8>) {
         *saved = Some(Downloaded {
             version: version.to_string(),
             update,
-            bytes,
+            bytes: Some(bytes),
         });
     }
 }
@@ -254,7 +275,6 @@ impl<'a> Progress<'a> {
 
 /// Shows the countdown, and installs when it runs out unless Later or Install now came first.
 fn count_down(app: &AppHandle, version: &str) {
-    let generation = COUNTDOWN_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     publish(
         app,
         Status::Ready {
@@ -263,18 +283,13 @@ fn count_down(app: &AppHandle, version: &str) {
         },
     );
     let app = app.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(COUNTDOWN);
-        if COUNTDOWN_GENERATION.load(Ordering::SeqCst) == generation {
-            install_now(&app);
-        }
-    });
+    COUNTDOWN_TIMER.schedule(COUNTDOWN, move || install_now(&app));
 }
 
 /// Installs the downloaded update. On Windows the installer closes the app and reopens it;
 /// on macOS the new app is put in place and restarted into.
 pub fn install_now(app: &AppHandle) {
-    COUNTDOWN_GENERATION.fetch_add(1, Ordering::SeqCst);
+    COUNTDOWN_TIMER.cancel();
     let Some(downloaded) = downloaded_slot()
         .lock()
         .ok()
@@ -300,8 +315,30 @@ pub fn install_now(app: &AppHandle) {
             hide(&app);
             return;
         };
+        let bytes = match downloaded.bytes {
+            Some(bytes) => bytes,
+            None => match download_again(&app, &update, &version) {
+                Ok(bytes) if !DEFERRED.swap(false, Ordering::SeqCst) => bytes,
+                // Later again while it downloaded.
+                Ok(_) => {
+                    if let Ok(mut saved) = downloaded_slot().lock() {
+                        *saved = Some(Downloaded {
+                            version,
+                            update: Some(update),
+                            bytes: None,
+                        });
+                    }
+                    announce_waiting(&app);
+                    return;
+                }
+                Err(message) => {
+                    publish(&app, Status::Failed { version, message });
+                    return;
+                }
+            },
+        };
         log::info!("installing update {version}");
-        match update.install(&downloaded.bytes) {
+        match update.install(&bytes) {
             Ok(()) => {
                 // Windows never gets here: the installer has already closed the app.
                 log::info!("update {version} installed, restarting");
@@ -318,12 +355,33 @@ pub fn install_now(app: &AppHandle) {
     });
 }
 
-/// Puts the update off: the card goes away, and the download is kept, for the button in the
-/// bar or the next check by hand.
+/// An update put off with Later, fetched again to install. The download checks the
+/// signature, as the first one did.
+fn download_again(app: &AppHandle, update: &Update, version: &str) -> Result<Vec<u8>, String> {
+    log::info!("downloading update {version} again to install it");
+    DEFERRED.store(false, Ordering::SeqCst);
+    let mut progress = Progress::new(app, version);
+    let bytes = tauri::async_runtime::block_on(
+        update.download(|chunk, total| progress.add(chunk as u64, total), || {}),
+    )
+    .map_err(|err| format!("Couldn't download update {version}: {err}"))?;
+    publish(
+        app,
+        Status::Installing {
+            version: version.to_string(),
+        },
+    );
+    Ok(bytes)
+}
+
+/// Puts the update off: the card goes away, and which update it was is kept, for the button
+/// in the bar or the next check by hand. The installer itself isn't kept.
 pub fn later(app: &AppHandle) {
-    COUNTDOWN_GENERATION.fetch_add(1, Ordering::SeqCst);
+    COUNTDOWN_TIMER.cancel();
     if matches!(current(), Some(Status::Downloading { .. })) {
         DEFERRED.store(true, Ordering::SeqCst);
+    } else {
+        put_off_download();
     }
     hide(app);
     announce_waiting(app);
@@ -467,4 +525,21 @@ pub fn rehearse(app: &AppHandle) {
             count_down(&app, &version);
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_put_off_update_lets_its_installer_go_but_stays_waiting() {
+        let mut saved = Downloaded {
+            version: "2.11.0".into(),
+            update: None,
+            bytes: Some(vec![0; 64]),
+        };
+        saved.put_off();
+        assert_eq!(saved.version, "2.11.0");
+        assert!(saved.bytes.is_none());
+    }
 }
