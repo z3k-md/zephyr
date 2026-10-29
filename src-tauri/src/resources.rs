@@ -362,15 +362,27 @@ fn measure(table: &mut Table, elapsed: f64) -> HashMap<u32, Usage> {
             (1, 1)
         }
     });
-    let mut pids = vec![0 as libc::pid_t; 8192];
-    // SAFETY: the buffer's size in bytes is passed with it.
-    let count = unsafe {
-        libc::proc_listallpids(
-            pids.as_mut_ptr().cast(),
-            (pids.len() * std::mem::size_of::<libc::pid_t>()) as libc::c_int,
-        )
-    };
-    pids.truncate(count.max(0) as usize);
+    // Sized from the count asked first, with room for processes started meanwhile; a full
+    // buffer may have been cut short, so it's asked again with more.
+    // SAFETY: without a buffer the call only counts.
+    let mut room = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) }.max(0) as usize + 64;
+    let mut pids = Vec::new();
+    loop {
+        pids.resize(room, 0 as libc::pid_t);
+        // SAFETY: the buffer's size in bytes is passed with it.
+        let count = unsafe {
+            libc::proc_listallpids(
+                pids.as_mut_ptr().cast(),
+                (pids.len() * std::mem::size_of::<libc::pid_t>()) as libc::c_int,
+            )
+        }
+        .max(0) as usize;
+        if count < room || room >= 1 << 20 {
+            pids.truncate(count.min(room));
+            break;
+        }
+        room *= 2;
+    }
 
     let mut usage = HashMap::with_capacity(pids.len());
     let mut counters = HashMap::with_capacity(pids.len());
@@ -633,6 +645,7 @@ fn read_battery() -> Option<Battery> {
 
 /// Where the memory is, for the Memory drill-in. Windows: what's in use, the modified and
 /// standby lists (cache Windows can hand back) and what's free, plus the commit charge.
+/// macOS: see its `memory_breakdown`.
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MemoryBreakdown {
@@ -645,6 +658,11 @@ pub struct MemoryBreakdown {
     pub commit_limit: u64,
     pub paged_pool: u64,
     pub nonpaged_pool: u64,
+    /// macOS: memory the system keeps resident, and what the compressor holds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wired: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compressed: Option<u64>,
 }
 
 #[cfg(windows)]
@@ -704,11 +722,72 @@ pub fn memory_breakdown() -> Option<MemoryBreakdown> {
         commit_limit: info.CommitLimit as u64 * page,
         paged_pool: info.KernelPaged as u64 * page,
         nonpaged_pool: info.KernelNonpaged as u64 * page,
+        wired: None,
+        compressed: None,
     })
 }
 
-/// macOS fills this in from host_statistics64 (to come).
-#[cfg(not(windows))]
+/// macOS: Activity Monitor's split. App memory goes in `in_use`, cached files (which macOS
+/// hands back the moment an app needs them) in `standby`, alongside wired and compressed
+/// memory; the Windows-only lists and commit charge stay zero.
+#[cfg(target_os = "macos")]
+pub fn memory_breakdown() -> Option<MemoryBreakdown> {
+    // SAFETY: plain counters, for which all zeros is a valid value.
+    let mut info: libc::vm_statistics64 = unsafe { std::mem::zeroed() };
+    let mut count = libc::HOST_VM_INFO64_COUNT;
+    // SAFETY: the statistics structure and its size in integers, which the call fills in.
+    #[allow(deprecated)]
+    let status = unsafe {
+        libc::host_statistics64(
+            libc::mach_host_self(),
+            libc::HOST_VM_INFO64,
+            (&mut info as *mut libc::vm_statistics64).cast(),
+            &mut count,
+        )
+    };
+    if status != libc::KERN_SUCCESS {
+        return None;
+    }
+    // SAFETY: no pointers.
+    let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) }.max(0) as u64;
+    let mut total = 0u64;
+    let mut size = std::mem::size_of::<u64>();
+    // SAFETY: a u64 and its size, which hw.memsize fills.
+    let read = unsafe {
+        libc::sysctlbyname(
+            c"hw.memsize".as_ptr(),
+            (&mut total as *mut u64).cast(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if read != 0 || total == 0 || page == 0 {
+        return None;
+    }
+    Some(mac_breakdown(&info, page, total))
+}
+
+#[cfg(target_os = "macos")]
+fn mac_breakdown(info: &libc::vm_statistics64, page: u64, total: u64) -> MemoryBreakdown {
+    let pages = |count: u32| u64::from(count) * page;
+    let app = pages(info.internal_page_count).saturating_sub(pages(info.purgeable_count));
+    let wired = pages(info.wire_count);
+    let compressed = pages(info.compressor_page_count);
+    let cached = pages(info.external_page_count) + pages(info.purgeable_count);
+    MemoryBreakdown {
+        total,
+        in_use: app,
+        standby: cached,
+        // Whatever the rest leave, so the parts add up to what's installed.
+        free: total.saturating_sub(app + wired + compressed + cached),
+        wired: Some(wired),
+        compressed: Some(compressed),
+        ..MemoryBreakdown::default()
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn memory_breakdown() -> Option<MemoryBreakdown> {
     None
 }
@@ -716,6 +795,13 @@ pub fn memory_breakdown() -> Option<MemoryBreakdown> {
 /// Quits (or with `force`, kills) every process in a group. Apps are asked to quit the way
 /// the Dock asks, so they can offer to save; other processes get SIGTERM (or SIGKILL).
 pub fn quit(name: &str, pids: &[u32], force: bool) -> Result<(), String> {
+    // The page's list can be a tick old, and an ended process's pid can be handed to another
+    // since, so only the processes that are still `name` are acted on. That also makes the
+    // protected check below hold for what actually runs, not just what the page called it.
+    let pids = still_named(name, pids);
+    if pids.is_empty() {
+        return Err(format!("{name} isn't running any more"));
+    }
     if force
         && PROTECTED
             .iter()
@@ -725,10 +811,10 @@ pub fn quit(name: &str, pids: &[u32], force: bool) -> Result<(), String> {
             "{name} keeps the system running, so it can't be force quit"
         ));
     }
-    let targets = polite_targets(pids, force);
+    let targets = polite_targets(&pids, force);
     let mut failed = 0;
     for pid in &targets {
-        if !quit_one(*pid, force) {
+        if !quit_one(*pid, force, name) {
             failed += 1;
         }
     }
@@ -748,21 +834,43 @@ pub fn relaunch(name: &str, pids: &[u32]) -> Result<(), String> {
     {
         return Err(format!("{name} isn't one Zephyr relaunches"));
     }
+    let pids = still_named(name, pids);
     #[cfg(unix)]
-    for pid in pids {
+    for pid in &pids {
         // SAFETY: kill only signals the pid; launchd starts Finder and the Dock again.
         unsafe { libc::kill(*pid as libc::pid_t, libc::SIGTERM) };
     }
     #[cfg(windows)]
     {
-        for pid in pids {
-            quit_one(*pid, true);
+        for pid in &pids {
+            quit_one(*pid, true, name);
         }
         std::thread::sleep(std::time::Duration::from_millis(500));
         crate::util::spawn_detached(&mut std::process::Command::new("explorer.exe"))
             .map_err(|err| format!("Couldn't start Explorer again: {err}"))?;
     }
     Ok(())
+}
+
+/// The processes among `pids` that, read afresh, still belong to the row called `name`.
+fn still_named(name: &str, pids: &[u32]) -> Vec<u32> {
+    let asked: Vec<Pid> = pids.iter().map(|pid| Pid::from_u32(*pid)).collect();
+    let mut system = System::new();
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&asked),
+        true,
+        ProcessRefreshKind::nothing().with_exe(UpdateKind::Always),
+    );
+    let users = Users::new();
+    pids.iter()
+        .copied()
+        .filter(|pid| {
+            system
+                .process(Pid::from_u32(*pid))
+                .and_then(|process| Identity::of(process, &users))
+                .is_some_and(|identity| identity.name.eq_ignore_ascii_case(name))
+        })
+        .collect()
 }
 
 /// macOS: a polite quit asks only the app itself, which closes its own helpers once it has
@@ -773,13 +881,15 @@ fn polite_targets(pids: &[u32], force: bool) -> Vec<u32> {
     if force {
         return pids.to_vec();
     }
-    let apps: Vec<u32> = pids
-        .iter()
-        .copied()
-        .filter(|pid| {
-            NSRunningApplication::runningApplicationWithProcessIdentifier(*pid as i32).is_some()
-        })
-        .collect();
+    // Called off the main thread, which has no pool to drain what AppKit autoreleases.
+    let apps: Vec<u32> = objc2::rc::autoreleasepool(|_| {
+        pids.iter()
+            .copied()
+            .filter(|pid| {
+                NSRunningApplication::runningApplicationWithProcessIdentifier(*pid as i32).is_some()
+            })
+            .collect()
+    });
     if apps.is_empty() { pids.to_vec() } else { apps }
 }
 
@@ -789,14 +899,19 @@ fn polite_targets(pids: &[u32], _force: bool) -> Vec<u32> {
 }
 
 #[cfg(target_os = "macos")]
-fn quit_one(pid: u32, force: bool) -> bool {
+fn quit_one(pid: u32, force: bool, _name: &str) -> bool {
     use objc2_app_kit::NSRunningApplication;
-    if let Some(app) = NSRunningApplication::runningApplicationWithProcessIdentifier(pid as i32) {
-        return if force {
-            app.forceTerminate()
-        } else {
-            app.terminate()
-        };
+    let asked = objc2::rc::autoreleasepool(|_| {
+        NSRunningApplication::runningApplicationWithProcessIdentifier(pid as i32).map(|app| {
+            if force {
+                app.forceTerminate()
+            } else {
+                app.terminate()
+            }
+        })
+    });
+    if let Some(done) = asked {
+        return done;
     }
     // SAFETY: kill only signals the pid; no memory is involved.
     unsafe {
@@ -807,27 +922,40 @@ fn quit_one(pid: u32, force: bool) -> bool {
     }
 }
 
+/// Windows: a forced quit opens the process first and checks, through that handle, that it
+/// still runs the program `name` names, so a pid reused in the meantime is left alone.
 #[cfg(windows)]
-fn quit_one(pid: u32, force: bool) -> bool {
+fn quit_one(pid: u32, force: bool, name: &str) -> bool {
     use windows::Win32::Foundation::CloseHandle;
-    use windows::Win32::System::Threading::{OpenProcess, PROCESS_TERMINATE, TerminateProcess};
+    use windows::Win32::System::Threading::{
+        OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE, TerminateProcess,
+    };
     if !force {
         // Asking politely: close the program's windows, as their close buttons would.
         return crate::running::close_process_windows(pid);
     }
     // SAFETY: the handle is checked and closed; TerminateProcess only ends that process.
     unsafe {
-        let Ok(handle) = OpenProcess(PROCESS_TERMINATE, false, pid) else {
+        let Ok(handle) = OpenProcess(
+            PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION,
+            false,
+            pid,
+        ) else {
             return false;
         };
-        let done = TerminateProcess(handle, 1).is_ok();
+        let same = crate::util::image_path(handle).is_some_and(|path| {
+            Path::new(&path)
+                .file_stem()
+                .is_some_and(|stem| stem.to_string_lossy().eq_ignore_ascii_case(name))
+        });
+        let done = same && TerminateProcess(handle, 1).is_ok();
         let _ = CloseHandle(handle);
         done
     }
 }
 
 #[cfg(not(any(target_os = "macos", windows)))]
-fn quit_one(pid: u32, force: bool) -> bool {
+fn quit_one(pid: u32, force: bool, _name: &str) -> bool {
     // SAFETY: kill only signals the pid.
     unsafe {
         libc::kill(
@@ -841,10 +969,12 @@ fn quit_one(pid: u32, force: bool) -> bool {
 #[cfg(target_os = "macos")]
 pub fn switch_to(pids: &[u32]) -> bool {
     use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
-    pids.iter().any(|pid| {
-        NSRunningApplication::runningApplicationWithProcessIdentifier(*pid as i32).is_some_and(
-            |app| app.activateWithOptions(NSApplicationActivationOptions::ActivateAllWindows),
-        )
+    objc2::rc::autoreleasepool(|_| {
+        pids.iter().any(|pid| {
+            NSRunningApplication::runningApplicationWithProcessIdentifier(*pid as i32).is_some_and(
+                |app| app.activateWithOptions(NSApplicationActivationOptions::ActivateAllWindows),
+            )
+        })
     })
 }
 
@@ -878,6 +1008,46 @@ mod tests {
         assert_eq!(app_bundle(Path::new("/usr/bin/top")), None);
     }
 
+    #[test]
+    fn only_processes_still_under_the_name_are_acted_on() {
+        let own = std::process::id();
+        let mut system = System::new();
+        system.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&[Pid::from_u32(own)]),
+            true,
+            ProcessRefreshKind::nothing().with_exe(UpdateKind::Always),
+        );
+        let name = Identity::of(system.process(Pid::from_u32(own)).unwrap(), &Users::new())
+            .unwrap()
+            .name;
+        assert_eq!(still_named(&name.to_uppercase(), &[own]), [own]);
+        // A pid now running something else, or nothing at all.
+        assert!(still_named("lsass", &[own]).is_empty());
+        assert!(still_named(&name, &[u32::MAX - 1]).is_empty());
+        assert_eq!(
+            quit("lsass", &[own], true),
+            Err("lsass isn't running any more".to_string())
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_memory_splits_as_activity_monitor_does() {
+        // SAFETY: plain counters.
+        let mut info: libc::vm_statistics64 = unsafe { std::mem::zeroed() };
+        info.internal_page_count = 50;
+        info.purgeable_count = 10;
+        info.wire_count = 20;
+        info.compressor_page_count = 5;
+        info.external_page_count = 15;
+        let parts = mac_breakdown(&info, 100, 20_000);
+        assert_eq!(parts.in_use, 4_000);
+        assert_eq!(parts.wired, Some(2_000));
+        assert_eq!(parts.compressed, Some(500));
+        assert_eq!(parts.standby, 2_500);
+        assert_eq!(parts.free, 11_000);
+        assert!(memory_breakdown().is_some_and(|parts| parts.total > 0));
+    }
     #[test]
     fn a_tick_lists_this_process_grouped_and_sorted() {
         let first = snapshot("cpu", "", 500);

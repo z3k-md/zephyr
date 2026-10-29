@@ -635,4 +635,7 @@ export interface MemoryBreakdown {
   commitLimit: number;
   pagedPool: number;
   nonpagedPool: number;
+  /** macOS: resident and compressed memory, which Windows doesn't report. */
+  wired?: number;
+  compressed?: number;
 }

@@ -45,12 +45,23 @@
   const parts = computed(() => {
     const memory = props.memory;
     if (!memory || !memory.total) return [];
-    return [
-      { label: 'In use', value: memory.inUse, color: 'rgba(255, 255, 255, 0.78)' },
-      { label: 'Modified', value: memory.modified, color: '#f0b443' },
-      { label: 'Standby', value: memory.standby, color: 'rgba(255, 255, 255, 0.32)' },
-      { label: 'Free', value: memory.free, color: 'rgba(255, 255, 255, 0.1)' },
-    ].map((part) => ({ ...part, share: (part.value / memory.total) * 100 }));
+    // macOS splits it as Activity Monitor does.
+    const list =
+      memory.wired !== undefined
+        ? [
+            { label: 'App memory', value: memory.inUse, color: 'rgba(255, 255, 255, 0.78)' },
+            { label: 'Wired', value: memory.wired, color: '#f0b443' },
+            { label: 'Compressed', value: memory.compressed ?? 0, color: '#d98a5f' },
+            { label: 'Cached files', value: memory.standby, color: 'rgba(255, 255, 255, 0.32)' },
+            { label: 'Free', value: memory.free, color: 'rgba(255, 255, 255, 0.1)' },
+          ]
+        : [
+            { label: 'In use', value: memory.inUse, color: 'rgba(255, 255, 255, 0.78)' },
+            { label: 'Modified', value: memory.modified, color: '#f0b443' },
+            { label: 'Standby', value: memory.standby, color: 'rgba(255, 255, 255, 0.32)' },
+            { label: 'Free', value: memory.free, color: 'rgba(255, 255, 255, 0.1)' },
+          ];
+    return list.map((part) => ({ ...part, share: (part.value / memory.total) * 100 }));
   });
 </script>
 
@@ -114,7 +125,7 @@
             <b>{{ bytes(part.value) }}</b>
           </li>
         </ul>
-        <ul class="res-legend res-legend-more">
+        <ul v-if="memory.wired === undefined" class="res-legend res-legend-more">
           <li>
             Committed <b>{{ bytes(memory.committed) }} of {{ bytes(memory.commitLimit) }}</b>
           </li>
@@ -125,7 +136,11 @@
             Non-paged pool <b>{{ bytes(memory.nonpagedPool) }}</b>
           </li>
         </ul>
-        <p class="res-drill-note">
+        <p v-if="memory.wired !== undefined" class="res-drill-note">
+          Cached files are kept from disk, and macOS hands them back the moment an app needs the
+          memory.
+        </p>
+        <p v-else class="res-drill-note">
           Standby is cache Windows hands back the moment an app needs it; Modified is waiting to be
           written to disk first.
         </p>
