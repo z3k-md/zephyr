@@ -23,7 +23,7 @@ pub async fn resources_snapshot(
 ) -> Result<crate::resources::Snapshot, String> {
     crate::stats::set_resources_open(true);
     tauri::async_runtime::spawn_blocking(move || {
-        crate::resources::snapshot(&sort, &filter, limit.clamp(1, 200))
+        crate::resources::snapshot(&sort, &filter, limit.clamp(1, 1000))
     })
     .await
     .map_err(|err| err.to_string())
@@ -92,6 +92,14 @@ pub async fn resources_detail(key: String, pids: Vec<u32>) -> Option<crate::reso
         .await
         .ok()
         .flatten()
+}
+
+/// The processes behind an expanded Resources row.
+#[tauri::command]
+pub async fn resources_processes(pids: Vec<u32>) -> Vec<crate::resources::ProcessRow> {
+    tauri::async_runtime::spawn_blocking(move || crate::resources::processes(&pids))
+        .await
+        .unwrap_or_default()
 }
 
 /// The CPU drill-in: each logical processor over the last 15 minutes.

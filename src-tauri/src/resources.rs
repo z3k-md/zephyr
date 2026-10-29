@@ -90,6 +90,8 @@ struct Table {
     /// Each row's CPU and memory, a reading a tick while the view is open, for the detail
     /// pane's graph.
     histories: HashMap<String, VecDeque<(Instant, f32, u64)>>,
+    /// Each process's reading at the last tick, for a row's expanded process list.
+    usage: HashMap<u32, Usage>,
     last: Instant,
     used: Instant,
 }
@@ -155,14 +157,21 @@ impl Identity {
         } else {
             String::new()
         };
+        let path = process
+            .exe()
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        // Windows programs carry their own icon; elsewhere a lone program gets the glyph.
+        let icon = if cfg!(windows) && !path.is_empty() {
+            format!("app:exe:{path}")
+        } else {
+            "glyph:terminal".to_string()
+        };
         Some(Identity {
             key: format!("proc:{}", name.to_lowercase()),
             name: label,
-            icon: "glyph:terminal".to_string(),
-            path: process
-                .exe()
-                .map(|path| path.to_string_lossy().into_owned())
-                .unwrap_or_default(),
+            icon,
+            path,
             command: command.join(" "),
             subtitle,
             user,
@@ -255,6 +264,7 @@ pub fn snapshot(sort: &str, filter: &str, limit: usize) -> Snapshot {
         identities: HashMap::new(),
         counters: HashMap::new(),
         histories: HashMap::new(),
+        usage: HashMap::new(),
         last: Instant::now(),
         used: Instant::now(),
     });
@@ -279,6 +289,7 @@ pub fn snapshot(sort: &str, filter: &str, limit: usize) -> Snapshot {
     }
     let processes = table.identities.len();
     let mut rows: Vec<Row> = groups.into_values().collect();
+    table.usage = usage;
     let gpu = stats::gpu_by_process();
     for row in &mut rows {
         let busiest = row.pids.iter().filter_map(|pid| gpu.get(pid)).copied();
@@ -627,6 +638,93 @@ pub fn detail(key: &str, pids: &[u32]) -> Option<Detail> {
             .map(|history| buckets(history, 120))
             .unwrap_or_default(),
     })
+}
+
+/// One process in an expanded row.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessRow {
+    pub pid: u32,
+    pub name: String,
+    /// What this one does, from its command line: Chromium's `--type` ("renderer",
+    /// "gpu-process"), else its first few arguments.
+    pub role: String,
+    pub cpu: Option<f32>,
+    pub memory: Option<u64>,
+    pub disk: Option<u64>,
+    pub gpu: Option<f32>,
+}
+
+/// The processes behind a row, busiest first, as read at the last tick.
+pub fn processes(pids: &[u32]) -> Vec<ProcessRow> {
+    let Ok(guard) = TABLE.lock() else {
+        return Vec::new();
+    };
+    let Some(table) = guard.as_ref() else {
+        return Vec::new();
+    };
+    let gpu = stats::gpu_by_process();
+    let mut list: Vec<ProcessRow> = pids
+        .iter()
+        .filter_map(|pid| {
+            let identity = table.identities.get(pid)?;
+            let usage = table.usage.get(pid);
+            let name = table
+                .system
+                .process(Pid::from_u32(*pid))
+                .map(|process| process.name().to_string_lossy().into_owned())
+                .unwrap_or_else(|| identity.name.clone());
+            Some(ProcessRow {
+                pid: *pid,
+                name,
+                role: role(&identity.command),
+                cpu: usage.map(|usage| usage.cpu),
+                memory: usage.map(|usage| usage.memory),
+                disk: usage.map(|usage| usage.disk),
+                gpu: (!gpu.is_empty()).then(|| gpu.get(pid).copied().unwrap_or(0.0)),
+            })
+        })
+        .collect();
+    list.sort_by(|left, right| {
+        let cpu = |row: &ProcessRow| row.cpu.unwrap_or(-1.0);
+        cpu(right)
+            .total_cmp(&cpu(left))
+            .then_with(|| right.memory.cmp(&left.memory))
+            .then_with(|| left.pid.cmp(&right.pid))
+    });
+    list
+}
+
+/// What a process does, from its command line (see `ProcessRow::role`).
+fn role(command: &str) -> String {
+    let mut parts = command.split_whitespace();
+    let _program = parts.next();
+    let args: Vec<&str> = parts.collect();
+    let flag = |name: &str| {
+        args.iter()
+            .find_map(|arg| arg.strip_prefix(name))
+            .map(|value| value.trim_matches('"').to_string())
+    };
+    if let Some(kind) = flag("--type=") {
+        // A utility process says which service it runs ("network.mojom.NetworkService").
+        return match flag("--utility-sub-type=") {
+            Some(service) if kind == "utility" => {
+                let service = service.rsplit('.').next().unwrap_or(&service).to_string();
+                format!("utility · {service}")
+            }
+            _ => kind,
+        };
+    }
+    args.iter()
+        .take(3)
+        .map(|arg| {
+            arg.trim_matches('"')
+                .rsplit(['/', '\\'])
+                .next()
+                .unwrap_or(arg)
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// A row's history in `count` stretches over the window, each the highest CPU and memory in
@@ -1065,6 +1163,19 @@ mod tests {
     }
 
     #[test]
+    fn a_process_role_comes_from_its_command_line() {
+        let chrome = r#""C:\Program Files\Google\Chrome\chrome.exe" --type=renderer --lang=en"#;
+        assert_eq!(role(chrome), "renderer");
+        let network = "chrome.exe --type=utility --utility-sub-type=network.mojom.NetworkService";
+        assert_eq!(role(network), "utility · NetworkService");
+        assert_eq!(
+            role("node /home/me/app/server.js --port 3000"),
+            "server.js --port 3000"
+        );
+        assert_eq!(role("chrome.exe"), "");
+    }
+
+    #[test]
     fn apps_with_windows_sort_ahead_of_background_processes() {
         let mut rows = vec![
             row("indexer", Some(40.0), false),
@@ -1142,8 +1253,22 @@ mod tests {
         let first = snapshot("cpu", "", 500);
         assert!(first.processes > 1);
         let second = snapshot("memory", "", 500);
-        let memories: Vec<u64> = second.rows.iter().filter_map(|row| row.memory).collect();
-        assert!(memories.windows(2).all(|pair| pair[0] >= pair[1]));
+        // Apps with windows first, then the rest, each group by memory.
+        assert!(
+            second
+                .rows
+                .windows(2)
+                .all(|pair| pair[0].windowed >= pair[1].windowed)
+        );
+        for windowed in [true, false] {
+            let memories: Vec<u64> = second
+                .rows
+                .iter()
+                .filter(|row| row.windowed == windowed)
+                .filter_map(|row| row.memory)
+                .collect();
+            assert!(memories.windows(2).all(|pair| pair[0] >= pair[1]));
+        }
         let own = std::process::id();
         let filtered = snapshot("cpu", &own.to_string(), 10);
         assert!(filtered.rows.iter().any(|row| row.pids.contains(&own)));

@@ -614,6 +614,18 @@ export interface Battery {
 }
 
 /** Show info for one Resources row. */
+/** One process in an expanded Resources row. */
+export interface ResourceProcess {
+  pid: number;
+  name: string;
+  /** What it does: Chromium's process type ("renderer"), else its first arguments. */
+  role: string;
+  cpu: number | null;
+  memory: number | null;
+  disk: number | null;
+  gpu: number | null;
+}
+
 export interface ResourceDetail {
   key: string;
   pid: number;

@@ -1696,12 +1696,33 @@ button.res-tile:hover {
 
 /* "Apps" and "Background processes", above their rows. */
 .res-group {
-  padding: 8px 12px 4px;
+  padding: 6px 6px 2px;
+}
+
+.res-group button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
   color: var(--faint);
+  font: inherit;
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+  cursor: pointer;
+}
+
+.res-group button:hover {
+  color: var(--fg);
+}
+
+.res-group-count {
+  font-weight: 500;
+  letter-spacing: 0;
 }
 
 .res-row {
@@ -1749,14 +1770,60 @@ button.res-tile:hover {
 }
 
 .res-count {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
   margin-left: 4px;
-  padding: 0 5px;
+  padding: 0 3px 0 5px;
+  border: 0;
   border-radius: 6px;
   background: var(--chip);
   color: var(--muted);
+  font: inherit;
   font-size: 10.5px;
   vertical-align: 1px;
+  cursor: pointer;
+}
+
+.res-count:hover,
+.res-count.open {
+  color: var(--fg);
+}
+
+/* A right-pointing chevron that turns down when its group or row is open. */
+.res-chevron {
+  width: 11px;
+  height: 11px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 120ms ease;
+}
+
+.res-chevron.open,
+.res-count.open .res-chevron {
+  transform: rotate(90deg);
+}
+
+/* One process under an expanded row, indented past the icon. */
+.res-process {
+  min-height: 28px;
+  padding-top: 2px;
+  padding-bottom: 2px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.res-process .res-name {
+  padding-left: 30px;
+}
+
+.res-pid {
+  margin-left: 6px;
+  color: var(--faint);
+  font-size: 11px;
 }
 
 .res-cpu,

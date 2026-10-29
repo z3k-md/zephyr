@@ -36,6 +36,7 @@ import type {
   NetworkSummary,
   SpeedResult,
   ResourceDetail,
+  ResourceProcess,
   CoreHeat,
   MemoryBreakdown,
 } from './types';
@@ -668,6 +669,11 @@ export function speedTestCancel(): Promise<void> {
 
 export function resourcesDetail(key: string, pids: number[]): Promise<ResourceDetail | null> {
   return invoke<ResourceDetail | null>('resources_detail', { key, pids });
+}
+
+/** The processes behind an expanded Resources row, busiest first. */
+export function resourcesProcesses(pids: number[]): Promise<ResourceProcess[]> {
+  return invoke<ResourceProcess[]>('resources_processes', { pids });
 }
 
 export function resourcesCores(): Promise<CoreHeat> {

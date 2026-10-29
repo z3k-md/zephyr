@@ -150,6 +150,7 @@ pub fn run() {
             commands::resources::resources_reveal,
             commands::resources::save_show_stats,
             commands::resources::resources_detail,
+            commands::resources::resources_processes,
             commands::resources::resources_cores,
             commands::resources::resources_memory,
             commands::resources::save_cpu_temp,

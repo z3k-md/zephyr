@@ -18,6 +18,7 @@
     resourcesCores,
     resourcesDetail,
     resourcesMemory,
+    resourcesProcesses,
     resourcesQuit,
     resourcesRelaunch,
     resourcesReveal,
@@ -29,6 +30,7 @@
     CoreHeat,
     MemoryBreakdown,
     ResourceDetail,
+    ResourceProcess,
     ResourcePoint,
     ResourceRow,
     ResourceSnapshot,
@@ -121,11 +123,95 @@
   // Ticks at the picked rate while live.
   const poll = usePoll(tick, rate, live);
 
+  // The list as drawn: "Apps" and "Background processes" headers that fold their rows away
+  // (remembered), and under an expanded row, the processes it's made of.
+  type Group = 'apps' | 'background';
+  type Entry =
+    | { kind: 'group'; key: string; group: Group; count: number }
+    | { kind: 'row'; key: string; row: ResourceRow; index: number }
+    | { kind: 'process'; key: string; process: ResourceProcess };
+  const GROUP_NAMES: Record<Group, string> = { apps: 'Apps', background: 'Background processes' };
+  const COLLAPSED_KEY = 'zephyr.resources.collapsed';
+  const collapsed = ref(savedCollapsed());
+  /** Rows showing their processes, and those processes as of the last tick. */
+  const expanded = ref(new Set<string>());
+  const children = shallowRef(new Map<string, ResourceProcess[]>());
+
+  function groupOf(row: ResourceRow): Group {
+    return row.windowed ? 'apps' : 'background';
+  }
+
+  function savedCollapsed(): Set<Group> {
+    try {
+      const saved = JSON.parse(localStorage.getItem(COLLAPSED_KEY) ?? '[]');
+      return new Set((Array.isArray(saved) ? saved : []).filter((g) => g in GROUP_NAMES));
+    } catch {
+      return new Set();
+    }
+  }
+
+  function toggleGroup(group: Group) {
+    const next = new Set(collapsed.value);
+    if (!next.delete(group)) next.add(group);
+    collapsed.value = next;
+    try {
+      localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...next]));
+    } catch {
+      // Not remembered, then.
+    }
+  }
+
+  const entries = computed<Entry[]>(() => {
+    const counts = { apps: 0, background: 0 };
+    for (const row of rows.value) counts[groupOf(row)]++;
+    // Headers only when there's something to tell apart.
+    const grouped = counts.apps > 0 && counts.background > 0;
+    const list: Entry[] = [];
+    let last: Group | null = null;
+    let index = 0;
+    for (const row of rows.value) {
+      const group = groupOf(row);
+      if (grouped && group !== last) {
+        list.push({ kind: 'group', key: `group:${group}`, group, count: counts[group] });
+        last = group;
+      }
+      if (grouped && collapsed.value.has(group)) continue;
+      list.push({ kind: 'row', key: row.key, row, index: index++ });
+      if (!expanded.value.has(row.key)) continue;
+      for (const process of children.value.get(row.key) ?? []) {
+        list.push({ kind: 'process', key: `${row.key}#${process.pid}`, process });
+      }
+    }
+    return list;
+  });
+  /** The rows the keys move through: those not folded away. */
+  const visible = computed(() => entries.value.flatMap((e) => (e.kind === 'row' ? [e.row] : [])));
+
   const selectedIndex = computed(() => {
-    const index = rows.value.findIndex((row) => row.key === selectedKey.value);
+    const index = visible.value.findIndex((row) => row.key === selectedKey.value);
     return index < 0 ? 0 : index;
   });
-  const current = computed<ResourceRow | undefined>(() => rows.value[selectedIndex.value]);
+  const current = computed<ResourceRow | undefined>(() => visible.value[selectedIndex.value]);
+
+  function toggleExpand(row: ResourceRow) {
+    const next = new Set(expanded.value);
+    if (!next.delete(row.key)) next.add(row.key);
+    expanded.value = next;
+    void loadChildren();
+  }
+
+  /** Reads the processes of each expanded row that shows. */
+  async function loadChildren() {
+    const open = visible.value.filter((row) => expanded.value.has(row.key) && row.pids.length > 1);
+    if (open.length === 0) {
+      if (children.value.size) children.value = new Map();
+      return;
+    }
+    const lists = await Promise.all(
+      open.map((row) => resourcesProcesses(row.pids).catch(() => [] as ResourceProcess[]))
+    );
+    children.value = new Map(open.map((row, index) => [row.key, lists[index]]));
+  }
 
   onMounted(async () => {
     start();
@@ -175,6 +261,7 @@
       if (ticket !== generation) return;
       data.value = next;
       apply(next.rows);
+      await loadChildren();
       // Only what's on screen is asked for.
       const row = current.value;
       if (detailOpen.value && row) {
@@ -264,7 +351,7 @@
   }
 
   function select(index: number) {
-    const row = rows.value[index];
+    const row = visible.value[index];
     if (!row) return;
     heldUntil = Date.now() + HOLD_MS;
     if (row.key !== selectedKey.value) confirming.value = null;
@@ -272,17 +359,8 @@
   }
 
   /** "Apps" above the first app row and "Background" above the first other one, when both. */
-  const hasApps = computed(() => rows.value.some((row) => row.windowed));
-  const hasBackground = computed(() => rows.value.some((row) => !row.windowed));
-  function groupLabel(index: number): string {
-    if (!hasApps.value || !hasBackground.value) return '';
-    const row = rows.value[index];
-    if (index > 0 && rows.value[index - 1].windowed === row.windowed) return '';
-    return row.windowed ? 'Apps' : 'Background processes';
-  }
-
   function move(delta: number) {
-    const count = rows.value.length;
+    const count = visible.value.length;
     if (count === 0) return;
     select((Math.min(selectedIndex.value, count - 1) + delta + count) % count);
   }
@@ -502,6 +580,19 @@
       move(event.key === 'ArrowDown' ? 1 : -1);
       return;
     }
+    // → opens a row's processes and ← closes them, unless the caret has text to move over.
+    const row = current.value;
+    if (event.key === 'ArrowRight' && !modifier && caretAtEnd && row && row.pids.length > 1) {
+      event.preventDefault();
+      if (!expanded.value.has(row.key)) toggleExpand(row);
+      return;
+    }
+    if (event.key === 'ArrowLeft' && !modifier && row && expanded.value.has(row.key)) {
+      if (input && input.selectionStart !== 0) return;
+      event.preventDefault();
+      toggleExpand(row);
+      return;
+    }
     if (event.key === 'Enter') {
       event.preventDefault();
       if (!event.repeat) void switchTo();
@@ -608,7 +699,7 @@
   });
 
   /** The row's CPU bar: a full bar is one whole core, or the whole machine on Windows. */
-  function cpuWidth(row: ResourceRow): string {
+  function cpuWidth(row: { cpu: number | null }): string {
     return `${Math.min(100, Math.max(0, row.cpu ?? 0))}%`;
   }
 
@@ -802,69 +893,150 @@
         @mouseenter="pointerIn = true"
         @mouseleave="pointerIn = false"
       >
-        <template v-for="(row, index) in rows" :key="row.key">
-          <li v-if="groupLabel(index)" class="res-group" role="presentation">
-            {{ groupLabel(index) }}
+        <template v-for="entry in entries" :key="entry.key">
+          <li v-if="entry.kind === 'group'" class="res-group" role="presentation">
+            <button
+              type="button"
+              :aria-expanded="!collapsed.has(entry.group)"
+              @mousedown.prevent
+              @click="toggleGroup(entry.group)"
+            >
+              <svg
+                class="res-chevron"
+                :class="{ open: !collapsed.has(entry.group) }"
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+              >
+                <path d="m9 6 6 6-6 6" />
+              </svg>
+              {{ GROUP_NAMES[entry.group] }}
+              <span class="res-group-count">{{ entry.count }}</span>
+            </button>
+          </li>
+          <li v-else-if="entry.kind === 'process'" class="res-row res-process" role="presentation">
+            <span class="res-name">
+              <span class="res-text">
+                <span class="label">
+                  {{ entry.process.name }}
+                  <span class="res-pid">{{ entry.process.pid }}</span>
+                </span>
+                <span v-if="entry.process.role" class="res-sub">{{ entry.process.role }}</span>
+              </span>
+            </span>
+            <span class="res-cpu">
+              <template v-if="entry.process.cpu !== null">
+                {{ percent(entry.process.cpu) }}
+                <span class="res-bar" aria-hidden="true"
+                  ><span :style="{ width: cpuWidth(entry.process) }"
+                /></span>
+              </template>
+              <template v-else>—</template>
+            </span>
+            <span class="res-memory">
+              {{ entry.process.memory !== null ? bytes(entry.process.memory) : '—' }}
+            </span>
+            <span v-if="isMac" class="res-disk">
+              {{
+                entry.process.disk === null
+                  ? '—'
+                  : entry.process.disk
+                    ? `${bytes(entry.process.disk)}/s`
+                    : '0'
+              }}
+            </span>
+            <span v-else class="res-disk res-gpu">
+              {{
+                entry.process.gpu === null
+                  ? '—'
+                  : entry.process.gpu
+                    ? percent(entry.process.gpu)
+                    : '0'
+              }}
+            </span>
           </li>
           <li
-            :id="`res-row-${index}`"
+            v-else
+            :id="`res-row-${entry.index}`"
             role="option"
-            :aria-selected="index === selectedIndex"
+            :aria-selected="entry.index === selectedIndex"
             class="res-row"
             :class="{
-              selected: index === selectedIndex,
-              confirming: confirming?.key === row.key,
-              locked: row.locked,
+              selected: entry.index === selectedIndex,
+              confirming: confirming?.key === entry.row.key,
+              locked: entry.row.locked,
             }"
             v-tip="
-              row.locked
-                ? `${row.name} runs as ${row.user || 'another user'}; its use needs administrator rights to read`
+              entry.row.locked
+                ? `${entry.row.name} runs as ${entry.row.user || 'another user'}; its use needs administrator rights to read`
                 : undefined
             "
             @mousedown.prevent
-            @click="select(index)"
-            @dblclick="switchTo(row)"
+            @click="select(entry.index)"
+            @dblclick="switchTo(entry.row)"
           >
             <span class="res-name">
-              <RowIcon :icon="row.icon" :label="row.name" :size="20" />
+              <RowIcon :icon="entry.row.icon" :label="entry.row.name" :size="20" />
               <span class="res-text">
                 <span class="label">
-                  {{ row.name }}
-                  <span
-                    v-if="row.pids.length > 1"
+                  {{ entry.row.name }}
+                  <button
+                    v-if="entry.row.pids.length > 1"
+                    type="button"
                     class="res-count"
-                    v-tip="`${row.pids.length} processes`"
-                    >{{ row.pids.length }}</span
+                    :class="{ open: expanded.has(entry.row.key) }"
+                    :aria-expanded="expanded.has(entry.row.key)"
+                    v-tip="
+                      `${entry.row.pids.length} processes · ${expanded.has(entry.row.key) ? 'hide (←)' : 'show (→)'}`
+                    "
+                    @mousedown.prevent
+                    @click.stop="toggleExpand(entry.row)"
                   >
+                    {{ entry.row.pids.length }}
+                    <svg class="res-chevron" viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="m9 6 6 6-6 6" />
+                    </svg>
+                  </button>
                 </span>
-                <span v-if="row.subtitle" class="res-sub">{{ row.subtitle }}</span>
+                <span v-if="entry.row.subtitle" class="res-sub">{{ entry.row.subtitle }}</span>
               </span>
             </span>
-            <span v-if="confirming?.key === row.key" class="res-confirm">
+            <span v-if="confirming?.key === entry.row.key" class="res-confirm">
               {{
-                row.relaunch && !confirming.force
-                  ? `${RELAUNCH} ${row.name}?`
-                  : `${confirming.force ? 'Force quit' : 'Quit'} ${row.name}?`
+                entry.row.relaunch && !confirming.force
+                  ? `${RELAUNCH} ${entry.row.name}?`
+                  : `${confirming.force ? 'Force quit' : 'Quit'} ${entry.row.name}?`
               }}
               <KeyHints :hints="CONFIRM_HINTS" />
             </span>
             <template v-else>
               <span class="res-cpu">
-                <template v-if="row.cpu !== null">
-                  {{ percent(row.cpu) }}
+                <template v-if="entry.row.cpu !== null">
+                  {{ percent(entry.row.cpu) }}
                   <span class="res-bar" aria-hidden="true"
-                    ><span :style="{ width: cpuWidth(row) }"
+                    ><span :style="{ width: cpuWidth(entry.row) }"
                   /></span>
                 </template>
                 <template v-else>—</template>
               </span>
-              <span class="res-memory">{{ row.memory !== null ? bytes(row.memory) : '—' }}</span>
+              <span class="res-memory">{{
+                entry.row.memory !== null ? bytes(entry.row.memory) : '—'
+              }}</span>
               <span v-if="isMac" class="res-disk">
-                {{ row.disk === null ? '—' : row.disk ? `${bytes(row.disk)}/s` : '0' }}
+                {{
+                  entry.row.disk === null
+                    ? '—'
+                    : entry.row.disk
+                      ? `${bytes(entry.row.disk)}/s`
+                      : '0'
+                }}
               </span>
               <span v-else class="res-disk res-gpu">
                 {{
-                  row.gpu === null || row.gpu === undefined ? '—' : row.gpu ? percent(row.gpu) : '0'
+                  entry.row.gpu === null || entry.row.gpu === undefined
+                    ? '—'
+                    : entry.row.gpu
+                      ? percent(entry.row.gpu)
+                      : '0'
                 }}
               </span>
             </template>
