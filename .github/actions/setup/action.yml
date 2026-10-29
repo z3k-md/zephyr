@@ -27,10 +27,15 @@ runs:
         rustup toolchain install 2> /dev/null || rustup show
         rustc --version
 
+    # One entry per job and OS, replaced whenever Cargo.lock or the toolchain changes; the
+    # Prune caches workflow deletes the entries a newer one replaced. Only registry sources and
+    # dependency builds are kept (cache-all-crates and cache-workspace-crates stay off), and not
+    # ~/.cargo/bin, which the runner image already provides.
     - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       if: inputs.rust == 'true'
       with:
         workspaces: src-tauri
+        cache-bin: false
         save-if: ${{ inputs.save-cache }}
 
     - name: Install frontend dependencies

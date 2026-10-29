@@ -1,0 +1,41 @@
+name: Prune caches
+# The repository gets 10 GB of Actions cache and each cargo cache is up to about 1 GB. A new
+# entry is saved whenever Cargo.lock or the toolchain changes, and the one it replaces would
+# otherwise linger for a week, so this keeps only the newest entry per key prefix and branch.
+on:
+  workflow_run:
+    workflows: [Checks, Release]
+    types: [completed]
+  schedule:
+    - cron: '17 4 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: prune-caches
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      # Keys end in hash segments (v0-rust-checks-Windows_NT-x64-ca17c645-337d32f0); what comes
+      # before them names the job and OS. Within each prefix and branch, the newest entry stays.
+      - name: Delete replaced caches
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh cache list --limit 1000 --json id,key,ref,createdAt --jq '
+            group_by(.ref + " " + (.key | sub("(-[0-9a-f]{8,})+$"; "")))
+            | map(sort_by(.createdAt) | reverse | .[1:]) | flatten
+            | .[] | "\(.id) \(.ref) \(.key)"' |
+            while read -r id ref key; do
+              echo "Deleting $key ($ref)"
+              gh cache delete "$id"
+            done
