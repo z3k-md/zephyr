@@ -57,8 +57,9 @@ jobs:
               --json headSha --jq '.[0].headSha // ""' || true)
           fi
           if [ -n "$base" ] && git merge-base --is-ancestor "$base" HEAD 2> /dev/null; then
-            echo "Since $base:"
-            git diff --name-only "$base" HEAD | tee /dev/stderr | bash scripts/changes.sh >> "$GITHUB_OUTPUT"
+            changed=$(git diff --name-only "$base" HEAD)
+            printf 'Since %s:\n%s\n' "$base" "$changed"
+            printf '%s\n' "$changed" | bash scripts/changes.sh >> "$GITHUB_OUTPUT"
           else
             printf 'rust=true\nweb=true\n' >> "$GITHUB_OUTPUT"
           fi
