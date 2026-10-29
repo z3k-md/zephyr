@@ -1,5 +1,7 @@
+/** On a focused row: Delete or Backspace takes it out. */ function onRowKey(event: KeyboardEvent,
+group: LaunchGroup, index: number) { if (event.key === 'Delete' || event.key === 'Backspace') {
 <script setup lang="ts">
-  import { computed, ref } from 'vue';
+  import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
   import { bindingFailures, errorMessage, pickFolder, saveBinding, saveLaunchGroups } from '../api';
   import { formatShortcut } from '../keys';
   import ShortcutRecorder from '../components/ShortcutRecorder.vue';
@@ -10,9 +12,10 @@
 
   // Settings › Launch groups: named sets of apps (and links and folders) the bar opens in
   // one go. Each group has a name, which the bar finds it by, an optional hotkey, and its
-  // apps in the order they open: added from a search that ranks them as the bar does, then
-  // dragged (or Alt+↑/↓) into order.
-  const props = defineProps<{ snapshot: Snapshot }>();
+  // apps, added from a search that ranks them as the bar does. A group left with nothing in it
+  // is dropped when the page is left.
+  /** `shown`: the page is on screen; leaving it drops empty groups. */
+  const props = defineProps<{ snapshot: Snapshot; shown: boolean }>();
   const emit = defineEmits<{ apply: [snapshot: Snapshot] }>();
 
   const error = ref<string | null>(null);
@@ -55,6 +58,28 @@
     save((draft ?? groups.value).filter((group) => group.id !== id));
   }
 
+  // A group nothing was added to (New group, then left alone) isn't kept: it goes when the
+  // page is left, or when Settings is closed or hidden.
+  function dropEmpty() {
+    const current = draft ?? groups.value;
+    const kept = current.filter((group) => group.items.length > 0);
+    if (kept.length !== current.length) save(kept);
+  }
+  watch(
+    () => props.shown,
+    (shown) => {
+      if (!shown) dropEmpty();
+    }
+  );
+  function onHidden() {
+    if (document.visibilityState === 'hidden') dropEmpty();
+  }
+  onMounted(() => document.addEventListener('visibilitychange', onHidden));
+  onUnmounted(() => {
+    document.removeEventListener('visibilitychange', onHidden);
+    dropEmpty();
+  });
+
   function addItem(id: string, item: GroupItem) {
     update(id, (group) => ({ ...group, items: [...group.items, item] }));
   }
@@ -82,15 +107,6 @@
     addItem(id, { kind: 'folder', value: folder, label: folder.split(/[\\/]/).pop() || folder });
   }
 
-  function move(id: string, from: number, to: number) {
-    update(id, (group) => {
-      const items = [...group.items];
-      const [item] = items.splice(from, 1);
-      items.splice(Math.max(0, Math.min(items.length, to)), 0, item);
-      return { ...group, items };
-    });
-  }
-
   function removeItem(id: string, index: number) {
     update(id, (group) => ({ ...group, items: group.items.filter((_, at) => at !== index) }));
   }
@@ -100,33 +116,12 @@
     return item.kind === 'url' ? 'glyph:link' : 'glyph:folder';
   }
 
-  // Dragging a row onto another puts it there.
-  const dragging = ref<{ group: string; index: number } | null>(null);
-  const over = ref<number | null>(null);
-  function drop(group: string, index: number) {
-    const from = dragging.value;
-    dragging.value = null;
-    over.value = null;
-    if (from && from.group === group && from.index !== index) move(group, from.index, index);
-  }
-
-  /** On a focused row: Alt+↑/↓ moves it, Delete or Backspace takes it out. */
+  /** On a focused row: Delete or Backspace takes it out. */
   function onRowKey(event: KeyboardEvent, group: LaunchGroup, index: number) {
-    if (event.altKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
-      event.preventDefault();
-      const to = index + (event.key === 'ArrowDown' ? 1 : -1);
-      if (to < 0 || to >= group.items.length) return;
-      move(group.id, index, to);
-      void focusRow(group.id, to);
-    } else if (event.key === 'Delete' || event.key === 'Backspace') {
+    if (event.key === 'Delete' || event.key === 'Backspace') {
       event.preventDefault();
       removeItem(group.id, index);
     }
-  }
-
-  async function focusRow(group: string, index: number) {
-    await saving;
-    document.querySelector<HTMLElement>(`[data-row="${group}:${index}"]`)?.focus();
   }
 
   // Each group's hotkey is its binding in Settings › Shortcuts, recorded right here.
@@ -197,13 +192,18 @@
         <button
           v-if="hotkeyOf(group)"
           type="button"
-          class="text-button"
+          class="launch-button"
           @click="saveHotkey(group, '')"
         >
           Clear
         </button>
         <span class="spacer" />
-        <button type="button" class="text-button" :disabled="busy" @click="remove(group.id)">
+        <button
+          type="button"
+          class="launch-button danger"
+          :disabled="busy"
+          @click="remove(group.id)"
+        >
           Delete group
         </button>
       </div>
@@ -217,25 +217,10 @@
           :key="`${item.kind}:${item.value}`"
           :data-row="`${group.id}:${index}`"
           class="launch-item"
-          :class="{
-            dragging: dragging?.group === group.id && dragging.index === index,
-            over: dragging?.group === group.id && over === index,
-          }"
           tabindex="0"
-          draggable="true"
-          :aria-label="`${item.label}. Alt+Up or Alt+Down moves it, Delete removes it.`"
-          @dragstart="dragging = { group: group.id, index }"
-          @dragend="
-            dragging = null;
-            over = null;
-          "
-          @dragover.prevent="over = index"
-          @drop.prevent="drop(group.id, index)"
+          :aria-label="`${item.label}. Delete removes it.`"
           @keydown="onRowKey($event, group, index)"
         >
-          <svg class="launch-grip" viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01" />
-          </svg>
           <RowIcon :icon="itemIcon(item)" :label="item.label" :size="20" />
           <span class="launch-item-label">{{ item.label }}</span>
           <span v-if="item.kind !== 'app'" class="hint-text">{{
@@ -271,12 +256,12 @@
       <div class="launch-more">
         <button
           type="button"
-          class="text-button"
+          class="launch-button"
           @click="linking = linking === group.id ? null : group.id"
         >
           Add a link
         </button>
-        <button type="button" class="text-button" :disabled="busy" @click="addFolder(group.id)">
+        <button type="button" class="launch-button" :disabled="busy" @click="addFolder(group.id)">
           Add a folder…
         </button>
       </div>

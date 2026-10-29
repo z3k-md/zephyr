@@ -1026,6 +1026,7 @@
         v-if="snapshot"
         v-show="!search && active === 'launchgroups'"
         :snapshot="snapshot"
+        :shown="!search && active === 'launchgroups'"
         @apply="apply"
       />
       <section v-if="snapshot" v-show="!search && active === 'resources'" id="section-resources">

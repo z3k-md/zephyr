@@ -375,6 +375,11 @@ impl Persisted {
         // An older build run since (an installed release, say) can put back what went with
         // destinations, so they go on every load, not only on the move to version 3.
         let dropped = self.drop_destinations();
+        // A launch group left with nothing in it (Settings drops these itself; this catches one
+        // left by a crash or an older version).
+        let groups = self.launch_groups.len();
+        self.launch_groups.retain(|group| !group.items.is_empty());
+        let dropped = dropped || self.launch_groups.len() != groups;
         if self.version >= SCHEMA_VERSION {
             return dropped;
         }
