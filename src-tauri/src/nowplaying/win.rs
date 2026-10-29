@@ -237,16 +237,12 @@ pub fn focus_app(source_app: &str) -> bool {
 }
 
 fn focus_program(exe: &str) -> bool {
-    use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM};
-    use windows::Win32::System::Threading::{
-        OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
-        QueryFullProcessImageNameW,
-    };
+    use windows::Win32::Foundation::{HWND, LPARAM};
     use windows::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GW_OWNER, GetWindow, GetWindowTextLengthW, GetWindowThreadProcessId, IsIconic,
         IsWindowVisible, SW_RESTORE, SetForegroundWindow, ShowWindow,
     };
-    use windows::core::{BOOL, PWSTR};
+    use windows::core::BOOL;
 
     struct Search {
         exe: String,
@@ -265,20 +261,7 @@ fn focus_program(exe: &str) -> bool {
             }
             let mut pid = 0;
             GetWindowThreadProcessId(hwnd, Some(&mut pid));
-            let Ok(process) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else {
-                return true.into();
-            };
-            let mut path = [0u16; 1024];
-            let mut length = path.len() as u32;
-            let named = QueryFullProcessImageNameW(
-                process,
-                PROCESS_NAME_WIN32,
-                PWSTR(path.as_mut_ptr()),
-                &mut length,
-            );
-            let _ = CloseHandle(process);
-            if named.is_ok() {
-                let path = String::from_utf16_lossy(&path[..length as usize]);
+            if let Some(path) = crate::util::process_path(pid) {
                 let name = path.rsplit('\\').next().unwrap_or_default();
                 if name.eq_ignore_ascii_case(&search.exe) {
                     search.found = Some(hwnd);
@@ -357,29 +340,8 @@ pub fn change_volume(exe: &str, step: f32) -> Option<f32> {
 
 /// A process's file name ("chrome.exe"), when it can be read.
 fn process_name(pid: u32) -> Option<String> {
-    use windows::Win32::Foundation::CloseHandle;
-    use windows::Win32::System::Threading::{
-        OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
-        QueryFullProcessImageNameW,
-    };
-    use windows::core::PWSTR;
-
-    // SAFETY: a handle opened, read and closed here.
-    unsafe {
-        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
-        let mut path = [0u16; 1024];
-        let mut length = path.len() as u32;
-        let named = QueryFullProcessImageNameW(
-            process,
-            PROCESS_NAME_WIN32,
-            PWSTR(path.as_mut_ptr()),
-            &mut length,
-        );
-        let _ = CloseHandle(process);
-        named.ok()?;
-        let path = String::from_utf16_lossy(&path[..length as usize]);
-        path.rsplit('\\').next().map(str::to_string)
-    }
+    let path = crate::util::process_path(pid)?;
+    path.rsplit('\\').next().map(str::to_string)
 }
 #[cfg(test)]
 mod tests {

@@ -343,8 +343,7 @@ mod platform {
     use windows::Win32::System::Com::StructuredStorage::PropVariantToStringAlloc;
     use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
     use windows::Win32::System::Threading::{
-        GetCurrentProcessId, OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
-        QueryFullProcessImageNameW,
+        GetCurrentProcessId, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
     };
     use windows::Win32::UI::Shell::PropertiesSystem::{
         IPropertyStore, SHGetPropertyStoreForWindow,
@@ -432,19 +431,7 @@ mod platform {
             let Ok(process) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else {
                 return (String::new(), None);
             };
-            let mut path = [0u16; 1024];
-            let mut length = path.len() as u32;
-            let named = QueryFullProcessImageNameW(
-                process,
-                PROCESS_NAME_WIN32,
-                PWSTR(path.as_mut_ptr()),
-                &mut length,
-            );
-            let exe = if named.is_ok() {
-                String::from_utf16_lossy(&path[..length as usize])
-            } else {
-                String::new()
-            };
+            let exe = crate::util::image_path(process).unwrap_or_default();
             let mut id = [0u16; 256];
             let mut id_length = id.len() as u32;
             let packaged =
