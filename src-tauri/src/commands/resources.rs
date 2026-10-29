@@ -131,12 +131,14 @@ pub async fn save_cpu_temp(app: AppHandle, enabled: bool) -> Result<Persisted, S
     .await
 }
 
-/// Whether PawnIO is installed, and the helper's latest reading.
+/// Whether PawnIO is installed, the helper's latest reading, and whether its copy is missing
+/// or outdated, so it needs setting up again.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CpuTempStatus {
     pawnio: bool,
     celsius: Option<f32>,
+    needs_setup: bool,
 }
 
 #[tauri::command]
@@ -144,5 +146,6 @@ pub fn cpu_temp_status() -> CpuTempStatus {
     CpuTempStatus {
         pawnio: crate::cputemp::pawnio_installed(),
         celsius: crate::cputemp::read(),
+        needs_setup: crate::cputemp::needs_setup(),
     }
 }

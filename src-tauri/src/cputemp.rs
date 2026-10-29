@@ -10,9 +10,11 @@
 //! copy this program into a folder under Program Files only administrators can change, and to
 //! have that copy register the task for itself. The helper refuses to run when it, or the
 //! PawnIO library it loads, could be changed without administrator rights. The copy stays as
-//! it was set up until the reading is turned on again; Zephyr's own updates don't touch it.
-//! A task left by an older Zephyr, which ran Zephyr's own copy, moves itself over the next
-//! time it runs.
+//! it was set up; Zephyr's own updates don't touch it. Setting it up records the copy's
+//! `PROTOCOL` beside it, and a Zephyr that expects a newer one leaves the old copy stopped
+//! and offers to set it up again (one prompt). A task left by an older Zephyr, which ran
+//! Zephyr's own copy, moves itself over the next time it runs. Uninstalling Zephyr removes the
+//! task and the copy too, after one prompt (installer/hooks.nsh).
 //!
 //! The helper puts each reading in a small shared memory block anyone signed in can read,
 //! reads once a second while Zephyr asks for it and not at all otherwise, and quits when
@@ -24,6 +26,10 @@
 const TASK: &str = "Zephyr CPU temperature";
 /// The argument that makes this program the helper instead of the app.
 pub const HELPER_ARG: &str = "--cpu-temp-helper";
+/// What the helper and Zephyr agree on (the shared reading, the events, the task); raised
+/// whenever a change needs the helper's copy set up again.
+#[cfg(windows)]
+const PROTOCOL: u32 = 1;
 
 /// Tctl, as AMD's own tools show it: 0.125 °C steps in bits 21–31 of the SMN register, 49
 /// lower when the range-select bit (19) is set.
@@ -171,6 +177,9 @@ mod imp {
         ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, DACL_SECURITY_INFORMATION, GetAce,
         OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES,
     };
+    use windows::Win32::Storage::Packaging::Appx::{
+        GetPackagePathByFullName, GetPackagesByPackageFamily,
+    };
     use windows::Win32::System::Com::CoTaskMemFree;
     use windows::Win32::System::LibraryLoader::{
         GetProcAddress, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR, LOAD_LIBRARY_SEARCH_SYSTEM32,
@@ -192,7 +201,7 @@ mod imp {
     use windows::Win32::UI::WindowsAndMessaging::SW_HIDE;
     use windows::core::{HSTRING, PCSTR, PCWSTR, PWSTR, s};
 
-    use super::{HELPER_ARG, TASK};
+    use super::{HELPER_ARG, PROTOCOL, TASK};
 
     /// The shared reading: °C, and when it was taken (ms since 1970).
     #[repr(C)]
@@ -219,6 +228,11 @@ mod imp {
     const HELPER_EXE: &str = "zephyr-cpu-temperature.exe";
     /// With `HELPER_ARG`: registers the task for the copy this runs from.
     const INSTALL_ARG: &str = "--install";
+    /// With `HELPER_ARG`, from the uninstaller: removes the task and the copy, as turning the
+    /// reading off does.
+    const REMOVE_ARG: &str = "--remove";
+    /// The copy's `PROTOCOL`, written by the copy as it registers its task.
+    const PROTOCOL_FILE: &str = "protocol";
     /// What setting it up printed, beside the copy, where only administrators can write.
     const SETUP_LOG: &str = "setup.log";
 
@@ -301,8 +315,24 @@ mod imp {
         }
     }
 
+    /// Whether the helper's copy is set up for this Zephyr's `PROTOCOL`. A copy from before
+    /// the protocol was recorded counts as outdated.
+    fn helper_current() -> bool {
+        helper_dir()
+            .and_then(|dir| std::fs::read_to_string(dir.join(PROTOCOL_FILE)).ok())
+            .and_then(|text| text.trim().parse::<u32>().ok())
+            .is_some_and(|protocol| protocol >= PROTOCOL)
+    }
+
+    /// Whether the reading needs setting up again: its copy is missing, or outdated.
+    pub fn needs_setup() -> bool {
+        !helper_current()
+    }
+
     /// Marks Zephyr as running for the helper, and starts the helper when the reading is on.
-    /// Running the task needs no prompt: it was set up with permission when turned on.
+    /// Running the task needs no prompt: it was set up with permission when turned on. An
+    /// outdated copy isn't started (Settings offers to set it up again); with no copy at all
+    /// the task may be an older Zephyr's, which moves itself over as it runs.
     pub fn start(enabled: bool) {
         // SAFETY: named objects owned for the life of the process; their handles are never
         // closed.
@@ -318,6 +348,11 @@ mod imp {
         }
         if enabled {
             std::thread::spawn(|| {
+                let outdated = helper_dir().is_some_and(|dir| dir.exists()) && !helper_current();
+                if outdated {
+                    log::warn!("cpu temperature: the helper is outdated; set it up again");
+                    return;
+                }
                 let _ = crate::util::hidden_command("schtasks")
                     .args(["/Run", "/TN", TASK])
                     .output();
@@ -351,12 +386,21 @@ mod imp {
         }
         let exe = std::env::current_exe().map_err(|err| err.to_string())?;
         let dir = helper_dir().ok_or("Couldn't find Program Files.")?;
-        let install = (!pawnio_installed()).then_some(
-            "winget install --id namazso.PawnIO -e --silent --accept-package-agreements \
-             --accept-source-agreements",
-        );
+        let install = if pawnio_installed() {
+            None
+        } else {
+            let winget = winget().ok_or(
+                "PawnIO isn't installed, and winget wasn't found to install it. Install PawnIO \
+                 from pawnio.eu, then turn this on again.",
+            )?;
+            Some(format!(
+                "\"{}\" install --id namazso.PawnIO -e --silent --accept-package-agreements \
+                 --accept-source-agreements",
+                winget.display()
+            ))
+        };
         elevated(
-            &setup_command(&exe, &dir, install),
+            &setup_command(&exe, &dir, install.as_deref()),
             Some(&dir.join(SETUP_LOG)),
             "Setting it up failed",
         )?;
@@ -364,6 +408,53 @@ mod imp {
             return Err("PawnIO didn't install. Try again, or install it from pawnio.eu.".into());
         }
         Ok(())
+    }
+
+    /// winget, from its package's folder under Program Files\WindowsApps, which only the
+    /// system can change. Never looked up by name: as administrator, a `winget` planted
+    /// earlier on the user's PATH would run instead.
+    fn winget() -> Option<PathBuf> {
+        let family = HSTRING::from("Microsoft.DesktopAppInstaller_8wekyb3d8bbwe");
+        let (mut count, mut length) = (0u32, 0u32);
+        // SAFETY: the first calls only size the buffers; the second fill buffers of those sizes.
+        unsafe {
+            let _ = GetPackagesByPackageFamily(&family, &mut count, None, &mut length, None);
+            if count == 0 || length == 0 {
+                return None;
+            }
+            let mut names = vec![PWSTR::null(); count as usize];
+            let mut buffer = vec![0u16; length as usize];
+            if GetPackagesByPackageFamily(
+                &family,
+                &mut count,
+                Some(names.as_mut_ptr()),
+                &mut length,
+                Some(PWSTR(buffer.as_mut_ptr())),
+            ) != ERROR_SUCCESS
+            {
+                return None;
+            }
+            names.iter().take(count as usize).find_map(|name| {
+                let mut size = 0u32;
+                let _ = GetPackagePathByFullName(PCWSTR(name.0), &mut size, None);
+                let mut path = vec![0u16; size as usize];
+                if size == 0
+                    || GetPackagePathByFullName(
+                        PCWSTR(name.0),
+                        &mut size,
+                        Some(PWSTR(path.as_mut_ptr())),
+                    ) != ERROR_SUCCESS
+                {
+                    return None;
+                }
+                let end = path
+                    .iter()
+                    .position(|unit| *unit == 0)
+                    .unwrap_or(path.len());
+                let exe = PathBuf::from(String::from_utf16_lossy(&path[..end])).join("winget.exe");
+                (exe.is_file() && locked_down(&exe)).then_some(exe)
+            })
+        }
     }
 
     /// What runs as administrator to set the helper up: stop a helper already running, make
@@ -690,6 +781,13 @@ mod imp {
             }
             return;
         }
+        if std::env::args().any(|arg| arg == REMOVE_ARG) {
+            if let Err(reason) = disable() {
+                println!("{reason}");
+                std::process::exit(1);
+            }
+            return;
+        }
         // Dev builds are console programs, so the task opens a terminal window for them; the
         // helper lets it go. (Release builds have no console.) Libraries it loads later come
         // from System32 only.
@@ -845,6 +943,9 @@ mod imp {
         if !created.is_ok_and(|status| status.success()) {
             return Err("Windows didn't register the helper's task.".into());
         }
+        // Read by Zephyr, which can't run this copy to ask.
+        std::fs::write(dir.join(PROTOCOL_FILE), PROTOCOL.to_string())
+            .map_err(|err| err.to_string())?;
         let _ = crate::util::hidden_command(&schtasks)
             .args(["/Run", "/TN", TASK])
             .status();
@@ -863,7 +964,7 @@ mod imp {
 }
 
 #[cfg(windows)]
-pub use imp::{disable, enable, helper, pawnio_installed, read, start};
+pub use imp::{disable, enable, helper, needs_setup, pawnio_installed, read, start};
 
 #[cfg(not(windows))]
 mod imp_other {
@@ -881,10 +982,13 @@ mod imp_other {
         Ok(())
     }
     pub fn helper() {}
+    pub fn needs_setup() -> bool {
+        false
+    }
 }
 
 #[cfg(not(windows))]
-pub use imp_other::{disable, enable, helper, pawnio_installed, read, start};
+pub use imp_other::{disable, enable, helper, needs_setup, pawnio_installed, read, start};
 
 #[cfg(test)]
 mod tests {

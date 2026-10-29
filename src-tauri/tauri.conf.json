@@ -70,7 +70,8 @@
     "windows": {
       "nsis": {
         "installerIcon": "icons/icon.ico",
-        "sidebarImage": "installer/sidebar.bmp"
+        "sidebarImage": "installer/sidebar.bmp",
+        "installerHooks": "installer/hooks.nsh"
       }
     }
   },

@@ -534,13 +534,17 @@
   const cpuTempBusy = ref(false);
   const cpuTempError = ref('');
   const cpuTempNow = ref<number | null>(null);
+  // The helper's copy is missing or from an older Zephyr; setting it up again refreshes it.
+  const cpuTempStale = ref(false);
   async function toggleCpuTemp() {
-    if (!snapshot.value) return;
-    const next = !snapshot.value.cpuTemp;
+    if (snapshot.value) await setCpuTemp(!snapshot.value.cpuTemp);
+  }
+  async function setCpuTemp(next: boolean) {
     cpuTempBusy.value = true;
     cpuTempError.value = '';
     try {
       apply(await saveCpuTemp(next));
+      cpuTempStale.value = false;
     } catch (error) {
       cpuTempError.value = errorMessage(error);
     } finally {
@@ -551,7 +555,10 @@
   usePoll(
     () =>
       cpuTempStatus()
-        .then((status) => (cpuTempNow.value = status.celsius))
+        .then((status) => {
+          cpuTempNow.value = status.celsius;
+          cpuTempStale.value = status.needsSetup;
+        })
         .catch(() => undefined),
     2000,
     () => !isMac && active.value === 'resources' && !!snapshot.value?.cpuTemp
@@ -561,6 +568,9 @@
     if (cpuTempError.value) return cpuTempError.value;
     if (!snapshot.value?.cpuTemp) {
       return 'Off. Some anti-cheat and antivirus tools are wary of hardware drivers.';
+    }
+    if (cpuTempStale.value && cpuTempNow.value === null) {
+      return 'The helper needs setting up again for this version of Zephyr.';
     }
     return cpuTempNow.value !== null
       ? `Reading ${Math.round(cpuTempNow.value)} °C`
@@ -1048,6 +1058,14 @@
             />
           </label>
           <p class="hint-text cpu-temp-line">{{ cpuTempLine }}</p>
+          <button
+            v-if="snapshot.cpuTemp && cpuTempStale && cpuTempNow === null"
+            type="button"
+            :disabled="cpuTempBusy"
+            @click="setCpuTemp(true)"
+          >
+            Set up again
+          </button>
         </template>
       </section>
 

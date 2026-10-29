@@ -683,6 +683,10 @@ export function saveCpuTemp(enabled: boolean): Promise<Snapshot> {
   return invoke<Snapshot>('save_cpu_temp', { enabled });
 }
 
-export function cpuTempStatus(): Promise<{ pawnio: boolean; celsius: number | null }> {
+export function cpuTempStatus(): Promise<{
+  pawnio: boolean;
+  celsius: number | null;
+  needsSetup: boolean;
+}> {
   return invoke('cpu_temp_status');
 }
