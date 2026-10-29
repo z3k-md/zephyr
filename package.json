@@ -14,7 +14,8 @@
     "dev": "tauri dev",
     "build": "dotenv -e .env -- tauri build",
     "typecheck": "node node_modules/vue-tsc/bin/vue-tsc.js --noEmit",
-    "test": "cargo test --manifest-path src-tauri/Cargo.toml --locked",
+    "test": "vitest run && cargo test --manifest-path src-tauri/Cargo.toml --locked",
+    "test:web": "vitest run",
     "lint": "prettier --check . && bun run typecheck && vite build && cargo fmt --manifest-path src-tauri/Cargo.toml --check && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings",
     "format": "prettier --write . && cargo fmt --manifest-path src-tauri/Cargo.toml",
     "icons": "node scripts/icons.mjs",
@@ -40,6 +41,7 @@
     "semantic-release": "^25.0.9",
     "typescript": "^6.0.3",
     "vite": "^8.3.5",
+    "vitest": "^5.0.5",
     "vue-tsc": "^3.3.13"
   }
 }
