@@ -450,6 +450,8 @@ export interface ResourceRow {
   relaunch: boolean;
   /** Its use can't be read without administrator rights. */
   locked: boolean;
+  /** An app with a window the user works in; these list first, as Apps. */
+  windowed: boolean;
 }
 
 export interface ResourcePoint {

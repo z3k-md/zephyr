@@ -1689,8 +1689,19 @@ button.res-tile:hover {
   min-height: 0;
   margin: 0;
   padding: 0 6px 6px;
-  overflow: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   list-style: none;
+}
+
+/* "Apps" and "Background processes", above their rows. */
+.res-group {
+  padding: 8px 12px 4px;
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .res-row {

@@ -55,6 +55,9 @@ pub struct Row {
     pub relaunch: bool,
     /// Its CPU and memory can't be read without administrator rights.
     pub locked: bool,
+    /// An app with a window the user works in (Windows: a window in Alt+Tab; macOS: a Dock
+    /// app). These list first, as Apps, ahead of the background processes.
+    pub windowed: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -189,6 +192,7 @@ impl Identity {
                 .iter()
                 .any(|name| name.eq_ignore_ascii_case(&self.name)),
             locked: true,
+            windowed: false,
         }
     }
 }
@@ -297,6 +301,7 @@ pub fn snapshot(sort: &str, filter: &str, limit: usize) -> Snapshot {
         }
         row.pids.sort_unstable();
     }
+    mark_windowed(&mut rows);
     sort_rows(&mut rows, sort);
     rows.truncate(limit);
     Snapshot {
@@ -465,28 +470,78 @@ fn measure(table: &mut Table, elapsed: f64) -> HashMap<u32, Usage> {
         .collect()
 }
 
-/// By `cpu`, `memory`, `disk` (most first) or `name`; rows that can't be read go last.
+/// Marks the rows with a window the user works in.
+#[cfg(windows)]
+fn mark_windowed(rows: &mut [Row]) {
+    use std::sync::Mutex;
+    // The window list is otherwise only read as the bar is summoned; while Resources is open
+    // it's read again every few seconds, so a window opened meanwhile moves its app up.
+    static LISTED: Mutex<Option<Instant>> = Mutex::new(None);
+    if let Ok(mut listed) = LISTED.lock()
+        && listed.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(5))
+    {
+        *listed = Some(Instant::now());
+        crate::running::refresh();
+    }
+    let programs: HashSet<String> = crate::running::all()
+        .into_iter()
+        .map(|window| window.exe.to_lowercase())
+        .collect();
+    for row in rows {
+        row.windowed = !row.path.is_empty() && programs.contains(&row.path.to_lowercase());
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn mark_windowed(rows: &mut [Row]) {
+    use objc2_app_kit::{NSApplicationActivationPolicy, NSWorkspace};
+    // Dock apps ("regular" activation): what the user works in, not agents and helpers.
+    let apps: HashSet<u32> = objc2::rc::autoreleasepool(|_| {
+        NSWorkspace::sharedWorkspace()
+            .runningApplications()
+            .iter()
+            .filter(|app| app.activationPolicy() == NSApplicationActivationPolicy::Regular)
+            .map(|app| app.processIdentifier() as u32)
+            .collect()
+    });
+    for row in rows {
+        row.windowed = row.pids.iter().any(|pid| apps.contains(pid));
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn mark_windowed(_rows: &mut [Row]) {}
+
+/// Apps with windows first, then the rest; each by `cpu`, `memory`, `disk` (most first) or
+/// `name`, and rows that can't be read go last.
 fn sort_rows(rows: &mut [Row], sort: &str) {
     rows.sort_by(|left, right| {
-        let value = |row: &Row| -> Option<f64> {
-            match sort {
-                "memory" => row.memory.map(|value| value as f64),
-                "disk" => row.disk.map(|value| value as f64),
-                "gpu" => row.gpu.map(f64::from),
-                "name" => None,
-                _ => row.cpu.map(f64::from),
-            }
-        };
-        if sort == "name" {
-            return left.name.to_lowercase().cmp(&right.name.to_lowercase());
-        }
-        match (value(left), value(right)) {
-            (Some(a), Some(b)) => b.total_cmp(&a).then_with(|| left.name.cmp(&right.name)),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => left.name.cmp(&right.name),
-        }
+        right
+            .windowed
+            .cmp(&left.windowed)
+            .then_with(|| by_value(left, right, sort))
     });
+}
+
+fn by_value(left: &Row, right: &Row, sort: &str) -> std::cmp::Ordering {
+    let value = |row: &Row| -> Option<f64> {
+        match sort {
+            "memory" => row.memory.map(|value| value as f64),
+            "disk" => row.disk.map(|value| value as f64),
+            "gpu" => row.gpu.map(f64::from),
+            "name" => None,
+            _ => row.cpu.map(f64::from),
+        }
+    };
+    if sort == "name" {
+        return left.name.to_lowercase().cmp(&right.name.to_lowercase());
+    }
+    match (value(left), value(right)) {
+        (Some(a), Some(b)) => b.total_cmp(&a).then_with(|| left.name.cmp(&right.name)),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => left.name.cmp(&right.name),
+    }
 }
 
 /// How far back a row's detail graph goes, like the tiles.
@@ -987,6 +1042,44 @@ pub fn switch_to(_pids: &[u32]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn row(name: &str, cpu: Option<f32>, windowed: bool) -> Row {
+        Row {
+            key: name.into(),
+            name: name.into(),
+            subtitle: String::new(),
+            icon: String::new(),
+            pids: Vec::new(),
+            cpu,
+            memory: None,
+            disk: None,
+            gpu: None,
+            user: String::new(),
+            path: String::new(),
+            command: String::new(),
+            protected: false,
+            relaunch: false,
+            locked: false,
+            windowed,
+        }
+    }
+
+    #[test]
+    fn apps_with_windows_sort_ahead_of_background_processes() {
+        let mut rows = vec![
+            row("indexer", Some(40.0), false),
+            row("editor", Some(2.0), true),
+            row("locked", None, true),
+            row("browser", Some(9.0), true),
+            row("updater", Some(1.0), false),
+        ];
+        sort_rows(&mut rows, "cpu");
+        let names: Vec<&str> = rows.iter().map(|row| row.name.as_str()).collect();
+        assert_eq!(names, ["browser", "editor", "locked", "indexer", "updater"]);
+        sort_rows(&mut rows, "name");
+        let names: Vec<&str> = rows.iter().map(|row| row.name.as_str()).collect();
+        assert_eq!(names, ["browser", "editor", "locked", "indexer", "updater"]);
+    }
 
     #[cfg(target_os = "macos")]
     #[test]

@@ -3,7 +3,6 @@
   import RowIcon from './RowIcon.vue';
   import { GLYPHS } from './glyphs';
   import { vTip } from '../tip';
-  import { vFit } from '../fit';
   import { bytes } from '../format';
   import { gpuTitle } from './footerStats';
   import { isMac } from '../keys';
@@ -65,6 +64,11 @@
   }
   /** After a key or the pointer moves the selection, the order holds this long. */
   const HOLD_MS = 2000;
+  /** The order changes at most this often, by values smoothed over about this many seconds. */
+  const ORDER_MS = 3000;
+  const SMOOTH_S = 4;
+  /** Every row, for the scrolling list. */
+  const ROWS_WANTED = 500;
   /** Seconds of history the sparklines span (stats.rs keeps this much). */
   const WINDOW = 900;
 
@@ -89,7 +93,6 @@
   const data = shallowRef<ResourceSnapshot | null>(null);
   const rows = ref<ResourceRow[]>([]);
   const selectedKey = ref('');
-  const shown = ref(Infinity);
   const notice = ref<string | null>(null);
   /** The quit waiting for a second press, on the selected row. */
   const confirming = ref<{ key: string; force: boolean } | null>(null);
@@ -109,6 +112,11 @@
 
   let generation = 0;
   let heldUntil = 0;
+  /** When the order last changed, and each row's smoothed value (see `apply`). */
+  let rankedAt = 0;
+  let smoothedAt = 0;
+  const smoothed = new Map<string, number>();
+  const pointerIn = ref(false);
   const later = useLater();
   // Ticks at the picked rate while live.
   const poll = usePoll(tick, rate, live);
@@ -134,6 +142,9 @@
 
   watch([filter, sort], () => {
     heldUntil = 0;
+    rankedAt = 0;
+    smoothedAt = 0;
+    smoothed.clear();
     confirming.value = null;
     void tick();
   });
@@ -150,22 +161,17 @@
     void resourcesClosed().catch(() => undefined);
   }
 
-  // A row that sorts below what fits is out of sight, so the selection moves to the last row
-  // shown rather than letting Enter or a quit act on something the user can't see.
-  watch([selectedIndex, shown], ([index, count]) => {
-    if (count > 0 && index >= count && rows.value[count - 1]) {
-      selectedKey.value = rows.value[count - 1].key;
-      confirming.value = null;
-    }
+  // The list scrolls; the selection stays in sight as keys move it.
+  watch(selectedIndex, async (index) => {
+    await nextTick();
+    document.getElementById(`res-row-${index}`)?.scrollIntoView({ block: 'nearest' });
   });
 
   async function tick() {
     const ticket = ++generation;
     try {
       const started = performance.now();
-      // Only the rows that can show, and a few to spare for scrolling the selection.
-      const rowsWanted = Number.isFinite(shown.value) ? Math.min(60, shown.value + 5) : 60;
-      const next = await resourcesSnapshot(sort.value, filter.value, rowsWanted);
+      const next = await resourcesSnapshot(sort.value, filter.value, ROWS_WANTED);
       if (ticket !== generation) return;
       data.value = next;
       apply(next.rows);
@@ -184,13 +190,70 @@
     }
   }
 
-  // While the user is moving through the list, rows keep their places (new ones join at the
-  // end), so the one about to be picked doesn't slide away.
+  /** The value the list sorts by, or null for Name (and when it can't be read). */
+  function metric(row: ResourceRow): number | null {
+    switch (sort.value) {
+      case 'memory':
+        return row.memory;
+      case 'disk':
+        return row.disk;
+      case 'gpu':
+        return row.gpu ?? null;
+      case 'name':
+        return null;
+      default:
+        return row.cpu;
+    }
+  }
+
+  /** Eases each row's value toward its new reading, so a one-tick spike doesn't reorder. */
+  function smooth(next: ResourceRow[]) {
+    const now = Date.now();
+    const weight = smoothedAt ? 1 - Math.exp(-(now - smoothedAt) / 1000 / SMOOTH_S) : 1;
+    smoothedAt = now;
+    const before = new Map(smoothed);
+    smoothed.clear();
+    for (const row of next) {
+      const value = metric(row);
+      if (value === null) continue;
+      const last = before.get(row.key);
+      smoothed.set(row.key, last === undefined ? value : last + (value - last) * weight);
+    }
+  }
+
+  /** Apps first, then background processes; each by name or by its smoothed value. */
+  function ranked(next: ResourceRow[]): ResourceRow[] {
+    const byName = (a: ResourceRow, b: ResourceRow) =>
+      a.name.toLowerCase().localeCompare(b.name.toLowerCase());
+    return [...next].sort((a, b) => {
+      if (a.windowed !== b.windowed) return a.windowed ? -1 : 1;
+      if (sort.value === 'name') return byName(a, b);
+      const left = smoothed.get(a.key);
+      const right = smoothed.get(b.key);
+      if (left === undefined || right === undefined) {
+        return left === right ? byName(a, b) : left === undefined ? 1 : -1;
+      }
+      return right - left || byName(a, b);
+    });
+  }
+
+  // The order changes every few seconds at most, by values smoothed over a few seconds. In
+  // between, and while the pointer is over the list or the keys are moving through it, rows
+  // keep their places (new ones join the end of their group) so nothing slides away.
   function apply(next: ResourceRow[]) {
-    if ((Date.now() < heldUntil || confirming.value) && rows.value.length) {
+    smooth(next);
+    const now = Date.now();
+    const holding =
+      (now < heldUntil || confirming.value !== null || pointerIn.value) && rows.value.length > 0;
+    if (!holding && now - rankedAt >= ORDER_MS) {
+      next = ranked(next);
+      rankedAt = now;
+    } else {
       const place = new Map(rows.value.map((row, index) => [row.key, index]));
-      next = [...next].sort(
-        (a, b) => (place.get(a.key) ?? Infinity) - (place.get(b.key) ?? Infinity)
+      const arrival = new Map(next.map((row, index) => [row.key, rows.value.length + index]));
+      const at = (row: ResourceRow) => place.get(row.key) ?? arrival.get(row.key) ?? 0;
+      next = [...next].sort((a, b) =>
+        a.windowed !== b.windowed ? (a.windowed ? -1 : 1) : at(a) - at(b)
       );
     }
     rows.value = next;
@@ -208,8 +271,18 @@
     selectedKey.value = row.key;
   }
 
+  /** "Apps" above the first app row and "Background" above the first other one, when both. */
+  const hasApps = computed(() => rows.value.some((row) => row.windowed));
+  const hasBackground = computed(() => rows.value.some((row) => !row.windowed));
+  function groupLabel(index: number): string {
+    if (!hasApps.value || !hasBackground.value) return '';
+    const row = rows.value[index];
+    if (index > 0 && rows.value[index - 1].windowed === row.windowed) return '';
+    return row.windowed ? 'Apps' : 'Background processes';
+  }
+
   function move(delta: number) {
-    const count = Math.min(rows.value.length, shown.value);
+    const count = rows.value.length;
     if (count === 0) return;
     select((Math.min(selectedIndex.value, count - 1) + delta + count) % count);
   }
@@ -722,77 +795,81 @@
       </p>
       <ul
         v-else
-        v-fit="(count: number) => (shown = count)"
         id="res-list"
         class="res-list"
         role="listbox"
         aria-label="Apps and processes"
+        @mouseenter="pointerIn = true"
+        @mouseleave="pointerIn = false"
       >
-        <li
-          v-for="(row, index) in rows"
-          :id="`res-row-${index}`"
-          :key="row.key"
-          role="option"
-          :aria-selected="index === selectedIndex"
-          class="res-row"
-          :class="{
-            selected: index === selectedIndex,
-            confirming: confirming?.key === row.key,
-            locked: row.locked,
-          }"
-          v-tip="
-            row.locked
-              ? `${row.name} runs as ${row.user || 'another user'}; its use needs administrator rights to read`
-              : undefined
-          "
-          @mousedown.prevent
-          @click="select(index)"
-          @dblclick="switchTo(row)"
-        >
-          <span class="res-name">
-            <RowIcon :icon="row.icon" :label="row.name" :size="20" />
-            <span class="res-text">
-              <span class="label">
-                {{ row.name }}
-                <span
-                  v-if="row.pids.length > 1"
-                  class="res-count"
-                  v-tip="`${row.pids.length} processes`"
-                  >{{ row.pids.length }}</span
-                >
+        <template v-for="(row, index) in rows" :key="row.key">
+          <li v-if="groupLabel(index)" class="res-group" role="presentation">
+            {{ groupLabel(index) }}
+          </li>
+          <li
+            :id="`res-row-${index}`"
+            role="option"
+            :aria-selected="index === selectedIndex"
+            class="res-row"
+            :class="{
+              selected: index === selectedIndex,
+              confirming: confirming?.key === row.key,
+              locked: row.locked,
+            }"
+            v-tip="
+              row.locked
+                ? `${row.name} runs as ${row.user || 'another user'}; its use needs administrator rights to read`
+                : undefined
+            "
+            @mousedown.prevent
+            @click="select(index)"
+            @dblclick="switchTo(row)"
+          >
+            <span class="res-name">
+              <RowIcon :icon="row.icon" :label="row.name" :size="20" />
+              <span class="res-text">
+                <span class="label">
+                  {{ row.name }}
+                  <span
+                    v-if="row.pids.length > 1"
+                    class="res-count"
+                    v-tip="`${row.pids.length} processes`"
+                    >{{ row.pids.length }}</span
+                  >
+                </span>
+                <span v-if="row.subtitle" class="res-sub">{{ row.subtitle }}</span>
               </span>
-              <span v-if="row.subtitle" class="res-sub">{{ row.subtitle }}</span>
             </span>
-          </span>
-          <span v-if="confirming?.key === row.key" class="res-confirm">
-            {{
-              row.relaunch && !confirming.force
-                ? `${RELAUNCH} ${row.name}?`
-                : `${confirming.force ? 'Force quit' : 'Quit'} ${row.name}?`
-            }}
-            <KeyHints :hints="CONFIRM_HINTS" />
-          </span>
-          <template v-else>
-            <span class="res-cpu">
-              <template v-if="row.cpu !== null">
-                {{ percent(row.cpu) }}
-                <span class="res-bar" aria-hidden="true"
-                  ><span :style="{ width: cpuWidth(row) }"
-                /></span>
-              </template>
-              <template v-else>—</template>
-            </span>
-            <span class="res-memory">{{ row.memory !== null ? bytes(row.memory) : '—' }}</span>
-            <span v-if="isMac" class="res-disk">
-              {{ row.disk === null ? '—' : row.disk ? `${bytes(row.disk)}/s` : '0' }}
-            </span>
-            <span v-else class="res-disk res-gpu">
+            <span v-if="confirming?.key === row.key" class="res-confirm">
               {{
-                row.gpu === null || row.gpu === undefined ? '—' : row.gpu ? percent(row.gpu) : '0'
+                row.relaunch && !confirming.force
+                  ? `${RELAUNCH} ${row.name}?`
+                  : `${confirming.force ? 'Force quit' : 'Quit'} ${row.name}?`
               }}
+              <KeyHints :hints="CONFIRM_HINTS" />
             </span>
-          </template>
-        </li>
+            <template v-else>
+              <span class="res-cpu">
+                <template v-if="row.cpu !== null">
+                  {{ percent(row.cpu) }}
+                  <span class="res-bar" aria-hidden="true"
+                    ><span :style="{ width: cpuWidth(row) }"
+                  /></span>
+                </template>
+                <template v-else>—</template>
+              </span>
+              <span class="res-memory">{{ row.memory !== null ? bytes(row.memory) : '—' }}</span>
+              <span v-if="isMac" class="res-disk">
+                {{ row.disk === null ? '—' : row.disk ? `${bytes(row.disk)}/s` : '0' }}
+              </span>
+              <span v-else class="res-disk res-gpu">
+                {{
+                  row.gpu === null || row.gpu === undefined ? '—' : row.gpu ? percent(row.gpu) : '0'
+                }}
+              </span>
+            </template>
+          </li>
+        </template>
       </ul>
     </template>
 
