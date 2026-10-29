@@ -578,33 +578,66 @@ pub fn cancel(app: &AppHandle) {
     }
 }
 
+/// How late a scheduled moment can be noticed and still count, rather than having been
+/// slept through.
+const GRACE_SECS: i64 = 60;
+
+#[derive(Debug, PartialEq, Eq)]
+enum Due {
+    Wait(i64),
+    Now,
+    Missed,
+}
+
+fn due(at: i64, now: i64) -> Due {
+    match at - now {
+        left if left > 0 => Due::Wait(left),
+        left if left >= -GRACE_SECS => Due::Now,
+        _ => Due::Missed,
+    }
+}
+
 /// Warns a few minutes ahead, then runs the action.
 fn arm(app: &AppHandle, schedule: Schedule) {
     let generation = TIMER.load(Ordering::SeqCst);
     let app = app.clone();
     std::thread::spawn(move || {
         let warn_at = schedule.at - 5 * 60;
-        let wait_until = |at: i64| {
-            loop {
-                if TIMER.load(Ordering::SeqCst) != generation {
-                    return false;
-                }
-                let left = at - Local::now().timestamp();
-                if left <= 0 {
-                    return true;
-                }
-                std::thread::sleep(Duration::from_secs(left.min(20) as u64));
+        // Waits for `at` by the wall clock: `None` if cancelled, `Some(false)` if the moment
+        // went by long ago, as when the machine slept through it.
+        let wait_until = |at: i64| loop {
+            if TIMER.load(Ordering::SeqCst) != generation {
+                return None;
+            }
+            match due(at, Local::now().timestamp()) {
+                Due::Wait(left) => std::thread::sleep(Duration::from_secs(left.min(20) as u64)),
+                Due::Now => return Some(true),
+                Due::Missed => return Some(false),
             }
         };
-        if warn_at > Local::now().timestamp() && wait_until(warn_at) {
-            crate::util::notify(
-                &app,
-                &format!("{} in 5 minutes", schedule.action.label()),
-                "Open Zephyr to cancel it",
-            );
+        if warn_at > Local::now().timestamp() {
+            match wait_until(warn_at) {
+                None => return,
+                Some(true) => crate::util::notify(
+                    &app,
+                    &format!("{} in 5 minutes", schedule.action.label()),
+                    "Open Zephyr to cancel it",
+                ),
+                Some(false) => {}
+            }
         }
-        if !wait_until(schedule.at) {
-            return;
+        match wait_until(schedule.at) {
+            None => return,
+            Some(true) => {}
+            Some(false) => {
+                // Shutting down the moment the lid opens would be a nasty surprise.
+                save(&app, None);
+                log::info!(
+                    "power: dropped the scheduled {}, its time passed while asleep",
+                    schedule.action.label().to_lowercase()
+                );
+                return;
+            }
         }
         // Cleared first, so a shutdown that goes through doesn't leave it for the next start.
         save(&app, None);
@@ -683,6 +716,15 @@ mod tests {
             commands_for(Action::Firmware),
             [[ELEVATED, "shutdown", "/r", "/fw", "/t", "0"]]
         );
+    }
+
+    #[test]
+    fn a_moment_slept_through_is_missed_not_run_late() {
+        assert_eq!(due(100, 40), Due::Wait(60));
+        assert_eq!(due(100, 100), Due::Now);
+        assert_eq!(due(100, 100 + GRACE_SECS), Due::Now);
+        assert_eq!(due(100, 101 + GRACE_SECS), Due::Missed);
+        assert_eq!(due(100, 100 + 3600), Due::Missed);
     }
 
     #[test]
