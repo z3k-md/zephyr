@@ -715,12 +715,7 @@ pub async fn save_settings(
         let shortcut = shortcut::canonical_shortcut(&summon_shortcut)?;
         let previous = state.snapshot()?;
         let shortcut_changed = shortcut != previous.summon_shortcut;
-        if shortcut == previous.clipboard.shortcut {
-            return Err("That shortcut already opens clipboard history".into());
-        }
-        if shortcut == previous.notes_shortcut {
-            return Err("That shortcut already opens notes".into());
-        }
+        previous.check_summon_shortcut(&shortcut)?;
         let clip = previous.extra_shortcuts();
 
         // Registering unregisters the old shortcut first, so every failure path has to put it back.

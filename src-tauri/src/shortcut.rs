@@ -70,6 +70,12 @@ pub fn same(a: &str, b: &str) -> bool {
     matches!((parse(a), parse(b)), (Ok(a), Ok(b)) if a.id() == b.id())
 }
 
+/// Whether two shortcuts would take the same keys; an empty one (none set) clashes with
+/// nothing. Every check between Zephyr's own shortcuts goes through this.
+pub fn clashes(a: &str, b: &str) -> bool {
+    !a.trim().is_empty() && !b.trim().is_empty() && same(a.trim(), b.trim())
+}
+
 /// Lets go of every shortcut while Settings records a new one, so pressing a combo Zephyr
 /// already uses (the summon key itself) is recorded instead of acted on. `register` takes
 /// them back.
@@ -174,5 +180,14 @@ mod tests {
         // The Settings recorder writes ⌘ as "super".
         assert!(canonical_shortcut("super+shift+v").is_ok());
         assert!(canonical_shortcut("not a shortcut").is_err());
+    }
+
+    #[test]
+    fn clashes_compare_keys_not_text() {
+        assert!(clashes("Ctrl+Alt+N", "ctrl+alt+n"));
+        assert!(clashes("shift+alt+v", " alt+shift+v "));
+        assert!(!clashes("ctrl+alt+n", "ctrl+alt+m"));
+        assert!(!clashes("", ""));
+        assert!(!clashes("ctrl+alt+n", ""));
     }
 }

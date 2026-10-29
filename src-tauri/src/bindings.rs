@@ -28,13 +28,13 @@ pub fn upsert(
         crate::shortcut::canonical_shortcut(&hotkey)?;
         if let Some((_, what)) = taken
             .iter()
-            .find(|(used, _)| !used.is_empty() && crate::shortcut::same(used, &hotkey))
+            .find(|(used, _)| crate::shortcut::clashes(used, &hotkey))
         {
             return Err(format!("That shortcut already opens {what}"));
         }
         if let Some(other) = others
             .iter()
-            .find(|other| !other.hotkey.is_empty() && crate::shortcut::same(&other.hotkey, &hotkey))
+            .find(|other| crate::shortcut::clashes(&other.hotkey, &hotkey))
         {
             return Err(format!("That shortcut already runs {}", other.label));
         }

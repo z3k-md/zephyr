@@ -192,7 +192,7 @@ fn default_notes_shortcut() -> String {
     "ctrl+alt+n".into()
 }
 
-const SCHEMA_VERSION: u32 = 3;
+const SCHEMA_VERSION: u32 = 4;
 
 /// Files written before `version` existed should still migrate.
 fn missing_schema_version() -> u32 {
@@ -249,9 +249,7 @@ impl Persisted {
 
     pub fn set_clipboard(&mut self, settings: ClipboardSettings) -> Result<(), String> {
         let settings = settings.normalized()?;
-        // Compared as keys, not text, so "Alt+Shift+V" and "shift+alt+v" still clash.
-        let shortcut = settings.shortcut.as_str();
-        let clashes = |other: &str| !shortcut.is_empty() && crate::shortcut::same(other, shortcut);
+        let clashes = |other: &str| crate::shortcut::clashes(other, &settings.shortcut);
         if clashes(&self.summon_shortcut) {
             return Err("Clipboard history needs a different shortcut from the bar".into());
         }
@@ -279,12 +277,37 @@ impl Persisted {
         } else {
             crate::shortcut::canonical_shortcut(&shortcut)?
         };
-        if !shortcut.is_empty()
-            && (shortcut == self.summon_shortcut || shortcut == self.clipboard.shortcut)
-        {
+        let clashes = |other: &str| crate::shortcut::clashes(other, &shortcut);
+        if clashes(&self.summon_shortcut) || clashes(&self.clipboard.shortcut) {
             return Err("Notes needs its own shortcut".into());
         }
+        if let Some(binding) = self
+            .bindings
+            .iter()
+            .find(|binding| clashes(&binding.hotkey))
+        {
+            return Err(format!("That shortcut already runs {}", binding.label));
+        }
         self.notes_shortcut = shortcut;
+        Ok(())
+    }
+
+    /// Checks a summon shortcut against the other shortcuts Zephyr registers.
+    pub fn check_summon_shortcut(&self, shortcut: &str) -> Result<(), String> {
+        let clashes = |other: &str| crate::shortcut::clashes(other, shortcut);
+        if clashes(&self.clipboard.shortcut) {
+            return Err("That shortcut already opens clipboard history".into());
+        }
+        if clashes(&self.notes_shortcut) {
+            return Err("That shortcut already opens notes".into());
+        }
+        if let Some(binding) = self
+            .bindings
+            .iter()
+            .find(|binding| clashes(&binding.hotkey))
+        {
+            return Err(format!("That shortcut already runs {}", binding.label));
+        }
         Ok(())
     }
 
@@ -394,6 +417,10 @@ impl Persisted {
         if self.version < 2 && self.summon_shortcut == LEGACY_DEFAULT_SHORTCUT {
             self.summon_shortcut = DEFAULT_SHORTCUT.to_string();
         }
+        // Violet was the default before Sidebar; anyone who never picked moves over.
+        if self.version < 4 && !self.theme_chosen && self.theme == "violet" {
+            self.theme = default_theme();
+        }
         self.version = SCHEMA_VERSION;
         true
     }
@@ -421,7 +448,8 @@ impl Persisted {
         // Compact: the file is read by Zephyr, not people, and history makes it long.
         let data = serde_json::to_vec(self).map_err(|err| err.to_string())?;
         let tmp = path.with_extension("json.tmp");
-        fs::write(&tmp, &data).map_err(|err| err.to_string())?;
+        // Flushed to disk before the rename, so a power cut can't leave an empty file.
+        crate::util::write_synced(&tmp, &data).map_err(|err| err.to_string())?;
         // Rename replaces the old file, on Windows too. It can fail for a moment while
         // something (an antivirus scan, a backup) has the file open, so it gets a few tries.
         // Never delete the old file first: if the rename then failed, no settings file is left.
@@ -439,37 +467,91 @@ impl Persisted {
     }
 
     pub fn load(path: &Path) -> Self {
-        // A save interrupted between writing and renaming leaves only the new copy behind.
-        let Ok(bytes) = fs::read(path).or_else(|_| fs::read(path.with_extension("json.tmp")))
-        else {
-            return Self::fresh();
-        };
-        match serde_json::from_slice::<Self>(&bytes) {
-            Ok(mut state) => {
-                // Violet was the default before Sidebar; anyone who never picked moves over.
-                if !state.theme_chosen && state.theme == "violet" {
-                    state.theme = default_theme();
-                }
-                if state.migrate()
-                    && let Err(err) = state.save(path)
-                {
-                    log::error!("couldn't save migrated settings: {err}");
-                }
-                state
-            }
-            Err(err) => {
-                log::error!("state file could not be read, starting fresh: {err}");
-                let backup = path.with_extension("json.bak");
-                let _ = fs::copy(path, backup);
-                Self::fresh()
-            }
+        let backup = path.with_extension("json.bak");
+        // A save interrupted between writing and renaming leaves only the new copy behind. A
+        // file cut short or left empty falls back to the copy kept at the last good start.
+        let mut sources = vec![path.to_path_buf(), path.with_extension("json.tmp")];
+        if path.exists() {
+            sources.push(backup.clone());
         }
+        for (at, source) in sources.iter().enumerate() {
+            let Ok(bytes) = fs::read(source) else {
+                continue;
+            };
+            let Some(mut state) = Self::parse(&bytes) else {
+                log::error!("{} could not be read", source.display());
+                // Kept aside for recovery by hand; never over the good backup.
+                if at == 0 && !bytes.is_empty() {
+                    let _ = fs::write(path.with_extension("json.corrupt"), &bytes);
+                }
+                continue;
+            };
+            if at == 0
+                && let Err(err) = crate::util::write_atomic(&backup, &bytes)
+            {
+                log::warn!("couldn't back up settings: {err}");
+            }
+            if (state.migrate() || at != 0)
+                && let Err(err) = state.save(path)
+            {
+                log::error!("couldn't save migrated settings: {err}");
+            }
+            return state;
+        }
+        Self::fresh()
+    }
+
+    /// Reads a settings file field by field: one that doesn't fit (an older or newer version
+    /// shaped it differently) goes back to its default without taking the rest with it, and
+    /// a list loses only the items that don't fit. None when it isn't a settings file at all.
+    fn parse(bytes: &[u8]) -> Option<Self> {
+        use serde_json::{Map, Value};
+        let value: Value = serde_json::from_slice(bytes).ok()?;
+        if !value.is_object() {
+            return None;
+        }
+        if let Ok(state) = Self::deserialize(&value) {
+            return Some(state);
+        }
+        let Value::Object(fields) = value else {
+            return None;
+        };
+        let fits = |key: &str, value: &Value| {
+            let one = Map::from_iter([(key.to_string(), value.clone())]);
+            Self::deserialize(&Value::Object(one)).is_ok()
+        };
+        let mut kept = Map::new();
+        for (key, value) in fields {
+            if fits(&key, &value) {
+                kept.insert(key, value);
+                continue;
+            }
+            if let Value::Array(items) = &value {
+                let items: Vec<Value> = items
+                    .iter()
+                    .filter(|item| fits(&key, &Value::Array(vec![(*item).clone()])))
+                    .cloned()
+                    .collect();
+                let items = Value::Array(items);
+                if fits(&key, &items) {
+                    log::warn!("dropped settings in {key} that didn't fit");
+                    kept.insert(key, items);
+                    continue;
+                }
+            }
+            log::warn!("{key} in settings didn't fit; using its default");
+        }
+        Self::deserialize(&Value::Object(kept)).ok()
     }
 }
 
 pub struct AppState {
     /// Shared, so a read (every keystroke takes one) is a reference count, not a deep copy.
+    /// Held only to read or swap it, never while the disk is written.
     inner: Mutex<std::sync::Arc<Persisted>>,
+    /// Taken for a whole update, so updates apply and reach the disk one at a time, in order:
+    /// an older copy never lands over a newer one.
+    writer: Mutex<()>,
     path: PathBuf,
 }
 
@@ -478,6 +560,7 @@ impl AppState {
         let persisted = Persisted::load(&path);
         Self {
             inner: Mutex::new(std::sync::Arc::new(persisted)),
+            writer: Mutex::new(()),
             path,
         }
     }
@@ -490,12 +573,17 @@ impl AppState {
     where
         F: FnOnce(&mut Persisted) -> Result<(), String>,
     {
-        let mut guard = self.lock()?;
+        // It guards no data, so a panic in another update leaves nothing to distrust.
+        let _writing = self
+            .writer
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         // Work on a copy so a failed mutation or save leaves memory matching disk.
-        let mut next = Persisted::clone(&guard);
+        let current = self.snapshot()?;
+        let mut next = Persisted::clone(&current);
         mutate(&mut next)?;
         next.save(&self.path)?;
-        *guard = std::sync::Arc::new(next.clone());
+        *self.lock()? = std::sync::Arc::new(next.clone());
         Ok(next)
     }
 
@@ -571,6 +659,103 @@ mod tests {
         assert!(state.launch_at_startup);
         assert_eq!(state.version, 1);
         assert!(state.history.is_empty());
+    }
+
+    #[test]
+    fn a_field_that_doesnt_fit_keeps_the_other_settings() {
+        let state = Persisted::parse(
+            br#"{
+                "version": 4,
+                "summonShortcut": "ctrl+alt+k",
+                "power": {"kind": "shutdown", "when": "later"},
+                "clipboard": 7,
+                "theme": "ocean",
+                "history": [
+                    {"query": "cats", "destinationId": "google", "uses": 1, "lastUsed": 1},
+                    {"query": 5}
+                ]
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(state.summon_shortcut, "ctrl+alt+k");
+        assert_eq!(state.theme, "ocean");
+        assert!(state.power.is_none());
+        assert_eq!(
+            state.clipboard.shortcut,
+            ClipboardSettings::default().shortcut
+        );
+        let kept: Vec<&str> = state.history.iter().map(|e| e.query.as_str()).collect();
+        assert_eq!(kept, ["cats"]);
+        assert!(Persisted::parse(b"").is_none());
+        assert!(Persisted::parse(b"[1]").is_none());
+        assert!(Persisted::parse(br#"{"summonShortcut": "ctrl+al"#).is_none());
+    }
+
+    #[test]
+    fn a_cut_short_or_empty_file_falls_back_to_the_backup() {
+        let dir = std::env::temp_dir().join(format!("zephyr-backup-{}", std::process::id()));
+        let path = dir.join("state.json");
+        let mut state = Persisted::fresh();
+        state.summon_shortcut = "ctrl+alt+k".into();
+        state.save(&path).unwrap();
+        // Loading a good file keeps it as the backup.
+        assert_eq!(Persisted::load(&path).summon_shortcut, "ctrl+alt+k");
+
+        for broken in [&b""[..], br#"{"summonShortcut": "ctrl+al"#] {
+            fs::write(&path, broken).unwrap();
+            assert_eq!(Persisted::load(&path).summon_shortcut, "ctrl+alt+k");
+            // The backup was put back, and a broken file never replaces it.
+            assert_eq!(Persisted::load(&path).summon_shortcut, "ctrl+alt+k");
+        }
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn violet_moves_to_the_new_default_once_unless_picked() {
+        let mut state = Persisted::fresh();
+        state.version = 3;
+        state.theme = "violet".into();
+        assert!(state.migrate());
+        assert_eq!(state.theme, THEMES[0]);
+
+        let mut picked = Persisted::fresh();
+        picked.version = 3;
+        picked.theme = "violet".into();
+        picked.theme_chosen = true;
+        picked.migrate();
+        assert_eq!(picked.theme, "violet");
+
+        let mut current = Persisted::fresh();
+        current.theme = "violet".into();
+        assert!(!current.migrate());
+        assert_eq!(current.theme, "violet");
+    }
+
+    #[test]
+    fn shortcut_clashes_ignore_case_and_order() {
+        let mut state = Persisted::fresh();
+        state.summon_shortcut = "ctrl+alt+k".into();
+        state.clipboard.shortcut = "ctrl+shift+v".into();
+        state.bindings.push(Binding {
+            target: "app:code".into(),
+            label: "Code".into(),
+            hotkey: "ctrl+alt+c".into(),
+            ..Binding::default()
+        });
+        assert!(state.set_notes_shortcut("Ctrl+Alt+K".into()).is_err());
+        assert!(state.set_notes_shortcut("Shift+Ctrl+V".into()).is_err());
+        assert!(state.set_notes_shortcut("alt+ctrl+c".into()).is_err());
+        assert!(state.set_notes_shortcut("ctrl+alt+n".into()).is_ok());
+        assert!(state.set_notes_shortcut(String::new()).is_ok());
+
+        state.notes_shortcut = "ctrl+alt+n".into();
+        assert!(state.check_summon_shortcut("Ctrl+Alt+N").is_err());
+        assert!(state.check_summon_shortcut("CTRL+SHIFT+V").is_err());
+        assert_eq!(
+            state.check_summon_shortcut("Alt+Ctrl+C"),
+            Err("That shortcut already runs Code".to_string())
+        );
+        assert!(state.check_summon_shortcut("alt+space").is_ok());
     }
 
     #[test]

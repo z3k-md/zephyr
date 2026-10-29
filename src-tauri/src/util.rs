@@ -43,8 +43,17 @@ pub fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
     }
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".tmp");
-    std::fs::write(&tmp, data)?;
+    write_synced(Path::new(&tmp), data)?;
     std::fs::rename(&tmp, path)
+}
+
+/// Writes `data` and waits for it to reach the disk, so a rename after it never swaps in a
+/// file a power cut left empty.
+pub fn write_synced(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut file = std::fs::File::create(path)?;
+    file.write_all(data)?;
+    file.sync_all()
 }
 
 /// Shows a system notification; a failure is only logged.
