@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, RwLock, mpsc};
 use std::time::{Duration, Instant};
 
@@ -25,6 +25,8 @@ const UNWATCHED_STALE_AFTER: Duration = Duration::from_secs(15 * 60);
 /// Changes are applied in batches, at most this long after the first one arrives.
 const SETTLE: Duration = Duration::from_millis(500);
 const FORCED_RESCAN_GAP: Duration = Duration::from_secs(10 * 60);
+/// Patched changes reach the cache this long after the first one not yet saved.
+const SAVE_AFTER: Duration = Duration::from_secs(30);
 /// More changes than this in one burst (a checkout, an unzip) are cheaper to rescan than patch.
 const RESCAN_ABOVE: usize = 256;
 const WALK_THREADS: usize = 4;
@@ -586,6 +588,17 @@ pub struct FileIndex {
     scanned_at: Mutex<Option<Instant>>,
     scanning: AtomicBool,
     watcher: Mutex<Option<notify::RecommendedWatcher>>,
+    /// Counts `configure` calls, so an older one that runs late gives way to the newest.
+    configured: AtomicU64,
+}
+
+/// What patching in a batch of changes did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Patch {
+    Unchanged,
+    Changed,
+    /// Too broad to patch; it needs a full walk.
+    Rescan,
 }
 
 pub fn index() -> &'static FileIndex {
@@ -648,25 +661,24 @@ impl FileIndex {
         }
     }
 
-    /// Points the index at `config`: loads the cache when it matches, watches the roots and
-    /// starts a full walk. Returns at once; the work runs on a worker thread.
+    /// Points the index at `config`: loads the cache when it matches, so results are there at
+    /// once, watches the roots and starts a full walk to catch what changed while nothing was
+    /// watching. Returns at once; the work runs on a worker thread.
     pub fn configure(&'static self, config: Config, cache_path: Option<PathBuf>) {
+        let generation = self.configured.fetch_add(1, Ordering::SeqCst) + 1;
         if let Ok(mut path) = self.cache_path.lock() {
             *path = cache_path.clone();
         }
         std::thread::spawn(move || {
-            let fresh = {
+            {
                 let _writing = self.writer.lock();
+                // A later call got here first; its config is the current one.
+                if self.configured.load(Ordering::SeqCst) != generation {
+                    return;
+                }
                 let cached = cache_path
                     .as_deref()
                     .and_then(|path| load_cache(path, &config));
-                // How old the saved index is: a recent one is trusted, and the watcher keeps
-                // it current from here, so startup skips the walk.
-                let cache_age = cache_path
-                    .as_deref()
-                    .and_then(|path| std::fs::metadata(path).ok()?.modified().ok())
-                    .and_then(|modified| modified.elapsed().ok());
-                let loaded = cached.is_some();
                 if let Ok(mut contents) = self.contents.write() {
                     let unchanged = contents.config.roots == config.roots;
                     contents.config = config.clone();
@@ -676,20 +688,10 @@ impl FileIndex {
                         contents.entries.clear();
                     }
                 }
-                match cache_age.filter(|age| loaded && *age < STALE_AFTER) {
-                    Some(age) => {
-                        if let Ok(mut at) = self.scanned_at.lock() {
-                            *at = Instant::now().checked_sub(age);
-                        }
-                        true
-                    }
-                    None => false,
-                }
-            };
-            self.watch(&config);
-            if !fresh {
-                self.rescan();
+                // Inside the lock, so the watcher left installed is always the newest config's.
+                self.watch(&config);
             }
+            self.rescan();
         });
     }
 
@@ -719,25 +721,28 @@ impl FileIndex {
             return;
         }
         std::thread::spawn(move || {
-            let config = self
-                .contents
-                .read()
-                .map(|contents| contents.config.clone())
-                .unwrap_or_default();
-            let started = Instant::now();
-            let entries = walk(&config);
-            log::info!(
-                "indexed {} files and folders in {:?}",
-                entries.len(),
-                started.elapsed()
-            );
-            {
+            loop {
+                let config = self
+                    .contents
+                    .read()
+                    .map(|contents| contents.config.clone())
+                    .unwrap_or_default();
+                let started = Instant::now();
+                let entries = walk(&config);
+                log::info!(
+                    "indexed {} files and folders in {:?}",
+                    entries.len(),
+                    started.elapsed()
+                );
                 let _writing = self.writer.lock();
-                if let Ok(mut contents) = self.contents.write() {
-                    // Settings may have changed during the walk; that change starts its own.
-                    if contents.config == config {
-                        contents.entries = entries;
-                    }
+                let Ok(mut contents) = self.contents.write() else {
+                    break;
+                };
+                // Settings changed during the walk, and their own rescan found this one
+                // running: walk again for them.
+                if contents.config == config {
+                    contents.entries = entries;
+                    break;
                 }
             }
             if let Ok(mut at) = self.scanned_at.lock() {
@@ -807,6 +812,8 @@ impl FileIndex {
         let mut overflowed = false;
         let mut batch_started: Option<Instant> = None;
         let mut last_forced: Option<Instant> = None;
+        // When the first patch not yet in the cache landed; a full walk saves its own.
+        let mut unsaved: Option<Instant> = None;
         loop {
             match receiver.recv_timeout(SETTLE) {
                 // Reads (including the walk's own) change nothing.
@@ -825,6 +832,12 @@ impl FileIndex {
                 Err(mpsc::RecvTimeoutError::Disconnected) => return,
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
             }
+            if unsaved.is_some_and(|at| at.elapsed() >= SAVE_AFTER)
+                && !self.scanning.load(Ordering::SeqCst)
+            {
+                self.save_cache();
+                unsaved = None;
+            }
             if pending.is_empty() && !overflowed {
                 batch_started = None;
                 continue;
@@ -835,11 +848,23 @@ impl FileIndex {
             if !settled || self.scanning.load(Ordering::SeqCst) {
                 continue;
             }
-            if overflowed || !self.apply(&pending) {
+            let patch = if overflowed {
+                Patch::Rescan
+            } else {
+                self.apply(&pending)
+            };
+            match patch {
+                Patch::Unchanged => {}
+                Patch::Changed => {
+                    unsaved.get_or_insert_with(Instant::now);
+                }
                 // Bursts too big to patch rescan, but not over and over under constant churn.
-                if last_forced.is_none_or(|at| at.elapsed() >= FORCED_RESCAN_GAP) {
-                    last_forced = Some(Instant::now());
-                    self.rescan();
+                Patch::Rescan => {
+                    if last_forced.is_none_or(|at| at.elapsed() >= FORCED_RESCAN_GAP) {
+                        last_forced = Some(Instant::now());
+                        unsaved = None;
+                        self.rescan();
+                    }
                 }
             }
             pending.clear();
@@ -848,13 +873,12 @@ impl FileIndex {
         }
     }
 
-    /// Reconciles the index with the disk for each changed path. Returns false when the
-    /// change is too broad to patch and needs a full walk.
-    fn apply(&self, changed: &HashSet<PathBuf>) -> bool {
+    /// Reconciles the index with the disk for each changed path.
+    fn apply(&self, changed: &HashSet<PathBuf>) -> Patch {
         let _writing = self.writer.lock();
         let (config, located) = {
             let Ok(contents) = self.contents.read() else {
-                return true;
+                return Patch::Unchanged;
             };
             let rules = Rules::new(&contents.config);
             let located: Vec<(u16, String)> = changed
@@ -868,10 +892,10 @@ impl FileIndex {
             (contents.config.clone(), located)
         };
         if located.is_empty() {
-            return true;
+            return Patch::Unchanged;
         }
         if located.len() > RESCAN_ABOVE || located.iter().any(|(_, rel)| rel.is_empty()) {
-            return false;
+            return Patch::Rescan;
         }
         let rules = Rules::new(&config);
 
@@ -948,9 +972,12 @@ impl FileIndex {
             }
         }
 
+        if removals.is_empty() && added.is_empty() {
+            return Patch::Unchanged;
+        }
         if let Ok(mut contents) = self.contents.write() {
             if contents.config != config {
-                return true;
+                return Patch::Unchanged;
             }
             if !removals.is_empty() {
                 contents
@@ -959,7 +986,7 @@ impl FileIndex {
             }
             contents.entries.extend(added);
         }
-        true
+        Patch::Changed
     }
 }
 
@@ -1246,7 +1273,8 @@ mod tests {
         .iter()
         .map(|rel| dir.join(sep(rel)))
         .collect();
-        assert!(index.apply(&changed));
+        assert_eq!(index.apply(&changed), Patch::Changed);
+        assert_eq!(index.apply(&changed), Patch::Unchanged);
         let found = rels(&index.contents.read().unwrap().entries);
         assert_eq!(
             found,
@@ -1261,7 +1289,45 @@ mod tests {
 
         // A change to a root itself is too broad to patch.
         let root_changed: HashSet<PathBuf> = [dir.clone()].into_iter().collect();
-        assert!(!index.apply(&root_changed));
+        assert_eq!(index.apply(&root_changed), Patch::Rescan);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_loaded_cache_is_still_walked_and_the_newest_config_wins() {
+        let dir = scratch("configure");
+        fs::create_dir_all(dir.join("a")).unwrap();
+        fs::create_dir_all(dir.join("b")).unwrap();
+        fs::write(dir.join("b/new.txt"), b"").unwrap();
+        let config = |root: &str| Config {
+            roots: vec![dir.join(root)],
+            excludes: Vec::new(),
+        };
+        // A cache from before new.txt was made, that still lists a deleted file.
+        let cache = dir.join("files.idx");
+        let stale = Contents {
+            config: config("b"),
+            entries: vec![Entry::new(0, "gone.txt", false)],
+        };
+        save_cache(&cache, &stale).unwrap();
+
+        let index: &'static FileIndex = Box::leak(Box::default());
+        index.configure(config("a"), Some(cache.clone()));
+        index.configure(config("b"), Some(cache.clone()));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let found = loop {
+            let found = rels(&index.contents.read().unwrap().entries);
+            if found == ["new.txt"] || Instant::now() > deadline {
+                break found;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        assert_eq!(found, ["new.txt"]);
+        assert_eq!(index.contents.read().unwrap().config, config("b"));
+        while index.scanning.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        index.watcher.lock().unwrap().take();
         let _ = fs::remove_dir_all(dir);
     }
 
