@@ -313,6 +313,12 @@ pub fn snapshot(sort: &str, filter: &str, limit: usize) -> Snapshot {
         row.pids.sort_unstable();
     }
     mark_windowed(&mut rows);
+    // Zephyr's own windows stay out of the window list (and Alt+Tab, and the Dock), but it's
+    // an app the user works in all the same.
+    let own = std::process::id();
+    for row in &mut rows {
+        row.windowed |= row.pids.contains(&own);
+    }
     sort_rows(&mut rows, sort);
     rows.truncate(limit);
     Snapshot {
@@ -1271,6 +1277,11 @@ mod tests {
         }
         let own = std::process::id();
         let filtered = snapshot("cpu", &own.to_string(), 10);
-        assert!(filtered.rows.iter().any(|row| row.pids.contains(&own)));
+        assert!(
+            filtered
+                .rows
+                .iter()
+                .any(|row| row.pids.contains(&own) && row.windowed)
+        );
     }
 }
