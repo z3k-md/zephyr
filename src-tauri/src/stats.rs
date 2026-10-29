@@ -173,7 +173,8 @@ pub fn set_resources_open(open: bool) {
 
 static THREAD: OnceLock<std::thread::Thread> = OnceLock::new();
 
-/// Whether the bar is showing, for work that only matters while it does.
+/// Whether the bar is showing, for work that only matters while it does (macOS now playing).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn bar_visible() -> bool {
     BAR_VISIBLE.load(Ordering::SeqCst)
 }
