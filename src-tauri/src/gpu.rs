@@ -22,9 +22,22 @@ pub struct Gpu {
     pub temperature: Option<f32>,
 }
 
+/// Splits a `\GPU Engine(*)` instance name, `pid_1234_luid_0x…_0x…_phys_0_eng_3_engtype_3D`,
+/// into the process it counts for and the engine (`0x…_0x…_phys_0_eng_3_engtype_3D`).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn engine_instance(name: &str) -> (Option<u32>, &str) {
+    let (owner, engine) = name.split_once("_luid_").unwrap_or(("", name));
+    let pid = owner
+        .strip_prefix("pid_")
+        .and_then(|pid| pid.split('_').next())
+        .and_then(|pid| pid.parse().ok());
+    (pid, engine)
+}
+
 #[cfg(windows)]
 mod platform {
     use std::collections::HashMap;
+    use std::time::{Duration, Instant};
 
     use windows::Wdk::Graphics::Direct3D::{
         D3DKMT_ADAPTER_PERFDATA, D3DKMT_CLOSEADAPTER, D3DKMT_OPENADAPTERFROMLUID,
@@ -52,10 +65,14 @@ mod platform {
         memory: PDH_HCOUNTER,
         /// The GPU with the most memory of its own, whose memory the reading shows.
         main: Option<Adapter>,
+        main_checked: Instant,
         /// Each process's load from the last reading: its busiest engine, as Task Manager
         /// shows it.
         by_process: HashMap<u32, f32>,
     }
+
+    const MAIN_RECHECK: Duration = Duration::from_secs(10 * 60);
+    const MAIN_RECHECK_MISSING: Duration = Duration::from_secs(30);
 
     struct Adapter {
         name: String,
@@ -133,49 +150,68 @@ mod platform {
                 engines,
                 memory,
                 main: main_adapter(),
+                main_checked: Instant::now(),
                 by_process: HashMap::new(),
             })
         }
 
-        /// Each process's GPU load from the last reading, 0–100.
-        pub fn by_process(&self) -> HashMap<u32, f32> {
-            self.by_process.clone()
+        /// Each process's GPU load from the last reading that asked for it, 0–100, handed
+        /// over rather than copied.
+        pub fn take_by_process(&mut self) -> HashMap<u32, f32> {
+            std::mem::take(&mut self.by_process)
         }
 
-        pub fn read(&mut self) -> Option<Gpu> {
+        /// `per_process` also works out each process's load, for Resources.
+        pub fn read(&mut self, per_process: bool) -> Option<Gpu> {
             // SAFETY: the query stays open for the reader's life.
             if unsafe { PdhCollectQueryData(self.query) } != 0 {
                 return None;
             }
             // An engine's load is the sum of what each process uses of it; the GPU's is its
             // busiest engine's.
-            let mut engines: HashMap<String, f64> = HashMap::new();
-            let mut per_process: HashMap<(u32, String), f64> = HashMap::new();
-            for (name, value) in values(self.engines) {
-                let (owner, engine) = name.split_once("_luid_").unwrap_or(("", &name));
-                *engines.entry(engine.to_string()).or_default() += value;
-                if let Some(pid) = owner
-                    .strip_prefix("pid_")
-                    .and_then(|pid| pid.split('_').next())
-                    .and_then(|pid| pid.parse::<u32>().ok())
-                {
-                    *per_process.entry((pid, engine.to_string())).or_default() += value;
+            let mut engines: HashMap<&str, f64> = HashMap::new();
+            let mut by_engine: HashMap<(u32, &str), f64> = HashMap::new();
+            let instances = values(self.engines);
+            for (name, value) in &instances {
+                let (pid, engine) = super::engine_instance(name);
+                *engines.entry(engine).or_default() += value;
+                if per_process && let Some(pid) = pid {
+                    *by_engine.entry((pid, engine)).or_default() += value;
                 }
             }
-            self.by_process.clear();
-            for ((pid, _), value) in per_process {
-                let busiest = self.by_process.entry(pid).or_default();
-                *busiest = busiest.max(value.min(100.0) as f32);
+            if per_process {
+                self.by_process.clear();
+                for ((pid, _), value) in by_engine {
+                    let busiest = self.by_process.entry(pid).or_default();
+                    *busiest = busiest.max(value.min(100.0) as f32);
+                }
             }
             let usage = engines.values().copied().fold(0.0, f64::max).min(100.0) as f32;
             let mut gpu = Gpu {
                 usage,
                 ..Gpu::default()
             };
+            // The main GPU is looked for again now and then, and sooner when it's missing or
+            // its counters are gone (an eGPU unplugged, a driver reinstalled).
+            let memory = values(self.memory);
+            let found = self.main.as_ref().is_some_and(|main| {
+                memory
+                    .iter()
+                    .any(|(name, _)| name.to_ascii_lowercase().starts_with(&main.luid))
+            });
+            let recheck = if found {
+                MAIN_RECHECK
+            } else {
+                MAIN_RECHECK_MISSING
+            };
+            if self.main_checked.elapsed() >= recheck {
+                self.main = main_adapter();
+                self.main_checked = Instant::now();
+            }
             if let Some(main) = &self.main {
                 gpu.name = main.name.clone();
                 gpu.memory_total = main.memory;
-                gpu.memory_used = values(self.memory)
+                gpu.memory_used = memory
                     .into_iter()
                     .find(|(name, _)| name.to_ascii_lowercase().starts_with(&main.luid))
                     .map_or(0, |(_, used)| used as u64);
@@ -342,8 +378,13 @@ mod platform {
             Some(Reader)
         }
 
+        /// No per-process GPU load here.
+        pub fn take_by_process(&mut self) -> std::collections::HashMap<u32, f32> {
+            std::collections::HashMap::new()
+        }
+
         /// The busiest GPU, as Activity Monitor's GPU History shows it.
-        pub fn read(&mut self) -> Option<Gpu> {
+        pub fn read(&mut self, _per_process: bool) -> Option<Gpu> {
             let mut busiest: Option<Gpu> = None;
             // SAFETY: IOKit and CoreFoundation calls on objects this function creates and
             // releases; the matching dictionary is consumed by IOServiceGetMatchingServices.
@@ -468,7 +509,12 @@ mod platform {
             None
         }
 
-        pub fn read(&mut self) -> Option<Gpu> {
+        /// No per-process GPU load here.
+        pub fn take_by_process(&mut self) -> std::collections::HashMap<u32, f32> {
+            std::collections::HashMap::new()
+        }
+
+        pub fn read(&mut self, _per_process: bool) -> Option<Gpu> {
             None
         }
     }
@@ -479,12 +525,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn engine_instances_name_their_process_and_engine() {
+        assert_eq!(
+            engine_instance("pid_1234_luid_0x00000000_0x0000CD88_phys_0_eng_3_engtype_3D"),
+            (Some(1234), "0x00000000_0x0000CD88_phys_0_eng_3_engtype_3D")
+        );
+        // Two processes' shares of one engine name the same engine.
+        assert_eq!(
+            engine_instance("pid_8_luid_0x0_0x1_phys_0_eng_0_engtype_Copy").1,
+            engine_instance("pid_99_luid_0x0_0x1_phys_0_eng_0_engtype_Copy").1
+        );
+        assert_eq!(
+            engine_instance("luid_0x0_0x1_phys_0_eng_0_engtype_3D"),
+            (None, "luid_0x0_0x1_phys_0_eng_0_engtype_3D")
+        );
+        assert_eq!(
+            engine_instance("pid_x_luid_0x0_0x1_phys_0_eng_0"),
+            (None, "0x0_0x1_phys_0_eng_0")
+        );
+    }
+
+    #[test]
     #[ignore = "reads this computer's GPU; run by hand"]
     fn reads_this_computer() {
         let mut reader = Reader::new().expect("GPU counters");
         std::thread::sleep(std::time::Duration::from_millis(500));
         let started = std::time::Instant::now();
-        let gpu = reader.read().expect("a reading");
+        let gpu = reader.read(true).expect("a reading");
         println!("{gpu:?} in {:?}", started.elapsed());
         assert!((0.0..=100.0).contains(&gpu.usage));
     }

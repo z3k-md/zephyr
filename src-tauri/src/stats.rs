@@ -69,7 +69,9 @@ struct Sampler {
     /// The CPU and GPU temperatures and when they were read: every other second is plenty,
     /// and a read walks a few dozen sensors.
     temps: Option<(Instant, Temps)>,
-    /// Windows: each process's GPU load from the last read, for Resources' GPU column.
+    /// When the GPU was last read, which a hidden tick reads only every few seconds.
+    gpu_read: Option<Instant>,
+    /// Windows: each process's GPU load from the last full read, for Resources' GPU column.
     gpu_by_process: std::collections::HashMap<u32, f32>,
 }
 
@@ -160,6 +162,9 @@ impl Point {
 
 /// How often the thread reads while the bar shows, so the footer's meters move smoothly.
 const EVERY_SHOWN: Duration = Duration::from_millis(500);
+/// How often the GPU is read while the bar is hidden and Resources closed: its counters
+/// cover every engine of every process, a lot to collect each second for the history alone.
+const GPU_HIDDEN_EVERY: Duration = Duration::from_secs(5);
 /// The shortest gap between reads: CPU use over less means little.
 const AT_LEAST: Duration = Duration::from_millis(250);
 
@@ -271,6 +276,7 @@ impl Sampler {
             cores: std::collections::VecDeque::new(),
             app: None,
             temps: None,
+            gpu_read: None,
             gpu_by_process: std::collections::HashMap::new(),
         }
     }
@@ -290,23 +296,43 @@ fn recent_app_usage(sampler: &mut Sampler) -> AppUsage {
 
 /// One reading. The GPU's counters (a couple of milliseconds) are read with the reader taken
 /// out of the sampler, so nothing waits on the lock meanwhile. `full` is false while the bar
-/// is hidden and Resources closed: then only what the history keeps is read.
+/// is hidden and Resources closed: then only what the history keeps is read, and the GPU only
+/// every few seconds.
 fn tick(full: bool) -> Option<Stats> {
-    let mut reader = SAMPLER
-        .lock()
-        .ok()?
-        .get_or_insert_with(Sampler::new)
-        .gpu
-        .take();
-    let gpu = reader.as_mut().and_then(crate::gpu::Reader::read);
+    // Only Resources shows each process's GPU load.
+    let per_process = RESOURCES_OPEN.load(Ordering::SeqCst);
+    let (mut reader, reuse) = {
+        let mut guard = SAMPLER.lock().ok()?;
+        let sampler = guard.get_or_insert_with(Sampler::new);
+        // While nothing shows it, the GPU is read every few seconds, the last reading
+        // standing in between.
+        if !full
+            && sampler
+                .gpu_read
+                .is_some_and(|at| at.elapsed() < GPU_HIDDEN_EVERY)
+        {
+            (
+                None,
+                Some(sampler.latest.as_ref().and_then(|s| s.gpu.clone())),
+            )
+        } else {
+            (sampler.gpu.take(), None)
+        }
+    };
+    let gpu = match reuse {
+        Some(gpu) => gpu,
+        None => reader.as_mut().and_then(|reader| reader.read(per_process)),
+    };
     let mut guard = SAMPLER.lock().ok()?;
     let sampler = guard.get_or_insert_with(Sampler::new);
-    #[cfg(windows)]
-    if let Some(reader) = reader.as_ref() {
-        sampler.gpu_by_process = reader.by_process();
-    }
-    if sampler.gpu.is_none() {
-        sampler.gpu = reader;
+    if let Some(mut reader) = reader {
+        sampler.gpu_read = Some(Instant::now());
+        if per_process {
+            sampler.gpu_by_process = reader.take_by_process();
+        }
+        if sampler.gpu.is_none() {
+            sampler.gpu = Some(reader);
+        }
     }
     Some(record(sampler, gpu, full))
 }
