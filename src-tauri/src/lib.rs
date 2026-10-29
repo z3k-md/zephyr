@@ -49,7 +49,7 @@ use tauri::{Emitter, Manager, WindowEvent};
 use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_global_shortcut::ShortcutState;
 
-use crate::state::AppState;
+use crate::state::{AppState, Persisted};
 
 /// Run instead of the app when started as the CPU temperature helper (cputemp.rs): returns
 /// whether it was, after the helper has finished.
@@ -112,143 +112,7 @@ pub fn run() {
         .plugin(tauri_plugin_drag::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .setup(|app| {
-            // A tray utility should not put an icon in the Dock or take over the menu bar.
-            #[cfg(target_os = "macos")]
-            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
-
-            startup::mark("setup began");
-            move_from_old_identifier(app.handle());
-            shell::clean_terminal_scripts();
-            let config_dir = app.path().app_config_dir()?;
-            let state = AppState::load(config_dir.join("state.json"));
-            let snapshot = state
-                .snapshot()
-                .map_err(Box::<dyn std::error::Error>::from)?;
-
-            if let Err(err) = shortcut::register(
-                app.handle(),
-                &snapshot.summon_shortcut,
-                snapshot.extra_shortcuts(),
-            ) {
-                log::error!("{err}");
-            }
-            startup::mark("summon shortcut registered");
-            // Off the startup path: on Windows it runs schtasks, which takes a moment.
-            let autostart_app = app.handle().clone();
-            let (launch_at_startup, instant) =
-                (snapshot.launch_at_startup, snapshot.instant_startup);
-            std::thread::spawn(move || {
-                if let Err(err) =
-                    commands::settings::apply_autostart(&autostart_app, launch_at_startup, instant)
-                {
-                    log::error!("{err}");
-                }
-            });
-            // The 15 minutes of totals System Resources graphs is always being kept, and the
-            // connection watched unless Settings turned that off.
-            net::set_enabled(snapshot.watch_connection);
-            net::start();
-            cputemp::start(snapshot.cpu_temp);
-            stats::start(app.handle().clone());
-            // The settings catalog reads every System Settings pane's plist on macOS (most of a
-            // second); built now, the first search doesn't wait on it.
-            std::thread::spawn(|| {
-                settings::catalog();
-            });
-
-            secrets::init(app.path().app_data_dir()?);
-            sync::init(app.path().app_data_dir()?);
-            notes::init(config_dir.join("notes"));
-            icons::init(app.path().app_cache_dir()?.join("icons"));
-            capture::init(app.path().app_data_dir()?.join("captures"));
-            weather::start(app.handle(), app.path().app_data_dir()?);
-            // Dev builds keep their key in a file instead of the keychain (secrets.rs), so
-            // they keep their own history too; sharing one wiped it at every switch.
-            let clipboard_dir = if cfg!(debug_assertions) {
-                "clipboard-dev"
-            } else {
-                "clipboard"
-            };
-            clipboard::start(
-                app.path().app_data_dir()?.join(clipboard_dir),
-                snapshot.clipboard.clone(),
-            );
-
-            app.manage(state);
-            handoff::start();
-            power::resume(app.handle());
-            browser::start();
-            nowplaying::start(app.handle());
-
-            if let Err(err) = tray::init(app) {
-                log::error!("tray setup failed: {err}");
-            }
-
-            window::prewarm_settings(app.handle());
-            // First run (or every launch in dev, when switched on): setup before first use.
-            let show_setup = !snapshot.onboarding_done
-                || (cfg!(debug_assertions) && snapshot.onboarding_every_launch);
-            if show_setup && let Err(err) = window::open_onboarding(app.handle()) {
-                log::error!("couldn't open setup: {err}");
-            }
-            if let Some(main_window) = app.get_webview_window("main") {
-                #[cfg(target_os = "macos")]
-                if let Err(err) = window::make_bar_panel(&main_window) {
-                    log::error!("couldn't let the bar float over full-screen apps: {err}");
-                }
-                #[cfg(target_os = "macos")]
-                window::hide_on_space_change(app.handle());
-                #[cfg(windows)]
-                if let Err(err) = window::make_bar_glass(&main_window) {
-                    log::error!("couldn't blur behind the bar: {err}");
-                }
-                #[cfg(windows)]
-                window::install_snapping(&main_window);
-                #[cfg(windows)]
-                clipboard::set_owner_window(&main_window);
-
-                let watched = main_window.clone();
-                main_window.on_window_event(move |event| match event {
-                    WindowEvent::CloseRequested { api, .. } => {
-                        api.prevent_close();
-                        // Alt+F4 hides the bar like Esc does, so stats and the page hear about it.
-                        window::hide_bar(watched.app_handle());
-                    }
-                    WindowEvent::Focused(false) if !window::suppressing_blur() => {
-                        log::debug!("the bar lost focus, hiding it");
-                        let _ = watched.hide();
-                        stats::set_bar_visible(false);
-                        let _ = watched.emit("bar-hidden", ());
-                    }
-                    WindowEvent::Moved(position) => {
-                        window::bar_moved(watched.app_handle(), *position);
-                    }
-                    _ => {}
-                });
-                let _ = main_window.hide();
-                window::draw_bar_unseen(app.handle());
-            }
-
-            // Notes reopen after startup rather than holding it up.
-            let notes_app = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                note_windows::restore(&notes_app);
-            });
-            register_links(app);
-
-            startup::mark("setup finished");
-            log::info!("Zephyr is running");
-
-            apps::AppIndex::refresh_if_stale(apps::index());
-            files::index().configure(
-                snapshot.file_config(),
-                commands::files::file_cache_path(app.handle()),
-            );
-            updater::spawn_background_checks(app.handle().clone());
-
-            Ok(())
-        })
+        .setup(setup)
         .invoke_handler(tauri::generate_handler![
             commands::get_snapshot,
             commands::search::record_view_open,
@@ -402,6 +266,171 @@ pub fn run() {
             }
             _ => {}
         });
+}
+
+/// Everything before the bar can open, in order: settings first, then the summon shortcut
+/// (as early as possible, so it works the moment the event loop runs), the background
+/// services, and last the windows.
+fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    // A tray utility should not put an icon in the Dock or take over the menu bar.
+    #[cfg(target_os = "macos")]
+    app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
+    startup::mark("setup began");
+    move_from_old_identifier(app.handle());
+    shell::clean_terminal_scripts();
+    let config_dir = app.path().app_config_dir()?;
+    let state = AppState::load(config_dir.join("state.json"));
+    let snapshot = state
+        .snapshot()
+        .map_err(Box::<dyn std::error::Error>::from)?;
+
+    register_shortcuts(app.handle(), &snapshot);
+    apply_autostart_later(app.handle(), &snapshot);
+    start_monitors(app.handle(), &snapshot);
+    open_stores(app, &config_dir, &snapshot)?;
+
+    app.manage(state);
+    handoff::start();
+    power::resume(app.handle());
+    browser::start();
+    nowplaying::start(app.handle());
+
+    if let Err(err) = tray::init(app) {
+        log::error!("tray setup failed: {err}");
+    }
+
+    open_first_windows(app.handle(), &snapshot);
+    set_up_bar(app.handle());
+
+    // Notes reopen after startup rather than holding it up.
+    let notes_app = app.handle().clone();
+    tauri::async_runtime::spawn(async move {
+        note_windows::restore(&notes_app);
+    });
+    register_links(app);
+
+    startup::mark("setup finished");
+    log::info!("Zephyr is running");
+
+    apps::AppIndex::refresh_if_stale(apps::index());
+    files::index().configure(
+        snapshot.file_config(),
+        commands::files::file_cache_path(app.handle()),
+    );
+    updater::spawn_background_checks(app.handle().clone());
+    Ok(())
+}
+
+fn register_shortcuts(app: &tauri::AppHandle, snapshot: &Persisted) {
+    if let Err(err) = shortcut::register(app, &snapshot.summon_shortcut, snapshot.extra_shortcuts())
+    {
+        log::error!("{err}");
+    }
+    startup::mark("summon shortcut registered");
+}
+
+/// Off the startup path: on Windows it runs schtasks, which takes a moment.
+fn apply_autostart_later(app: &tauri::AppHandle, snapshot: &Persisted) {
+    let app = app.clone();
+    let (launch_at_startup, instant) = (snapshot.launch_at_startup, snapshot.instant_startup);
+    std::thread::spawn(move || {
+        if let Err(err) = commands::settings::apply_autostart(&app, launch_at_startup, instant) {
+            log::error!("{err}");
+        }
+    });
+}
+
+fn start_monitors(app: &tauri::AppHandle, snapshot: &Persisted) {
+    // The 15 minutes of totals System Resources graphs is always being kept, and the
+    // connection watched unless Settings turned that off.
+    net::set_enabled(snapshot.watch_connection);
+    net::start();
+    cputemp::start(snapshot.cpu_temp);
+    stats::start(app.clone());
+    // The settings catalog reads every System Settings pane's plist on macOS (most of a
+    // second); built now, the first search doesn't wait on it.
+    std::thread::spawn(|| {
+        settings::catalog();
+    });
+}
+
+/// Points each part that keeps files at its folder, and loads what it needs at once.
+fn open_stores(
+    app: &tauri::App,
+    config_dir: &std::path::Path,
+    snapshot: &Persisted,
+) -> Result<(), Box<dyn std::error::Error>> {
+    secrets::init(app.path().app_data_dir()?);
+    sync::init(app.path().app_data_dir()?);
+    notes::init(config_dir.join("notes"));
+    icons::init(app.path().app_cache_dir()?.join("icons"));
+    capture::init(app.path().app_data_dir()?.join("captures"));
+    weather::start(app.handle(), app.path().app_data_dir()?);
+    // Dev builds keep their key in a file instead of the keychain (secrets.rs), so
+    // they keep their own history too; sharing one wiped it at every switch.
+    let clipboard_dir = if cfg!(debug_assertions) {
+        "clipboard-dev"
+    } else {
+        "clipboard"
+    };
+    clipboard::start(
+        app.path().app_data_dir()?.join(clipboard_dir),
+        snapshot.clipboard.clone(),
+    );
+    Ok(())
+}
+
+fn open_first_windows(app: &tauri::AppHandle, snapshot: &Persisted) {
+    window::prewarm_settings(app);
+    // First run (or every launch in dev, when switched on): setup before first use.
+    let show_setup =
+        !snapshot.onboarding_done || (cfg!(debug_assertions) && snapshot.onboarding_every_launch);
+    if show_setup && let Err(err) = window::open_onboarding(app) {
+        log::error!("couldn't open setup: {err}");
+    }
+}
+
+/// Dresses the bar's window for its platform and hides it until it's summoned.
+fn set_up_bar(app: &tauri::AppHandle) {
+    let Some(main_window) = app.get_webview_window("main") else {
+        return;
+    };
+    #[cfg(target_os = "macos")]
+    if let Err(err) = window::make_bar_panel(&main_window) {
+        log::error!("couldn't let the bar float over full-screen apps: {err}");
+    }
+    #[cfg(target_os = "macos")]
+    window::hide_on_space_change(app);
+    #[cfg(windows)]
+    if let Err(err) = window::make_bar_glass(&main_window) {
+        log::error!("couldn't blur behind the bar: {err}");
+    }
+    #[cfg(windows)]
+    window::install_snapping(&main_window);
+    #[cfg(windows)]
+    clipboard::set_owner_window(&main_window);
+
+    let watched = main_window.clone();
+    main_window.on_window_event(move |event| match event {
+        WindowEvent::CloseRequested { api, .. } => {
+            api.prevent_close();
+            // Alt+F4 hides the bar like Esc does, so stats and the page hear about it.
+            window::hide_bar(watched.app_handle());
+        }
+        WindowEvent::Focused(false) if !window::suppressing_blur() => {
+            log::debug!("the bar lost focus, hiding it");
+            let _ = watched.hide();
+            stats::set_bar_visible(false);
+            let _ = watched.emit("bar-hidden", ());
+        }
+        WindowEvent::Moved(position) => {
+            window::bar_moved(watched.app_handle(), *position);
+        }
+        _ => {}
+    });
+    let _ = main_window.hide();
+    window::draw_bar_unseen(app);
 }
 
 /// Routes `zephyr://` links to the bar, including the one that launched Zephyr.
