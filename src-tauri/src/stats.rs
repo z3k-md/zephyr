@@ -121,29 +121,46 @@ pub fn history() -> Vec<Point> {
 /// out, so the gap shows. 120 of them draw the same sparkline as 900 points, for an eighth of
 /// what crosses to the page.
 pub fn history_buckets(count: usize) -> Vec<Point> {
-    let span = WINDOW.as_secs_f32() / count.max(1) as f32;
-    let mut buckets: Vec<Option<Point>> = vec![None; count];
-    for point in history() {
-        let index = ((WINDOW.as_secs_f32() - point.age) / span).floor();
-        let Some(slot) = (index >= 0.0)
-            .then_some(index as usize)
-            .and_then(|index| buckets.get_mut(index.min(count - 1)))
-        else {
+    let points = history().into_iter().map(|point| (point.age, point));
+    buckets(points, WINDOW.as_secs_f32(), count, |kept, point| Point {
+        age: kept.age.min(point.age),
+        cpu: kept.cpu.max(point.cpu),
+        memory: kept.memory.max(point.memory),
+        gpu: kept.gpu.max(point.gpu),
+        down: kept.down.max(point.down),
+        up: kept.up.max(point.up),
+    })
+    .into_iter()
+    .map(Point::rounded)
+    .collect()
+}
+
+/// Readings over the last `window` seconds, each with its age, in `count` equal stretches,
+/// oldest first, the readings in each folded together by `merge`. Empty stretches are left
+/// out, as are readings older than the window.
+pub(crate) fn buckets<T: Copy>(
+    readings: impl IntoIterator<Item = (f32, T)>,
+    window: f32,
+    count: usize,
+    merge: impl Fn(T, T) -> T,
+) -> Vec<T> {
+    if count == 0 {
+        return Vec::new();
+    }
+    let span = window / count as f32;
+    let mut found: Vec<Option<T>> = vec![None; count];
+    for (age, reading) in readings {
+        let index = ((window - age) / span).floor();
+        if index < 0.0 {
             continue;
-        };
+        }
+        let slot = &mut found[(index as usize).min(count - 1)];
         *slot = Some(match *slot {
-            None => point,
-            Some(kept) => Point {
-                age: kept.age.min(point.age),
-                cpu: kept.cpu.max(point.cpu),
-                memory: kept.memory.max(point.memory),
-                gpu: kept.gpu.max(point.gpu),
-                down: kept.down.max(point.down),
-                up: kept.up.max(point.up),
-            },
+            None => reading,
+            Some(kept) => merge(kept, reading),
         });
     }
-    buckets.into_iter().flatten().map(Point::rounded).collect()
+    found.into_iter().flatten().collect()
 }
 
 impl Point {
@@ -679,6 +696,14 @@ fn empty() -> Stats {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn readings_fold_into_stretches_oldest_first() {
+        // A 10-second window in five stretches; the newest reading is 0 seconds old.
+        let readings = [(9.5, 1), (7.5, 7), (6.1, 3), (3.0, 4), (0.0, 5), (12.0, 99)];
+        assert_eq!(buckets(readings, 10.0, 5, i32::max), [1, 7, 4, 5]);
+        assert!(buckets(readings, 10.0, 0, i32::max).is_empty());
+    }
 
     #[test]
     fn tunnels_and_loopback_are_not_the_line() {

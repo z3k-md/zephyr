@@ -577,26 +577,22 @@ pub fn detail(key: &str, pids: &[u32]) -> Option<Detail> {
 /// A row's history in `count` stretches over the window, each the highest CPU and memory in
 /// it at its newest reading's age; empty stretches are left out.
 fn buckets(history: &VecDeque<(Instant, f32, u64)>, count: usize) -> Vec<(f32, f32, u64)> {
-    let window = HISTORY.as_secs_f32();
-    let span = window / count.max(1) as f32;
-    let mut found: Vec<Option<(f32, f32, u64)>> = vec![None; count];
-    for (at, cpu, memory) in history {
+    let readings = history.iter().map(|(at, cpu, memory)| {
         let age = at.elapsed().as_secs_f32();
-        let index = ((window - age) / span).floor();
-        if index < 0.0 {
-            continue;
-        }
-        let slot = &mut found[(index as usize).min(count - 1)];
-        *slot = Some(match *slot {
-            None => (age, *cpu, *memory),
-            Some((kept_age, kept_cpu, kept_memory)) => (
+        (age, (age, *cpu, *memory))
+    });
+    stats::buckets(
+        readings,
+        HISTORY.as_secs_f32(),
+        count,
+        |(kept_age, kept_cpu, kept_memory), (age, cpu, memory)| {
+            (
                 kept_age.min(age),
-                kept_cpu.max(*cpu),
-                kept_memory.max(*memory),
-            ),
-        });
-    }
-    found.into_iter().flatten().collect()
+                kept_cpu.max(cpu),
+                kept_memory.max(memory),
+            )
+        },
+    )
 }
 
 /// The battery, read at most every 30 seconds.
