@@ -173,6 +173,11 @@ pub fn set_resources_open(open: bool) {
 
 static THREAD: OnceLock<std::thread::Thread> = OnceLock::new();
 
+/// Whether the bar is showing, for work that only matters while it does.
+pub fn bar_visible() -> bool {
+    BAR_VISIBLE.load(Ordering::SeqCst)
+}
+
 /// Called as the bar shows and hides. Showing wakes the thread, so the footer gets a fresh
 /// reading right away.
 pub fn set_bar_visible(visible: bool) {

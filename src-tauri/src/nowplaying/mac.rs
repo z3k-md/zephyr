@@ -3,7 +3,8 @@
 //! so the two players that script well are asked directly, and only while they're running:
 //! a `tell` would otherwise launch them. Each asks for Automation permission the first time.
 //! Both announce track and play/pause changes as distributed notifications, which wake the
-//! watcher at once; a slow poll catches the rest (a player quitting, a seek).
+//! watcher at once, as does a player quitting; while the bar shows, a slow poll catches the
+//! rest (a seek). Nothing runs while it's hidden: opening the bar reads afresh.
 
 use std::sync::mpsc::Sender;
 use std::time::Duration;
@@ -28,6 +29,9 @@ const MAX_ARTWORK: usize = 2 * 1024 * 1024;
 pub struct Mac {
     /// The last list's players, by index: bundle id and Spotify's cover address.
     listed: Vec<(&'static str, String)>,
+    /// Spotify's last cover, by address: the watcher reads a new track's cover a few times,
+    /// and an address always gives the same picture.
+    cover: Option<(String, String)>,
 }
 
 impl Mac {
@@ -38,13 +42,20 @@ impl Mac {
             .spawn(move || {
                 loop {
                     std::thread::sleep(Duration::from_secs(3));
+                    // Each read runs AppleScript per player, so only while the bar shows.
+                    if !crate::stats::bar_visible() {
+                        continue;
+                    }
                     if wake.send(Wake::Changed).is_err() {
                         return;
                     }
                 }
             })
             .ok();
-        Mac { listed: Vec::new() }
+        Mac {
+            listed: Vec::new(),
+            cover: None,
+        }
     }
 }
 
@@ -86,22 +97,21 @@ impl Sessions for Mac {
 
     fn artwork(&mut self, index: usize) -> Option<String> {
         let (bundle, cover) = self.listed.get(index)?.clone();
-        let bytes = if cover.starts_with("https://") {
-            fetch(&cover)?
-        } else if bundle == "com.apple.Music" {
-            music_artwork()?
-        } else {
-            return None;
-        };
-        if bytes.is_empty() || bytes.len() > MAX_ARTWORK {
-            return None;
+        if cover.starts_with("https://") {
+            if let Some((address, data)) = &self.cover
+                && *address == cover
+            {
+                return Some(data.clone());
+            }
+            let data = data_url(fetch(&cover)?)?;
+            self.cover = Some((cover, data.clone()));
+            return Some(data);
         }
-        let kind = if bytes.starts_with(b"\x89PNG") {
-            "image/png"
-        } else {
-            "image/jpeg"
-        };
-        Some(format!("data:{kind};base64,{}", STANDARD.encode(bytes)))
+        // Music's cover comes as raw data, read again until it arrives.
+        if bundle == "com.apple.Music" {
+            return data_url(music_artwork()?);
+        }
+        None
     }
 
     fn control(&mut self, index: usize, control: Control) -> bool {
@@ -191,10 +201,24 @@ fn music_artwork() -> Option<Vec<u8>> {
     bytes
 }
 
+/// A cover's bytes as a `data:` URL; none when empty or too big to send to the bar.
+fn data_url(bytes: Vec<u8>) -> Option<String> {
+    if bytes.is_empty() || bytes.len() > MAX_ARTWORK {
+        return None;
+    }
+    let kind = if bytes.starts_with(b"\x89PNG") {
+        "image/png"
+    } else {
+        "image/jpeg"
+    };
+    Some(format!("data:{kind};base64,{}", STANDARD.encode(bytes)))
+}
+
 fn fetch(url: &str) -> Option<Vec<u8>> {
     let url = url.to_string();
+    let client = crate::util::http().clone();
     tauri::async_runtime::block_on(async move {
-        let response = reqwest::Client::new()
+        let response = client
             .get(url)
             .timeout(Duration::from_secs(5))
             .send()
@@ -257,12 +281,30 @@ fn running(bundle: &str) -> Option<String> {
     Some(url.path()?.to_string())
 }
 
-/// Wakes the watcher on each player's change notification. Distributed notifications arrive
-/// through the main run loop, so they're watched from the main thread.
+/// Wakes the watcher on each player's change notification, and on any app quitting (a player
+/// that quits says nothing itself). Both arrive through the main run loop, so they're watched
+/// from the main thread.
 fn listen(app: &tauri::AppHandle, wake: Sender<Wake>) {
     let _ = app.run_on_main_thread(move || {
         use block2::RcBlock;
+        use objc2_app_kit::{NSWorkspace, NSWorkspaceDidTerminateApplicationNotification};
         use objc2_foundation::{NSDistributedNotificationCenter, NSNotification, NSString};
+        let quit = wake.clone();
+        let block = RcBlock::new(move |_: std::ptr::NonNull<NSNotification>| {
+            let _ = quit.send(Wake::Changed);
+        });
+        // SAFETY: the block only sends on a channel; the observer lives as long as the app.
+        let observer = unsafe {
+            NSWorkspace::sharedWorkspace()
+                .notificationCenter()
+                .addObserverForName_object_queue_usingBlock(
+                    Some(NSWorkspaceDidTerminateApplicationNotification),
+                    None,
+                    None,
+                    &block,
+                )
+        };
+        std::mem::forget(observer);
         let center = NSDistributedNotificationCenter::defaultCenter();
         for (_, name) in PLAYERS {
             let wake = wake.clone();

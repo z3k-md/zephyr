@@ -1191,9 +1191,15 @@ pub fn now_playing_control(control: String) -> Result<(), String> {
 }
 
 /// The scroll wheel over the track: what's playing a step louder or quieter, just that app.
+/// Off the main thread, since on macOS each notch runs AppleScript.
 #[tauri::command]
-pub fn now_playing_volume(step: f32) -> Option<f32> {
-    crate::nowplaying::change_volume(step.clamp(-0.2, 0.2))
+pub async fn now_playing_volume(step: f32) -> Option<f32> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::nowplaying::change_volume(step.clamp(-0.2, 0.2))
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 /// Switches to the app or browser tab playing the song, hiding the bar when it could.

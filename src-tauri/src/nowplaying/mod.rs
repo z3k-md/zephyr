@@ -122,6 +122,13 @@ pub fn control(control: Control) {
     }
 }
 
+/// Reads what's playing again: the bar opened, and macOS doesn't poll while it's hidden.
+pub fn refresh() {
+    if let Some(wake) = WAKE.get() {
+        let _ = wake.send(Wake::Changed);
+    }
+}
+
 /// Turns what's playing up or down by `step` (0–1): just that app in the volume mixer on
 /// Windows, the player's own volume on macOS (which has no per-app volume). The new level, or
 /// none where that can't be done.
@@ -193,21 +200,24 @@ fn watch(app: &AppHandle, mut sessions: impl Sessions, inbox: &Receiver<Wake>) {
         let Some(woke) = wake.take().or_else(|| inbox.recv().ok()) else {
             return;
         };
-        let list = sessions.list();
-        started.update(&list, now_ms());
-        let chosen = choose(&list, &started);
+        // A button needs to know which session it presses; a change is read once it settles.
         if let Wake::Control(control) = woke {
-            if let Some(index) = chosen {
+            let list = sessions.list();
+            started.update(&list, now_ms());
+            if let Some(index) = choose(&list, &started) {
                 sessions.control(index, control);
             }
             continue;
         }
-        // A track change sends a burst of events; read once it settles.
+        // A track change sends a burst of events; read once it settles. A button pressed
+        // meanwhile goes to the session shown, read only then.
         while let Ok(more) = inbox.recv_timeout(Duration::from_millis(120)) {
-            if let Wake::Control(control) = more
-                && let Some(index) = chosen
-            {
-                sessions.control(index, control);
+            if let Wake::Control(control) = more {
+                let list = sessions.list();
+                started.update(&list, now_ms());
+                if let Some(index) = choose(&list, &started) {
+                    sessions.control(index, control);
+                }
             }
         }
         let list = sessions.list();

@@ -193,10 +193,10 @@ pub async fn gather(
     let is_url = query::looks_like_url(&parsed.query);
     let offer_apps = !is_url;
     if offer_apps && let Some(port) = crate::net::ports::asked_port(&parsed.query) {
-        return port_answers(&parsed.query, Some(port));
+        return port_answers_off_thread(parsed.query.clone(), Some(port)).await;
     }
     if offer_apps && crate::net::ports::asks_for_list(&parsed.query) {
-        return port_answers(&parsed.query, None);
+        return port_answers_off_thread(parsed.query.clone(), None).await;
     }
     if offer_apps && crate::net::ip::is_query(&parsed.query) {
         return ip_answers(&parsed.query, include_remote).await;
@@ -393,8 +393,16 @@ pub async fn gather(
     }
 }
 
+/// The port answers on a blocking thread: reading the sockets runs `lsof` on macOS.
+async fn port_answers_off_thread(text: String, port: Option<u16>) -> SuggestResponse {
+    tauri::async_runtime::spawn_blocking(move || port_answers(&text, port))
+        .await
+        .unwrap_or_default()
+}
+
 /// "port 3000": the process using the port as a card, and any others below it. "ports":
-/// every listening port as a row. Read fresh on each keystroke; the tables are small.
+/// every listening port as a row. The sockets and processes are read at most once every
+/// two seconds (ports.rs), so typing ":3000" reads them once.
 fn port_answers(text: &str, port: Option<u16>) -> SuggestResponse {
     let uses = match port {
         Some(port) => crate::net::ports::on_port(port),

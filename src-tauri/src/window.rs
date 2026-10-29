@@ -483,6 +483,8 @@ pub fn show_bar(app: &AppHandle) {
         "bar-shown"
     };
     crate::stats::set_bar_visible(true);
+    // What's playing may have changed while the bar was hidden (macOS doesn't poll then).
+    crate::nowplaying::refresh();
     if let Err(err) = window.emit(event, ()) {
         log::error!("couldn't notify the bar: {err}");
     }

@@ -4,6 +4,8 @@
 
 use std::collections::HashMap;
 use std::net::IpAddr;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
@@ -74,9 +76,30 @@ pub fn asks_for_list(text: &str) -> bool {
     )
 }
 
+/// How long one read of the sockets and their processes answers for: typing ":3000" asks on
+/// every keystroke, and a server that just started still shows within this.
+const FRESH_FOR: Duration = Duration::from_secs(2);
+
+static SOCKETS: Mutex<Option<(Instant, Vec<Socket>)>> = Mutex::new(None);
+
+/// The sockets, read at most once per `FRESH_FOR`.
+fn sockets_cached() -> Vec<Socket> {
+    let Ok(mut cached) = SOCKETS.lock() else {
+        return imp::sockets();
+    };
+    if let Some((at, sockets)) = cached.as_ref()
+        && at.elapsed() < FRESH_FOR
+    {
+        return sockets.clone();
+    }
+    let sockets = imp::sockets();
+    *cached = Some((Instant::now(), sockets.clone()));
+    sockets
+}
+
 /// Everything using `port`, listeners first, one row per process and protocol.
 pub fn on_port(port: u16) -> Vec<PortUse> {
-    let sockets: Vec<Socket> = imp::sockets()
+    let sockets: Vec<Socket> = sockets_cached()
         .into_iter()
         .filter(|socket| socket.port == port && socket.pid != 0)
         .collect();
@@ -99,7 +122,7 @@ pub fn on_port(port: u16) -> Vec<PortUse> {
 
 /// Every listening port, lowest first, one row per port, process and protocol.
 pub fn listening() -> Vec<PortUse> {
-    let sockets: Vec<Socket> = imp::sockets()
+    let sockets: Vec<Socket> = sockets_cached()
         .into_iter()
         // A UDP socket with a remote end is a client's connection (QUIC on macOS), not a
         // listener; Windows' UDP table never has one.
@@ -142,56 +165,94 @@ fn address(ip: IpAddr, port: u16) -> String {
     }
 }
 
+/// A process's name, program and command line.
+#[derive(Clone, Default)]
+struct Described {
+    name: String,
+    path: String,
+    command: String,
+}
+
+/// Processes already read, kept for `FRESH_FOR` like the sockets.
+static PROCESSES: Mutex<Option<(Instant, HashMap<u32, Described>)>> = Mutex::new(None);
+
+/// Each socket's process, reading only the ones not read in the last `FRESH_FOR`.
+fn processes(pids: &[u32]) -> HashMap<u32, Described> {
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+    let mut guard = PROCESSES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if guard
+        .as_ref()
+        .is_none_or(|(at, _)| at.elapsed() >= FRESH_FOR)
+    {
+        *guard = Some((Instant::now(), HashMap::new()));
+    }
+    let Some((_, known)) = guard.as_mut() else {
+        return HashMap::new();
+    };
+    // Each once: sysinfo loses a process that is asked for twice.
+    let mut missing: Vec<Pid> = pids
+        .iter()
+        .filter(|pid| !known.contains_key(pid))
+        .map(|pid| Pid::from_u32(*pid))
+        .collect();
+    missing.sort_unstable();
+    missing.dedup();
+    if !missing.is_empty() {
+        let mut system = System::new();
+        system.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&missing),
+            true,
+            ProcessRefreshKind::nothing()
+                .with_exe(UpdateKind::Always)
+                .with_cmd(UpdateKind::Always),
+        );
+        for pid in missing {
+            let described = system
+                .process(pid)
+                .map(|process| {
+                    let name = process.name().to_string_lossy().into_owned();
+                    Described {
+                        name: name
+                            .strip_suffix(".exe")
+                            .map(str::to_string)
+                            .unwrap_or(name),
+                        path: process
+                            .exe()
+                            .map(|path| path.to_string_lossy().into_owned())
+                            .unwrap_or_default(),
+                        command: process
+                            .cmd()
+                            .iter()
+                            .map(|part| part.to_string_lossy().into_owned())
+                            .collect::<Vec<_>>()
+                            .join(" "),
+                    }
+                })
+                .unwrap_or_default();
+            known.insert(pid.as_u32(), described);
+        }
+    }
+    pids.iter()
+        .filter_map(|pid| known.get(pid).map(|described| (*pid, described.clone())))
+        .collect()
+}
+
 /// Fills in each socket's process: its name, command line, program and icon.
 fn described(sockets: Vec<Socket>) -> Vec<PortUse> {
-    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
-    // Each once: sysinfo loses a process that is asked for twice.
-    let mut pids: Vec<Pid> = sockets
-        .iter()
-        .map(|socket| Pid::from_u32(socket.pid))
-        .collect();
-    pids.sort_unstable();
-    pids.dedup();
-    let mut system = System::new();
-    system.refresh_processes_specifics(
-        ProcessesToUpdate::Some(&pids),
-        true,
-        ProcessRefreshKind::nothing()
-            .with_exe(UpdateKind::Always)
-            .with_cmd(UpdateKind::Always),
-    );
+    let pids: Vec<u32> = sockets.iter().map(|socket| socket.pid).collect();
+    let processes = processes(&pids);
     sockets
         .into_iter()
         .map(|socket| {
-            let process = system.process(Pid::from_u32(socket.pid));
-            let name = process
-                .map(|process| {
-                    let name = process.name().to_string_lossy().into_owned();
-                    name.strip_suffix(".exe")
-                        .map(str::to_string)
-                        .unwrap_or(name)
-                })
-                .unwrap_or_else(|| {
-                    // Windows: 4 is the kernel, which owns http.sys and file sharing.
-                    match socket.pid {
-                        4 => "System".into(),
-                        _ => String::new(),
-                    }
-                });
-            let path = process
-                .and_then(|process| process.exe())
-                .map(|path| path.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            let command = process
-                .map(|process| {
-                    process
-                        .cmd()
-                        .iter()
-                        .map(|part| part.to_string_lossy().into_owned())
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                })
-                .unwrap_or_default();
+            let process = processes.get(&socket.pid).cloned().unwrap_or_default();
+            // Windows: 4 is the kernel, which owns http.sys and file sharing.
+            let name = if process.name.is_empty() && socket.pid == 4 {
+                "System".to_string()
+            } else {
+                process.name
+            };
             PortUse {
                 port: socket.port,
                 protocol: socket.protocol.into(),
@@ -202,10 +263,10 @@ fn described(sockets: Vec<Socket>) -> Vec<PortUse> {
                     .unwrap_or_default(),
                 state: socket.state.into(),
                 pid: socket.pid,
-                icon: icon_for(&path),
+                icon: icon_for(&process.path),
                 name,
-                command,
-                path,
+                command: process.command,
+                path: process.path,
             }
         })
         .collect()
