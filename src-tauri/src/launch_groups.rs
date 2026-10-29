@@ -60,7 +60,7 @@ pub fn launch(app: &AppHandle, id: &str) -> Result<(), String> {
                 std::thread::sleep(Duration::from_millis(150));
             }
             let result = match item.kind.as_str() {
-                "app" => crate::commands::launch_quietly(&app, &item.value),
+                "app" => crate::commands::apps::launch_quietly(&app, &item.value),
                 "url" => app
                     .opener()
                     .open_url(&item.value, None::<&str>)
