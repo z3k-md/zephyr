@@ -167,31 +167,61 @@
 
   const grid = [0, 50, 100].map((value) => ({ value, y: y(value) }));
 
+  type Point = [number, number];
+
+  /** A smooth curve through `points` (Catmull-Rom as cubic Béziers), kept inside the
+   *  latency area so it never overshoots past 0 or the top. */
+  function smooth(points: Point[], move = true): string {
+    if (points.length === 0) return '';
+    const clamp = (value: number) => Math.min(LT + LH, Math.max(LT, value));
+    const f = (value: number) => value.toFixed(1);
+    let path = `${move ? 'M' : 'L'}${f(points[0][0])} ${f(points[0][1])}`;
+    for (let i = 0; i < points.length - 1; i++) {
+      const [x0, y0] = points[Math.max(0, i - 1)];
+      const [x1, y1] = points[i];
+      const [x2, y2] = points[i + 1];
+      const [x3, y3] = points[Math.min(points.length - 1, i + 2)];
+      const c1: Point = [x1 + (x2 - x0) / 6, clamp(y1 + (y2 - y0) / 6)];
+      const c2: Point = [x2 - (x3 - x1) / 6, clamp(y2 - (y3 - y1) / 6)];
+      path += `C${f(c1[0])} ${f(c1[1])} ${f(c2[0])} ${f(c2[1])} ${f(x2)} ${f(y2)}`;
+    }
+    return path;
+  }
+
   const chart = computed(() => {
     const list = buckets.value;
-    let line = '';
-    let pen = false;
-    let band = '';
-    let top: string[] = [];
-    let bottom: string[] = [];
-    const flush = () => {
-      if (top.length) band += `M${top.join('L')}L${bottom.reverse().join('L')}Z`;
-      top = [];
-      bottom = [];
-    };
+    // Runs of measured stretches; a gap (asleep, offline) breaks the line.
+    const runs: { median: Point[]; p95: Point[] }[] = [];
+    let run: { median: Point[]; p95: Point[] } | null = null;
     list.forEach((bucket, index) => {
       if (bucket.median === null) {
-        pen = false;
-        flush();
+        run = null;
         return;
       }
-      const at = cx(index).toFixed(1);
-      line += `${pen ? 'L' : 'M'}${at} ${y(bucket.median).toFixed(1)}`;
-      pen = true;
-      top.push(`${at} ${y(bucket.p95 ?? bucket.median).toFixed(1)}`);
-      bottom.push(`${at} ${y(bucket.median).toFixed(1)}`);
+      if (!run) {
+        run = { median: [], p95: [] };
+        runs.push(run);
+      }
+      const at = cx(index);
+      run.median.push([at, y(bucket.median)]);
+      run.p95.push([at, y(bucket.p95 ?? bucket.median)]);
     });
-    flush();
+    const base = (LT + LH).toFixed(1);
+    let line = '';
+    let area = '';
+    let band = '';
+    for (const { median, p95 } of runs) {
+      const curve = smooth(median);
+      line += curve;
+      const first = median[0][0].toFixed(1);
+      const last = median[median.length - 1][0].toFixed(1);
+      area += `M${first} ${base}${smooth(median, false)}L${last} ${base}Z`;
+      band += `${smooth(p95)}${smooth([...median].reverse(), false)}Z`;
+    }
+    const lastRun = runs[runs.length - 1];
+    const tail = lastRun?.median[lastRun.median.length - 1];
+    // The latest reading, as a dot, when it's the newest stretch.
+    const now = tail && list[list.length - 1]?.median !== null ? { x: tail[0], y: tail[1] } : null;
     const ticks = list.flatMap((bucket, index) =>
       bucket.lost ? [{ x: x(index), drop: bucket.sent > 0 && bucket.lost * 2 >= bucket.sent }] : []
     );
@@ -206,7 +236,7 @@
     list.forEach((bucket, index) => {
       if (bucket.flags & 8 && !(list[index - 1]?.flags & 8)) tests.push(cx(index));
     });
-    return { line, band, ticks, gaps, marks, tests };
+    return { line, area, band, now, ticks, gaps, marks, tests };
   });
 
   const strip = computed(() => {
@@ -273,9 +303,12 @@
   const hops = computed(() => {
     const now = data.value;
     if (!now) return [];
-    const row = (name: string, where: string, stats: HopStats) => ({
+    const row = (name: string, where: string, stats: HopStats, link = '') => ({
       name,
       where,
+      link,
+      now: stats.lastLost ? 'lost' : stats.last !== null ? `${ms(stats.last)} ms` : '—',
+      nowTone: stats.lastLost ? 'bad' : slowness(stats.last),
       median: stats.sent ? `${ms(stats.median)} ms` : '—',
       p95: stats.sent ? `${ms(stats.p95)} ms` : '—',
       jitter: stats.sent ? `${ms(stats.jitter)} ms` : '—',
@@ -286,8 +319,15 @@
       medianTone: slowness(stats.median),
     });
     return [
-      row('Router', now.summary.gateway ?? 'none', now.router),
-      row('Internet', '1.1.1.1', now.internet),
+      // The router's own address opens its sign-in page.
+      row(
+        'Router',
+        now.summary.gateway ?? 'none',
+        now.router,
+        now.summary.gateway ? `http://${now.summary.gateway}` : ''
+      ),
+      // A fixed, always-up host (Cloudflare) stands for the internet; DNS settings don't touch it.
+      row('Internet', 'ping 1.1.1.1', now.internet),
       row('DNS', now.summary.dns ? `${now.summary.dns} · lookup` : 'none', now.dnsHop),
     ];
   });
@@ -379,12 +419,16 @@
     if (gateway) {
       list.push({
         label: `Open router page (${gateway})`,
-        run: () =>
-          openUrl(`http://${gateway}`).catch((error) => (notice.value = errorMessage(error))),
+        run: () => openRouter(`http://${gateway}`),
       });
     }
     return list;
   });
+
+  /** The router's sign-in page, in the default browser. */
+  function openRouter(url: string) {
+    void openUrl(url).catch((error) => (notice.value = errorMessage(error)));
+  }
 
   function runAction(action: Action | undefined) {
     if (!action) return;
@@ -515,6 +559,20 @@
           role="img"
           aria-label="Latency, loss and throughput over the last 15 minutes"
         >
+          <defs>
+            <linearGradient id="net-fill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" class="net-stop" stop-opacity="0.32" />
+              <stop offset="1" class="net-stop" stop-opacity="0" />
+            </linearGradient>
+            <linearGradient id="net-down-fill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" class="net-stop" stop-opacity="0.05" />
+              <stop offset="1" class="net-stop" stop-opacity="0.5" />
+            </linearGradient>
+            <linearGradient id="net-up-fill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" class="net-stop-up" stop-opacity="0.5" />
+              <stop offset="1" class="net-stop-up" stop-opacity="0.05" />
+            </linearGradient>
+          </defs>
           <rect
             v-for="gap in chart.gaps"
             :key="`gap-${gap.x}`"
@@ -566,8 +624,13 @@
             :y1="LT"
             :y2="TT + TH"
           />
+          <path class="net-area" :d="chart.area" />
           <path class="net-band" :d="chart.band" />
           <path class="net-line" :d="chart.line" />
+          <template v-if="chart.now">
+            <circle class="net-now-halo" :cx="chart.now.x" :cy="chart.now.y" r="6" />
+            <circle class="net-now" :cx="chart.now.x" :cy="chart.now.y" r="3" />
+          </template>
           <text class="net-axis" :x="PL" :y="TT - 4">{{ used }}</text>
           <path class="net-down" :d="strip.down" />
           <path class="net-up" :d="strip.up" />
@@ -605,14 +668,26 @@
       </div>
       <div v-else class="net-hops" role="table" aria-label="Hops">
         <div class="h" role="columnheader">Hop</div>
+        <div class="h num" role="columnheader">Now</div>
         <div class="h num" role="columnheader">Median</div>
         <div class="h num" role="columnheader">p95</div>
         <div class="h num" role="columnheader">Jitter</div>
         <div class="h num" role="columnheader">Loss</div>
         <template v-for="hop in hops" :key="hop.name">
           <div class="name" role="cell">
-            {{ hop.name }} <small>{{ hop.where }}</small>
+            {{ hop.name }}
+            <a
+              v-if="hop.link"
+              :href="hop.link"
+              class="net-router-link"
+              v-tip="'Open the router\'s sign-in page'"
+              @mousedown.prevent
+              @click.prevent="openRouter(hop.link)"
+              >{{ hop.where }}</a
+            >
+            <small v-else>{{ hop.where }}</small>
           </div>
+          <div class="num now" :class="hop.nowTone" role="cell">{{ hop.now }}</div>
           <div class="num" :class="hop.medianTone" role="cell">{{ hop.median }}</div>
           <div class="num" :class="hop.slowTone" role="cell">{{ hop.p95 }}</div>
           <div class="num" :class="hop.jitterTone" role="cell">{{ hop.jitter }}</div>

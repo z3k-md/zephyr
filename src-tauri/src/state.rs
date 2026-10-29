@@ -33,6 +33,8 @@ pub struct Persisted {
     pub file_opens: Vec<LaunchEntry>,
     /// Settings pages opened from the bar, by setting id, for ranking.
     pub setting_opens: Vec<LaunchEntry>,
+    /// Views opened (Network, Resources, Notes…), by view id, to fill the empty bar's Views.
+    pub view_opens: Vec<LaunchEntry>,
     /// Clipboard history: on or off, its shortcut, retention and ignored apps.
     pub clipboard: ClipboardSettings,
     /// Global shortcut that opens the notes window; empty for none.
@@ -217,6 +219,7 @@ impl Persisted {
             file_excludes: Vec::new(),
             file_opens: Vec::new(),
             setting_opens: Vec::new(),
+            view_opens: Vec::new(),
             clipboard: ClipboardSettings::default(),
             notes_shortcut: default_notes_shortcut(),
             typing_bests: Vec::new(),
@@ -359,6 +362,10 @@ impl Persisted {
 
     pub fn record_setting_open(&mut self, setting_id: &str, now: i64) {
         apps::record_launch(&mut self.setting_opens, setting_id, now);
+    }
+
+    pub fn record_view_open(&mut self, view: &str, now: i64) {
+        apps::record_launch(&mut self.view_opens, view, now);
     }
 
     pub fn record_app_override(&mut self, query: &str) {

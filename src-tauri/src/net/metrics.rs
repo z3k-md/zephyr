@@ -62,6 +62,10 @@ pub struct HopStats {
     /// Share of probes lost, 0–1.
     pub loss: f32,
     pub sent: u32,
+    /// The latest probe: its time, or none when it got no answer (or none was sent).
+    pub last: Option<f32>,
+    /// Whether the latest probe got no answer.
+    pub last_lost: bool,
 }
 
 pub fn hop(pings: impl Iterator<Item = Ping>) -> HopStats {
@@ -70,11 +74,13 @@ pub fn hop(pings: impl Iterator<Item = Ping>) -> HopStats {
     let mut times = Vec::new();
     let mut previous: Option<f32> = None;
     let mut changes = Vec::new();
+    let mut latest: Option<Ping> = None;
     for ping in pings {
         if !ping.sent() {
             continue;
         }
         sent += 1;
+        latest = Some(ping);
         match ping {
             Ping::Ms(ms) => {
                 if let Some(before) = previous {
@@ -97,6 +103,8 @@ pub fn hop(pings: impl Iterator<Item = Ping>) -> HopStats {
             lost as f32 / sent as f32
         },
         sent,
+        last: latest.and_then(Ping::ms),
+        last_lost: latest.is_some_and(|ping| ping.ms().is_none()),
     }
 }
 
@@ -362,6 +370,7 @@ mod tests {
             jitter: Some(2.0),
             loss: 0.0,
             sent: 900,
+            ..Default::default()
         };
         assert_eq!(grade(&good), Grade::Good);
         assert_eq!(grade(&HopStats { loss: 0.01, ..good }), Grade::Fair);

@@ -2562,10 +2562,13 @@ button.res-tile:hover {
   display: block;
   width: 100%;
   height: auto;
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.01));
 }
 
 .net-grid {
-  stroke: rgba(255, 255, 255, 0.08);
+  stroke: rgba(255, 255, 255, 0.07);
+  stroke-dasharray: 2 4;
 }
 
 .net-axis {
@@ -2577,13 +2580,52 @@ button.res-tile:hover {
   fill: var(--faint);
 }
 
+/* Latency in the theme's accent: a soft fill under the median, the slow end (p95) as a
+   faint band above it, and the latest reading as a dot. */
+.net-stop {
+  stop-color: var(--focus);
+}
+
+.net-stop-up {
+  stop-color: #b48cff;
+}
+
+.net-area {
+  fill: url(#net-fill);
+}
+
 .net-band {
-  fill: rgba(91, 156, 255, 0.22);
+  fill: var(--focus);
+  opacity: 0.14;
+}
+
+.net-now {
+  fill: var(--focus);
+  stroke: rgba(0, 0, 0, 0.35);
+  stroke-width: 1;
+}
+
+.net-now-halo {
+  fill: var(--focus);
+  opacity: 0.22;
+  animation: net-now-pulse 2s ease-in-out infinite;
+}
+
+@keyframes net-now-pulse {
+  50% {
+    opacity: 0.06;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .net-now-halo {
+    animation: none;
+  }
 }
 
 .net-line {
   fill: none;
-  stroke: #5b9cff;
+  stroke: var(--focus);
   stroke-width: 1.8;
   stroke-linejoin: round;
 }
@@ -2611,11 +2653,11 @@ button.res-tile:hover {
 }
 
 .net-down {
-  fill: rgba(91, 156, 255, 0.45);
+  fill: url(#net-down-fill);
 }
 
 .net-up {
-  fill: rgba(180, 140, 255, 0.45);
+  fill: url(#net-up-fill);
 }
 
 .net-cursor {
@@ -2637,7 +2679,7 @@ button.res-tile:hover {
 
 .net-hops {
   display: grid;
-  grid-template-columns: 1.7fr repeat(4, 0.8fr);
+  grid-template-columns: 1.7fr repeat(5, 0.75fr);
   padding: 4px 16px 6px;
   font-size: 12.5px;
 }
@@ -2649,7 +2691,7 @@ button.res-tile:hover {
   border-bottom: 1px solid var(--stroke);
 }
 
-.net-hops > div:nth-last-child(-n + 5) {
+.net-hops > div:nth-last-child(-n + 6) {
   border-bottom: 0;
 }
 
@@ -2674,8 +2716,28 @@ button.res-tile:hover {
   text-overflow: ellipsis;
 }
 
+/* The router's address opens its sign-in page. */
+.net-hops .name .net-router-link {
+  overflow: hidden;
+  color: var(--focus);
+  font-size: 11.5px;
+  text-decoration: none;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.net-hops .name .net-router-link:hover {
+  text-decoration: underline;
+}
+
 .net-hops .num {
   justify-content: flex-end;
+}
+
+/* The latest reading stands out from the window's statistics. */
+.net-hops .now {
+  color: var(--fg);
+  font-weight: 600;
 }
 
 .net-hops .warn {

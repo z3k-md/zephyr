@@ -37,6 +37,17 @@ fn record(app: &AppHandle, state: &AppState, what: &str, change: impl FnOnce(&mu
     }
 }
 
+/// A view was opened, for the empty bar's Views to follow what's used.
+#[tauri::command]
+pub fn record_view_open(app: AppHandle, state: State<'_, AppState>, view: String) {
+    if view.is_empty() || view.len() > 32 {
+        return;
+    }
+    record(&app, &state, "the view", |persisted| {
+        persisted.record_view_open(&view, now_secs());
+    });
+}
+
 #[tauri::command]
 pub fn get_snapshot(state: State<'_, AppState>) -> Result<Persisted, String> {
     state.snapshot().map(|snapshot| Persisted::clone(&snapshot))

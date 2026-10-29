@@ -18,6 +18,8 @@ export interface Snapshot {
   fileRoots: string[] | null;
   fileExcludes: string[];
   fileOpens: LaunchEntry[];
+  /** Views opened, by view id, for the empty bar's Views. */
+  viewOpens: LaunchEntry[];
   clipboard: ClipboardSettings;
   notesShortcut: string;
   typingBests: TypingBest[];
@@ -516,6 +518,9 @@ export interface HopStats {
   jitter: number | null;
   loss: number;
   sent: number;
+  /** The latest probe's time; null when it got no answer or none was sent. */
+  last: number | null;
+  lastLost: boolean;
 }
 
 /** Five seconds of the chart. `flags`: 1 gap, 2 network change, 4 TCP timing, 8 speed test,

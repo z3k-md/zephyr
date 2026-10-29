@@ -304,6 +304,7 @@ pub fn run() {
             commands::bar_move,
             commands::bar_move_end,
             commands::save_launch_groups,
+            commands::record_view_open,
             commands::launch_group,
             commands::finish_onboarding,
             commands::save_onboarding_every_launch,

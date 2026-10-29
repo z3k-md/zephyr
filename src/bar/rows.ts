@@ -75,6 +75,30 @@ function view(id: string, label: string, icon: string, extra: Partial<Suggestion
   };
 }
 
+/** How many views the empty bar offers, filled by what's opened most. */
+const VIEW_SLOTS = 3;
+/** The views it can offer, in the order a fresh install shows them. */
+const OFFERED_VIEWS = ['clip', 'notes', 'network', 'resources', 'shell', 'typing'];
+
+/** The views to offer: most opened lately first (uses, fading over days, as apps rank),
+ *  then the fresh-install order. */
+function offeredViews(ctx: RowCtx): string[] {
+  const settings = ctx.snapshot;
+  const opens = settings?.viewOpens ?? [];
+  const now = Date.now() / 1000;
+  const score = (id: string) => {
+    const entry = opens.find((open) => open.appId === id);
+    if (!entry) return 0;
+    const ageDays = Math.max(0, now - entry.lastUsed) / 86400;
+    return entry.uses / (1 + ageDays);
+  };
+  return OFFERED_VIEWS.filter((id) => id !== 'clip' || settings?.clipboard.enabled)
+    .map((id, order) => ({ id, order, score: score(id) }))
+    .sort((a, b) => b.score - a.score || a.order - b.order)
+    .slice(0, VIEW_SLOTS)
+    .map((entry) => entry.id);
+}
+
 /** Rows on the empty bar that open a view (or type in a question with an answer). */
 function jumpRows(ctx: RowCtx): Suggestion[] {
   const rows: Suggestion[] = [];
@@ -87,12 +111,14 @@ function jumpRows(ctx: RowCtx): Suggestion[] {
       })
     );
   }
-  if (settings?.clipboard.enabled) {
-    const keys = settings.clipboard.shortcut ? shortcutKeys(settings.clipboard.shortcut) : [];
-    rows.push(view('clip', 'Clipboard history', 'glyph:clipboard', keys.length ? { keys } : {}));
+  for (const id of offeredViews(ctx)) {
+    const command = COMMANDS.find((item) => item.id === id);
+    if (!command) continue;
+    const shortcut =
+      id === 'clip' ? settings?.clipboard.shortcut : id === 'notes' ? settings?.notesShortcut : '';
+    const keys = shortcut ? shortcutKeys(shortcut) : [];
+    rows.push(view(id, command.label, command.icon, keys.length ? { keys } : {}));
   }
-  const noteKeys = settings?.notesShortcut ? shortcutKeys(settings.notesShortcut) : [];
-  rows.push(view('notes', 'Notes', 'glyph:note', noteKeys.length ? { keys: noteKeys } : {}));
   // Types "ip" in, so the addresses answer below it.
   rows.push(view('ip', 'IP address', 'glyph:network', {}));
   return rows;

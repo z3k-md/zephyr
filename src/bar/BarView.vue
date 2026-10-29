@@ -14,6 +14,7 @@
   import {
     dispatch,
     errorMessage,
+    recordViewOpen,
     getSnapshot,
     hideBar,
     launchApp,
@@ -879,7 +880,13 @@
     }
   });
 
+  /** Views the empty bar can offer, counted each time one opens so the busiest come first. */
+  const COUNTED_VIEWS = ['clip', 'network', 'resources', 'shell', 'typing'];
+
   watch(view, async () => {
+    if (COUNTED_VIEWS.includes(view.value)) {
+      void recordViewOpen(view.value).catch(() => undefined);
+    }
     await nextTick();
     syncHeight();
     if (view.value === 'root') {
@@ -981,6 +988,8 @@
       resourcesFilter.value = '';
       enter('resources');
     } else if (id === 'notes') {
+      // Notes opens its own windows rather than a view, so it's counted here.
+      void recordViewOpen('notes').catch(() => undefined);
       void openNotes();
     } else if (id === 'ip') {
       query.value = 'ip';

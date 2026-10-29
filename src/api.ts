@@ -493,6 +493,11 @@ export function searchApps(text: string, limit: number): Promise<[string, string
   return invoke<[string, string][]>('search_apps', { text, limit });
 }
 
+/** A view was opened, for the empty bar's Views to follow what's used. */
+export function recordViewOpen(view: string): Promise<void> {
+  return invoke('record_view_open', { view });
+}
+
 export function saveLaunchGroups(groups: LaunchGroup[]): Promise<Snapshot> {
   return invoke<Snapshot>('save_launch_groups', { groups });
 }
