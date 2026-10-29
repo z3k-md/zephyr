@@ -136,16 +136,29 @@ enum Direction {
 /// to the bar when it's the only thing running.
 async fn pings(app: &AppHandle, phase: &'static str, length: Duration) -> Vec<f32> {
     let stop = Arc::new(AtomicBool::new(false));
-    let found = ping_loop(stop.clone(), Some((app.clone(), phase)));
+    let app = app.clone();
+    let found = ping_loop(stop.clone(), move |ping, elapsed| {
+        let _ = app.emit_to(
+            "main",
+            "speed-test",
+            Progress {
+                phase,
+                mbps: None,
+                ping,
+                done: (elapsed.as_secs_f32() / 2.0).min(1.0),
+            },
+        );
+    });
     tokio::time::sleep(length).await;
     stop.store(true, Ordering::SeqCst);
     found.await.unwrap_or_default()
 }
 
-/// Pings on a thread of its own (an ICMP wait blocks) until `stop`.
+/// Pings on a thread of its own (an ICMP wait blocks) until `stop`, telling `each` every
+/// result and how long it has been pinging; the replies' times, in ms.
 fn ping_loop(
     stop: Arc<AtomicBool>,
-    report: Option<(AppHandle, &'static str)>,
+    mut each: impl FnMut(Option<f32>, Duration) + Send + 'static,
 ) -> tauri::async_runtime::JoinHandle<Vec<f32>> {
     tauri::async_runtime::spawn_blocking(move || {
         let mut found = Vec::new();
@@ -156,18 +169,7 @@ fn ping_loop(
             if let Some(ms) = ping {
                 found.push(ms);
             }
-            if let Some((app, phase)) = &report {
-                let _ = app.emit_to(
-                    "main",
-                    "speed-test",
-                    Progress {
-                        phase,
-                        mbps: None,
-                        ping,
-                        done: (started.elapsed().as_secs_f32() / 2.0).min(1.0),
-                    },
-                );
-            }
+            each(ping, started.elapsed());
             if let Some(wait) = PING_EVERY.checked_sub(tick.elapsed()) {
                 std::thread::sleep(wait);
             }
@@ -204,20 +206,11 @@ async fn phase(
     let ping_stop = Arc::new(AtomicBool::new(false));
     let latest_ping = Arc::new(AtomicU64::new(u64::MAX));
     let pinger = {
-        let (stop, latest) = (ping_stop.clone(), latest_ping.clone());
-        tauri::async_runtime::spawn_blocking(move || {
-            let mut found = Vec::new();
-            while !stop.load(Ordering::SeqCst) && !CANCEL.load(Ordering::SeqCst) {
-                let tick = Instant::now();
-                if let Some(ms) = super::ping_internet() {
-                    found.push(ms);
-                    latest.store(u64::from(ms.to_bits()), Ordering::SeqCst);
-                }
-                if let Some(wait) = PING_EVERY.checked_sub(tick.elapsed()) {
-                    std::thread::sleep(wait);
-                }
+        let latest = latest_ping.clone();
+        ping_loop(ping_stop.clone(), move |ping, _| {
+            if let Some(ms) = ping {
+                latest.store(u64::from(ms.to_bits()), Ordering::SeqCst);
             }
-            found
         })
     };
 
