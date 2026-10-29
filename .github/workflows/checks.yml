@@ -8,13 +8,17 @@ on:
   # By hand, when GitHub drops a push event and a commit is left unchecked.
   workflow_dispatch:
 
-# A newer push to the same branch makes the older run moot.
+# On develop a running check always finishes, so pushes in quick succession still leave a checked
+# commit behind; GitHub keeps only the newest of the waiting runs. A pull request's newer push
+# makes its older run moot.
 concurrency:
   group: checks-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'push' || github.event_name == 'pull_request' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
+  # To find the last develop commit whose checks passed.
+  actions: read
 
 # No debug info: CI never debugs, and it makes linking, the target dir and the cache smaller.
 env:
@@ -23,7 +27,8 @@ env:
 
 jobs:
   # The ruleset requires these two by name ("Checks (windows-latest)", "Checks (macos-latest)"),
-  # so renaming the matrix values blocks promotion until the ruleset is updated.
+  # so renaming the matrix values blocks promotion until the ruleset is updated. Skipped steps
+  # still pass, so a change that skips the Rust half can be promoted.
   checks:
     name: Checks (${{ matrix.platform }})
     strategy:
@@ -34,31 +39,76 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      # A push is compared with the last develop commit whose checks passed, not the push's own
+      # parent, so a change whose run was superseded is still covered by the next one. Pull
+      # requests, runs by hand and a missing or unrelated base check everything.
+      - name: What changed
+        id: changes
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          base=""
+          if [ "${{ github.event_name }}" = push ]; then
+            base=$(gh run list --workflow checks.yml --branch develop --status success --limit 1 \
+              --json headSha --jq '.[0].headSha // ""' || true)
+          fi
+          if [ -n "$base" ] && git merge-base --is-ancestor "$base" HEAD 2> /dev/null; then
+            echo "Since $base:"
+            git diff --name-only "$base" HEAD | tee /dev/stderr | bash scripts/changes.sh >> "$GITHUB_OUTPUT"
+          else
+            printf 'rust=true\nweb=true\n' >> "$GITHUB_OUTPUT"
+          fi
+          cat "$GITHUB_OUTPUT"
+
+      # ReFS on a virtual disk is much faster than the runner's disk for cargo's many small files.
+      # Mounted over the still-empty target dir, so its path (and so the cache key) doesn't change
+      # and the cache restores straight onto it.
+      - name: Dev Drive
+        if: runner.os == 'Windows' && steps.changes.outputs.rust == 'true'
+        uses: samypr100/setup-dev-drive@562171fe8df7401fdf582d766cd3b6ab80d5b1a0 # v4.1.0
+        with:
+          drive-size: 12GB
+          mount-path: ${{ github.workspace }}/src-tauri/target
 
       # Only develop writes the cargo cache; PR runs read it.
       - uses: ./.github/actions/setup
         with:
+          rust: ${{ steps.changes.outputs.rust }}
           save-cache: ${{ github.ref == 'refs/heads/develop' }}
 
+      # The frontend checks and formatting are the same on both systems, so only macOS runs them.
       - name: Check formatting
-        run: |
-          bunx prettier --check .
-          cargo fmt --manifest-path src-tauri/Cargo.toml --check
+        if: runner.os == 'macOS'
+        run: bunx prettier --check .
 
-      - name: Typecheck and build frontend
-        # tauri::generate_context! embeds dist/, so the Rust steps need it built first.
-        # vue-tsc runs under Node: under Bun on Windows it skips .vue files without saying so.
-        run: |
-          node node_modules/vue-tsc/bin/vue-tsc.js --noEmit
-          bun run vite build
+      - name: Check Rust formatting
+        if: runner.os == 'macOS' && steps.changes.outputs.rust == 'true'
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+
+      # vue-tsc runs under Node: under Bun on Windows it skips .vue files without saying so.
+      - name: Typecheck frontend
+        if: runner.os == 'macOS' && steps.changes.outputs.web == 'true'
+        run: node node_modules/vue-tsc/bin/vue-tsc.js --noEmit
 
       - name: Frontend tests
+        if: runner.os == 'macOS' && steps.changes.outputs.web == 'true'
         run: bun run test:web
 
+      # tauri::generate_context! embeds dist/, so the Rust steps need it built first.
+      - name: Build frontend
+        if: steps.changes.outputs.web == 'true' || steps.changes.outputs.rust == 'true'
+        run: bun run vite build
+
       - name: Clippy
+        if: steps.changes.outputs.rust == 'true'
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
 
       - name: Test
+        if: steps.changes.outputs.rust == 'true'
         run: cargo test --manifest-path src-tauri/Cargo.toml --locked
 
   scripts:
