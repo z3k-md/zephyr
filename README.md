@@ -36,7 +36,7 @@ Without a scope, a clear match for a setting, file or bookmark shows as at most 
 
 ### Answers
 
-These answer in the top row as you type; Enter copies the answer.
+These answer in the top row as you type; Enter copies the answer. The last few calculations and conversions you copied show under a new one.
 
 - Math and units: `12 * 7`, `5 km to miles`
 - Time zones: `time in tokyo`, `3pm pst to cet`

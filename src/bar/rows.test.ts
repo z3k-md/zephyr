@@ -198,3 +198,36 @@ describe('bindingTarget', () => {
     expect(bindingTarget(item)?.target ?? null).toBe(target);
   });
 });
+
+describe('past answers', () => {
+  const past = [
+    { question: '12 * 7', answer: '84' },
+    { question: '5 km to miles', answer: '3.107 mi' },
+    { question: '2 ^ 10', answer: '1024' },
+    { question: '100 / 4', answer: '25' },
+  ];
+  const answer = (subtitle: string, icon = 'glyph:calculator') =>
+    row('answer', '42', { subtitle, icon, section: 'answer' });
+
+  it('lists the last three under a calculation, leaving out the one typed again', () => {
+    const { rows } = buildRows(response({ items: [answer('12 * 7')], preselect: 0 }), {
+      ...ctx('12 * 7'),
+      pastAnswers: past,
+    });
+    expect(labels(rows).slice(0, 4)).toEqual(['42', '3.107 mi', '1024', '25']);
+    expect(rows[1]).toMatchObject({ kind: 'answer', subtitle: '5 km to miles', target: 'past' });
+  });
+
+  it('stays away from time answers and the plain bar', () => {
+    const time = buildRows(response({ items: [answer('time in tokyo', 'glyph:clock')] }), {
+      ...ctx('time in tokyo'),
+      pastAnswers: past,
+    });
+    expect(labels(time.rows)).toEqual(['42']);
+    const search = buildRows(response({ items: [row('app', 'Excel')] }), {
+      ...ctx('exc'),
+      pastAnswers: past,
+    });
+    expect(labels(search.rows)).not.toContain('84');
+  });
+});

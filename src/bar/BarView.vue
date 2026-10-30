@@ -76,6 +76,7 @@
   import { useRunKey } from './useRunKey';
   import { useSuggest } from './useSuggest';
   import { useTypeAhead } from './useTypeAhead';
+  import { pastAnswers, rememberAnswer } from './answerHistory';
   import { useTickerCard } from './useTickerCard';
   import { useWeatherCard } from './useWeatherCard';
   import {
@@ -208,6 +209,7 @@
     parked: parked.value,
     parkedName: MODE_NAMES[parked.value] ?? '',
     typed: scope.value ? '' : lastQuery.value,
+    pastAnswers: pastAnswers.value,
   }));
 
   // Power commands ("shutdown in 30m"), and the first Enter of one waiting for its second.
@@ -364,7 +366,13 @@
     if (item?.portUse) {
       list.push(...portActions(item.portUse));
     } else if (item?.kind === 'answer') {
-      list.push({ label: 'Copy answer', run: () => copyText(item.label) });
+      list.push({
+        label: 'Copy answer',
+        run: () => {
+          keepAnswer(item);
+          return copyText(item.label);
+        },
+      });
     } else if (item?.kind === 'netCard') {
       if (item.target === 'ip') {
         list.push({ label: `Copy ${item.label}`, keys: 'enter', run: () => copyText(item.label) });
@@ -1325,10 +1333,17 @@
     selected.value = (Math.min(selected.value, count - 1) + delta + count) % count;
   }
 
+  /** A copied calculation or conversion is kept, to show under the next one. */
+  function keepAnswer(item: SuggestionRow) {
+    const kept = ['glyph:calculator', 'glyph:conversion', 'glyph:history'];
+    if (item.subtitle && kept.includes(item.icon ?? '')) rememberAnswer(item.subtitle, item.label);
+  }
+
   async function accept() {
     const item = selected.value >= 0 ? items.value[selected.value] : undefined;
     if (item) {
       if (item.kind === 'answer') {
+        keepAnswer(item);
         await copyText(item.label);
         return;
       }

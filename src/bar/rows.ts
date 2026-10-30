@@ -3,6 +3,7 @@
 
 import { shortcutKeys } from '../keys';
 import type { Binding, LaunchGroup, Snapshot, SuggestionRow, SuggestResponse } from '../types';
+import type { PastAnswer } from './answerHistory';
 
 export interface RowCtx {
   snapshot: Snapshot | null;
@@ -11,6 +12,8 @@ export interface RowCtx {
   parkedName: string;
   /** The text as typed, for matching command names; empty in a scoped search. */
   typed: string;
+  /** Answers copied before, newest first, shown under a new calculation. */
+  pastAnswers?: PastAnswer[];
 }
 
 export interface Group {
@@ -356,6 +359,7 @@ export function buildRows(
       })
     );
   }
+  pastAnswerRows(rows, ctx);
   // An alias the user set, typed exactly, outranks everything, app name matches included.
   const aliased = aliasRow(ctx);
   if (aliased) {
@@ -482,4 +486,29 @@ export function commandTargets(): { target: string; label: string }[] {
     target: command.id.startsWith('scope:') ? command.id : `view:${command.id}`,
     label: command.label,
   }));
+}
+
+/** Under a calculation or conversion, the last few answers copied before it (Enter copies
+ *  one). Times aren't kept: they'd be stale. */
+function pastAnswerRows(rows: SuggestionRow[], ctx: RowCtx) {
+  const at = rows.findIndex(
+    (row) =>
+      row.kind === 'answer' && (row.icon === 'glyph:calculator' || row.icon === 'glyph:conversion')
+  );
+  if (at < 0 || !ctx.pastAnswers?.length) return;
+  const asked = (rows[at].subtitle ?? ctx.typed).trim();
+  const past = ctx.pastAnswers
+    .filter((entry) => entry.question !== asked)
+    .slice(0, 3)
+    .map((entry): SuggestionRow => ({
+      kind: 'answer',
+      target: 'past',
+      label: entry.answer,
+      query: entry.answer,
+      subtitle: entry.question,
+      section: 'answer',
+      icon: 'glyph:history',
+      hint: 'Copy',
+    }));
+  rows.splice(at + 1, 0, ...past);
 }
