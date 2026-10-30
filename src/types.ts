@@ -672,11 +672,16 @@ export interface Quote {
   exchange: string;
   crypto: boolean;
   price: number;
-  /** What the change is measured from: the last close, or for crypto the price a day ago. */
+  /** What the change is measured from: the close before the chart starts, or for crypto's
+   *  day the price 24 hours ago. */
   reference: number;
+  range: QuoteRange;
   /** The last trade, in milliseconds since the epoch. */
   tradedAt: number;
   /** [seconds since the epoch, price], oldest first. */
   points: [number, number][];
   fetchedAt: number;
 }
+
+/** A ticker chart's span. */
+export type QuoteRange = '1d' | '5d' | '1mo' | '1y';

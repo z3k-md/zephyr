@@ -14,6 +14,7 @@ import type {
   Forecast,
   Place,
   Quote,
+  QuoteRange,
   WeatherUnit,
   UpdateStatus,
   PowerAction,
@@ -698,7 +699,8 @@ export function cpuTempStatus(): Promise<{
   return invoke('cpu_temp_status');
 }
 
-/** The quote for a symbol typed in the bar ("TSLA", "eth"); null when there's no such one. */
-export function quote(symbol: string, crypto: boolean): Promise<Quote | null> {
-  return invoke<Quote | null>('quote', { symbol, crypto });
+/** The quote for a symbol typed in the bar ("TSLA", "eth") over a span; null when there's
+ *  no such one. */
+export function quote(symbol: string, crypto: boolean, range: QuoteRange): Promise<Quote | null> {
+  return invoke<Quote | null>('quote', { symbol, crypto, range });
 }

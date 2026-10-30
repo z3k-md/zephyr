@@ -1,14 +1,15 @@
 <script setup lang="ts">
   import { computed } from 'vue';
-  import type { Quote } from '../types';
+  import type { Quote, QuoteRange } from '../types';
+  import { RANGES } from './useTickerCard';
   import KeyHints from '../components/KeyHints.vue';
 
   // The ticker card over the results for a stock or crypto ("TSLA", "eth"): the price, its
-  // change since the last close (crypto: the last 24 hours) and a chart of that stretch, with
+  // change over the chart's span (the day, five days, a month or a year) and the chart, with
   // the reference price as a dashed line. Enter stays on the search row; Ctrl+Enter opens the
-  // full quote.
-  const props = defineProps<{ quote: Quote }>();
-  defineEmits<{ open: [] }>();
+  // full quote, and Tab or a click picks the span.
+  const props = defineProps<{ quote: Quote; range: QuoteRange }>();
+  defineEmits<{ open: []; range: [range: QuoteRange] }>();
 
   const change = computed(() => props.quote.price - props.quote.reference);
   const percent = computed(() =>
@@ -36,7 +37,15 @@
     () =>
       `${money(change.value, true)} (${percent.value > 0 ? '+' : ''}${percent.value.toFixed(2)}%)`
   );
-  const span = computed(() => (props.quote.crypto ? 'Past 24 hours' : 'Today'));
+  const SPANS: Record<QuoteRange, string> = {
+    '1d': 'Today',
+    '5d': 'Past 5 days',
+    '1mo': 'Past month',
+    '1y': 'Past year',
+  };
+  const span = computed(() =>
+    props.quote.crypto && props.quote.range === '1d' ? 'Past 24 hours' : SPANS[props.quote.range]
+  );
   const tradedAt = computed(() =>
     props.quote.tradedAt
       ? new Date(props.quote.tradedAt).toLocaleTimeString(undefined, {
@@ -104,5 +113,19 @@
       <line x1="0" x2="100" :y1="chart.reference" :y2="chart.reference" />
       <polyline :points="chart.line" />
     </svg>
+    <div class="ticker-spans" role="tablist" aria-label="Chart span">
+      <button
+        v-for="option in RANGES"
+        :key="option.range"
+        type="button"
+        role="tab"
+        :aria-selected="option.range === range"
+        :class="{ on: option.range === range }"
+        @click="$emit('range', option.range)"
+      >
+        {{ option.label }}
+      </button>
+      <KeyHints :hints="[{ keys: 'tab', label: 'Span' }]" />
+    </div>
   </section>
 </template>

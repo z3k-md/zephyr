@@ -1095,9 +1095,11 @@
       return;
     }
 
-    // Tab would only move focus out of the search box.
+    // Tab would only move focus out of the search box. On the ticker card it steps through the
+    // chart's spans.
     if (event.key === 'Tab') {
       event.preventDefault();
+      if (cardQuote.value && !modifier && !event.altKey) stepRange(event.shiftKey ? -1 : 1);
       return;
     }
 
@@ -1195,7 +1197,7 @@
   });
 
   // The ticker card: a stock or crypto typed on its own ("TSLA", "eth", "$aapl").
-  const { cardQuote, openQuote } = useTickerCard({
+  const { cardQuote, quoteRange, stepRange, pickRange, openQuote } = useTickerCard({
     query,
     shown: () => !scope.value && view.value === 'root',
     menuOpen: actionsOpen,
@@ -1668,7 +1670,13 @@
 
       <div class="bar-body">
         <WeatherCard v-if="cardForecast" :forecast="cardForecast" @open="openForecast" />
-        <TickerCard v-else-if="cardQuote" :quote="cardQuote" @open="openQuote" />
+        <TickerCard
+          v-else-if="cardQuote"
+          :quote="cardQuote"
+          :range="quoteRange"
+          @open="openQuote"
+          @range="pickRange"
+        />
         <ActionMenu
           v-if="actionsOpen"
           id="actions"

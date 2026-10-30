@@ -2741,3 +2741,34 @@ button.res-tile:hover {
   flex: 1;
   height: 100%;
 }
+
+.ticker-spans {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ticker-spans button {
+  padding: 2px 8px;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  background: none;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.ticker-spans button:hover {
+  color: var(--fg);
+}
+
+.ticker-spans button.on {
+  color: var(--fg);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.ticker-spans .key-hints {
+  margin-left: auto;
+}

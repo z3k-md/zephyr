@@ -24,8 +24,11 @@ pub struct Quote {
     pub exchange: String,
     pub crypto: bool,
     pub price: f64,
-    /// What the change is measured from: the last close, or for crypto the price a day ago.
+    /// What the change is measured from: the close before the chart starts, or for crypto's
+    /// day the price 24 hours ago.
     pub reference: f64,
+    /// The chart's span: `1d`, `5d`, `1mo` or `1y`.
+    pub range: String,
     /// The last trade, in milliseconds since the epoch.
     pub traded_at: u64,
     /// The chart: (seconds since the epoch, price), oldest first.
@@ -52,27 +55,37 @@ fn yahoo_symbol(symbol: &str, crypto: bool) -> Option<String> {
     })
 }
 
-/// The quote for `symbol`, or None when Yahoo has no such symbol.
-pub async fn quote(symbol: &str, crypto: bool) -> Result<Option<Quote>, String> {
+/// Yahoo's range and interval for a chart span, with about a hundred points each. Crypto
+/// never closes, so its day is the last 24 hours, cut from two days; a stock's is its
+/// trading day.
+fn span(range: &str, crypto: bool) -> Option<&'static str> {
+    Some(match range {
+        "1d" if crypto => "range=2d&interval=15m",
+        "1d" => "range=1d&interval=5m",
+        "5d" => "range=5d&interval=1h",
+        "1mo" => "range=1mo&interval=1d",
+        "1y" => "range=1y&interval=1wk",
+        _ => return None,
+    })
+}
+
+/// The quote for `symbol` over `range`, or None when Yahoo has no such symbol.
+pub async fn quote(symbol: &str, crypto: bool, range: &str) -> Result<Option<Quote>, String> {
     static RECENT: Mutex<Vec<Quote>> = Mutex::new(Vec::new());
-    let Some(symbol) = yahoo_symbol(symbol, crypto) else {
+    let (Some(symbol), Some(span)) = (yahoo_symbol(symbol, crypto), span(range, crypto)) else {
         return Ok(None);
     };
     if let Ok(recent) = RECENT.lock()
         && let Some(quote) = recent.iter().find(|quote| {
-            quote.symbol == symbol && now_ms().saturating_sub(quote.fetched_at) < FRESH_MS
+            quote.symbol == symbol
+                && quote.range == range
+                && now_ms().saturating_sub(quote.fetched_at) < FRESH_MS
         })
     {
         return Ok(Some(quote.clone()));
     }
 
-    // Crypto never closes, so its chart is the last 24 hours; a stock's is its trading day.
-    let range = if crypto {
-        "range=2d&interval=15m"
-    } else {
-        "range=1d&interval=5m"
-    };
-    let url = format!("https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?{range}");
+    let url = format!("https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?{span}");
     let response = crate::util::http()
         .get(url)
         .timeout(TIMEOUT)
@@ -88,11 +101,11 @@ pub async fn quote(symbol: &str, crypto: bool) -> Result<Option<Quote>, String> 
         .json()
         .await
         .map_err(|err| err.to_string())?;
-    let Some(found) = raw.into_quote(crypto, now_ms()) else {
+    let Some(found) = raw.into_quote(crypto, range, now_ms()) else {
         return Ok(None);
     };
     if let Ok(mut recent) = RECENT.lock() {
-        recent.retain(|quote| quote.symbol != found.symbol);
+        recent.retain(|quote| quote.symbol != found.symbol || quote.range != found.range);
         recent.push(found.clone());
         if recent.len() > 16 {
             recent.remove(0);
@@ -149,7 +162,7 @@ struct RawSeries {
 }
 
 impl Raw {
-    fn into_quote(self, crypto: bool, now: u64) -> Option<Quote> {
+    fn into_quote(self, crypto: bool, range: &str, now: u64) -> Option<Quote> {
         let result = self.chart.result?.into_iter().next()?;
         let meta = result.meta;
         let price = meta.regular_market_price?;
@@ -167,12 +180,14 @@ impl Raw {
             .filter_map(|(time, close)| close.map(|close| (time, close)))
             .collect();
         let crypto = crypto || meta.instrument_type == "CRYPTOCURRENCY";
-        let reference = if crypto {
+        let reference = if crypto && range == "1d" {
             let since = points.last().map_or(0, |(time, _)| time - DAY_SECS);
             points.retain(|(time, _)| *time >= since);
             points.first().map(|(_, price)| *price)
         } else {
-            meta.chart_previous_close.or(meta.previous_close)
+            meta.chart_previous_close
+                .or(meta.previous_close)
+                .or(points.first().map(|(_, price)| *price))
         }
         .unwrap_or(price);
         let name = meta
@@ -188,6 +203,7 @@ impl Raw {
             crypto,
             price,
             reference,
+            range: range.to_string(),
             traded_at: (meta.regular_market_time.max(0) as u64) * 1000,
             points,
             fetched_at: now,
@@ -223,7 +239,7 @@ mod tests {
               "chartPreviousClose":404.22,"longName":"Tesla, Inc."},
             "timestamp":[1,2,3],
             "indicators":{"quote":[{"close":[400.0,null,403.3]}]}}]}}"#)
-        .into_quote(false, 7)
+        .into_quote(false, "1d", 7)
         .unwrap();
         assert_eq!(quote.name, "Tesla, Inc.");
         assert_eq!(quote.reference, 404.22);
@@ -245,7 +261,7 @@ mod tests {
             late - DAY_SECS,
             late
         );
-        let quote = raw(&json).into_quote(true, 0).unwrap();
+        let quote = raw(&json).into_quote(true, "1d", 0).unwrap();
         assert_eq!(quote.name, "Ethereum");
         assert_eq!(quote.reference, 2100.0);
         assert_eq!(quote.points.len(), 2);
@@ -254,6 +270,6 @@ mod tests {
     #[test]
     fn an_unknown_symbol_has_no_quote() {
         let missing = raw(r#"{"chart":{"result":null,"error":{"code":"Not Found"}}}"#);
-        assert!(missing.into_quote(false, 0).is_none());
+        assert!(missing.into_quote(false, "1d", 0).is_none());
     }
 }

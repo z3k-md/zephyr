@@ -10,6 +10,5 @@
 - macOS: list and switch to an app's open windows, as on Windows
 - Custom search keywords (`yt`, `gh`, `w`) besides Google
 - Snippets with placeholders, pasted from the bar
-- Tickers: pick a chart range (5D, 1M, 1Y)
 - Linux window shells
 - Authenticode signing for the Windows installer
