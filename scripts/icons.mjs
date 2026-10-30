@@ -1,4 +1,5 @@
 // Regenerates src-tauri/icons from the SVG masters in src-tauri/icons/source.
+// The browser extension reuses the 32 and 128 PNGs.
 // icon.svg follows the macOS grid (padded squircle with shadow) and feeds the PNGs and icns.
 // icon-windows.svg fills the canvas so the ico and Store tiles stay legible at 16px.
 import { execFileSync } from 'node:child_process';
@@ -27,3 +28,6 @@ for (const name of readdirSync(mac)) {
 }
 rmSync(mac, { recursive: true });
 rmSync(windows, { recursive: true });
+
+copyFileSync(join(icons, '32x32.png'), 'extension/icons/32.png');
+copyFileSync(join(icons, '128x128.png'), 'extension/icons/128.png');

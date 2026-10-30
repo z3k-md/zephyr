@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Zephyr",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsKU+ZfRBtoqDievLQJdtN7UckN9fL3+W/wLGpDNT7ZgStRKy9vyjR6+VwIk+Zy+4/ieiHbcmgd9wvlLUcvr6z8QuKKme9gzhOZYH8urBAjEkZr2rIT7jiqvAtTUqRxYg5qEkVQnaCWfutc3c0ZFQB9bnJKMnXZPeDbgrPDHKjSbRKdd4SyKT+8+T6SuEBUj5C1yiSCmZ00gXDLotErluLyCxEKxfiGIKyR7TelJYBZEMf8N4u9A1d/0MzPcBwYUpIj3WfrtZuaBr2JpW6rry54/cTpMIYDm98PrJ6VZXxYJhc1hl/PlFE+MwygiaMmhU++s42vBRwibPUO7n6XfxoQIDAQAB",
   "description": "Lets the Zephyr launcher switch to a tab you already have open instead of opening the page again, and to the tab playing music.",
   "permissions": ["tabs", "webNavigation", "alarms"],
