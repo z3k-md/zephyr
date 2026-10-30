@@ -55,6 +55,7 @@
   import DeviceCard from './DeviceCard.vue';
   import ResultList from './ResultList.vue';
   import FooterWeather from './FooterWeather.vue';
+  import TickerCard from './TickerCard.vue';
   import WeatherCard from './WeatherCard.vue';
   import ActionMenu from '../components/ActionMenu.vue';
   import { useActionMenu, type MenuAction } from '../components/actionMenu';
@@ -75,6 +76,7 @@
   import { useRunKey } from './useRunKey';
   import { useSuggest } from './useSuggest';
   import { useTypeAhead } from './useTypeAhead';
+  import { useTickerCard } from './useTickerCard';
   import { useWeatherCard } from './useWeatherCard';
   import {
     isSnapshot,
@@ -1129,6 +1131,13 @@
       return;
     }
 
+    // Likewise on the ticker card: the full quote.
+    if (cardQuote.value && modifier && !event.altKey && !event.shiftKey && event.key === 'Enter') {
+      event.preventDefault();
+      if (!event.repeat) openQuote();
+      return;
+    }
+
     // Ctrl+Enter with the IP card up opens the Network view; Enter copies the address.
     if (
       netCardShown.value &&
@@ -1181,6 +1190,15 @@
     shown: () => !scope.value && view.value === 'root',
     menuOpen: actionsOpen,
     inputEl,
+    notice,
+    clearAfterOpen,
+  });
+
+  // The ticker card: a stock or crypto typed on its own ("TSLA", "eth", "$aapl").
+  const { cardQuote, openQuote } = useTickerCard({
+    query,
+    shown: () => !scope.value && view.value === 'root',
+    menuOpen: actionsOpen,
     notice,
     clearAfterOpen,
   });
@@ -1650,6 +1668,7 @@
 
       <div class="bar-body">
         <WeatherCard v-if="cardForecast" :forecast="cardForecast" @open="openForecast" />
+        <TickerCard v-else-if="cardQuote" :quote="cardQuote" @open="openQuote" />
         <ActionMenu
           v-if="actionsOpen"
           id="actions"

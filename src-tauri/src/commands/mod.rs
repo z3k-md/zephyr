@@ -19,6 +19,7 @@ pub mod search;
 pub mod settings;
 pub mod shell;
 pub mod shortcuts;
+pub mod stocks;
 pub mod sync;
 pub mod updates;
 pub mod weather;

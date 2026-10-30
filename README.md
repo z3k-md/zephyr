@@ -42,6 +42,7 @@ These answer in the top row as you type; Enter copies the answer.
 - Time zones: `time in tokyo`, `3pm pst to cet`
 - Dates and timestamps: `unix`, `1760000000 unix`, `week`, `day of year`, `now iso`
 - Network: `ip` shows local and public addresses; `port 3000` or `:3000` shows what's listening there and can quit it; `ports` lists every listening port
+- Stocks and crypto: `TSLA`, `$aapl` or `aapl stock`, and `eth`, `btc` or `bitcoin` in any case, show a price card with the day's change and chart, from Yahoo Finance. Ctrl+Enter opens the full quote.
 
 ### Apps, windows and launch groups
 

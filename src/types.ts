@@ -663,3 +663,20 @@ export interface MemoryBreakdown {
   wired?: number;
   compressed?: number;
 }
+
+/** A stock or crypto quote for the ticker card. */
+export interface Quote {
+  symbol: string;
+  name: string;
+  currency: string;
+  exchange: string;
+  crypto: boolean;
+  price: number;
+  /** What the change is measured from: the last close, or for crypto the price a day ago. */
+  reference: number;
+  /** The last trade, in milliseconds since the epoch. */
+  tradedAt: number;
+  /** [seconds since the epoch, price], oldest first. */
+  points: [number, number][];
+  fetchedAt: number;
+}

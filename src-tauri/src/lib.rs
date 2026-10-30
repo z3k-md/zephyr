@@ -34,6 +34,7 @@ mod startup;
 mod state;
 mod stats;
 mod steam;
+mod stocks;
 mod suggest;
 mod sync;
 mod temps;
@@ -177,6 +178,7 @@ pub fn run() {
             commands::settings::save_resume_seconds,
             commands::settings::save_theme,
             commands::settings::save_open_behavior,
+            commands::stocks::quote,
             commands::weather::weather,
             commands::weather::weather_places,
             commands::weather::weather_warm,

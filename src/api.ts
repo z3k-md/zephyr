@@ -13,6 +13,7 @@ import type {
   NowPlaying,
   Forecast,
   Place,
+  Quote,
   WeatherUnit,
   UpdateStatus,
   PowerAction,
@@ -695,4 +696,9 @@ export function cpuTempStatus(): Promise<{
   needsSetup: boolean;
 }> {
   return invoke('cpu_temp_status');
+}
+
+/** The quote for a symbol typed in the bar ("TSLA", "eth"); null when there's no such one. */
+export function quote(symbol: string, crypto: boolean): Promise<Quote | null> {
+  return invoke<Quote | null>('quote', { symbol, crypto });
 }
