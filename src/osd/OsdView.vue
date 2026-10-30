@@ -16,15 +16,21 @@
   const STRIP = 8;
 
   const shown = ref<VolumeShown | null>(null);
-  /** Bumped on every press, so the fade-in replays. */
+  /** Bumped when the overlay comes back after hiding, so the fade-in plays then and not on
+   *  every press while it's up. */
   const pulse = ref(0);
+  /** Rust hides the window this long after the last press (volume_keys.rs SHOWN_FOR). */
+  const SHOWN_FOR_MS = 1600;
+  let lastShown = 0;
   let unlisten: UnlistenFn | null = null;
 
   onMounted(async () => {
     document.documentElement.classList.add('osd-page');
     unlisten = await listen<VolumeShown>('osd-show', (event) => {
+      const now = performance.now();
+      if (now - lastShown > SHOWN_FOR_MS) pulse.value += 1;
+      lastShown = now;
       shown.value = event.payload;
-      pulse.value += 1;
     });
   });
 

@@ -110,8 +110,7 @@ html.osd-page #app {
 
 .osd-app.on {
   opacity: 1;
-  outline: 2px solid var(--focus);
-  outline-offset: -1px;
+  background: var(--chip-hover);
 }
 
 /* App icons (RowIcon), as the bar draws them; this page doesn't load the bar's rules. */
