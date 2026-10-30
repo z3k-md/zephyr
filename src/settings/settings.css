@@ -560,11 +560,12 @@
   max-width: 360px;
 }
 
-/* Keycaps sit 3 px in from every edge of the field. */
+/* Keycaps sit 3 px in from every edge of the field; Record / Edit sits at its right end. */
 .recorder {
   position: relative;
   display: flex;
   align-items: center;
+  gap: 8px;
   padding: 3px;
 }
 
@@ -572,9 +573,6 @@
 .recorder-prompt,
 .recorder-empty {
   padding: 0 7px;
-}
-
-.recorder-prompt {
   color: var(--muted);
 }
 
@@ -582,6 +580,7 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  min-width: 0;
 }
 
 /* A recorded shortcut shows as keycaps, like the bar's hints. */
@@ -596,34 +595,64 @@
   gap: 4px;
 }
 
-/* Listening: a ring that breathes, until the keys are let go. */
-.recorder.listening {
-  border-color: var(--focus);
+/* Looks like a button inside the field; the whole field takes the click. */
+.recorder-action {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  align-self: stretch;
+  margin-left: auto;
+  padding: 0 10px;
+  border: 1px solid var(--stroke);
+  border-radius: 5px;
+  background: var(--chip);
+  color: var(--fg);
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition:
+    background-color 0.12s,
+    color 0.12s;
 }
 
-.recorder.listening::after {
-  content: '';
-  position: absolute;
-  inset: -4px;
-  border: 2px solid var(--focus);
-  border-radius: 10px;
-  pointer-events: none;
-  animation: recorder-listen 1.2s ease-in-out infinite;
+.recorder:hover .recorder-action {
+  background: var(--chip-hover);
+}
+
+/* Recording: the field, its keys and Stop turn red until it's stopped. */
+.recorder.listening,
+.recorder.listening:hover {
+  border-color: var(--bad);
+  background-color: color-mix(in srgb, var(--bad) 6%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--bad) 18%, transparent);
+}
+
+.recorder.listening .recorder-prompt,
+.recorder.listening .recorder-action,
+.recorder.listening .kbd {
+  color: var(--bad);
+}
+
+.recorder.listening .kbd {
+  border-color: color-mix(in srgb, var(--bad) 40%, transparent);
+}
+
+.recorder.listening .recorder-action {
+  border-color: color-mix(in srgb, var(--bad) 30%, transparent);
 }
 
 @keyframes recorder-listen {
   0%,
   100% {
-    opacity: 0.15;
+    opacity: 0.25;
   }
   50% {
-    opacity: 0.55;
+    opacity: 0.7;
   }
 }
 
 /* The modifiers held so far, with a waiting cap for the key still to come. */
 .recorder-waiting {
-  opacity: 0.45;
   animation: recorder-listen 1.2s ease-in-out infinite;
 }
 
@@ -642,14 +671,13 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .recorder.listening::after,
   .recorder-waiting,
   .recorder.snapped .recorder-keys {
     animation: none;
   }
 
-  .recorder.listening::after {
-    opacity: 0.4;
+  .recorder-waiting {
+    opacity: 0.5;
   }
 }
 

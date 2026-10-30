@@ -183,7 +183,6 @@ group: LaunchGroup, index: number) { if (event.key === 'Delete' || event.key ===
         />
         <ShortcutRecorder
           :keys="hotkeyOf(group)"
-          empty="Add hotkey"
           function-keys
           aria-label="Hotkey"
           @record="saveHotkey(group, $event)"

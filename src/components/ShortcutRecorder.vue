@@ -5,15 +5,16 @@
   import { useWindowListener } from '../windowEvents';
   import Keys from './Keys.vue';
 
-  // One field for recording a shortcut, shared by every hotkey in Settings. A click starts
-  // listening (the field pulses); the keys show as they go down, modifiers first with a "+"
-  // waiting for the key; letting go binds it with a small snap. Esc or a click away leaves
-  // it as it was, and Zephyr's own shortcuts are off while it listens so they record too.
+  // One field for recording a shortcut, shared by every hotkey in Settings: the shortcut on
+  // the left, Record / Edit on the right. A click starts recording (the field turns red) and
+  // it keeps recording until Stop, a click away or Enter: the keys show as they go down, and
+  // each new combo replaces the last, so a slip is fixed by pressing again. Esc leaves it as
+  // it was, and Zephyr's own shortcuts are off while it records so they record too.
   const props = withDefaults(
     defineProps<{
       /** The shortcut as saved ("alt+g"), or empty for none. */
       keys: string;
-      /** Shown when there's none ("Add hotkey", "None"). */
+      /** Shown when there's none. */
       empty?: string;
       /** F1–F12 count as keys. */
       functionKeys?: boolean;
@@ -21,33 +22,51 @@
       clearable?: boolean;
       disabled?: boolean;
     }>(),
-    { empty: 'None', functionKeys: false, clearable: false, disabled: false }
+    { empty: 'No shortcut set', functionKeys: false, clearable: false, disabled: false }
   );
   const emit = defineEmits<{ record: [shortcut: string]; invalid: [message: string] }>();
 
   const listening = ref(false);
-  /** Modifiers held so far ("ctrl+alt"), while listening. */
-  const held = ref('');
-  /** The whole combo, down but not yet let go. */
-  const pressed = ref('');
+  /** What's down right now: modifiers so far ("ctrl+alt"), or a whole combo. */
+  const live = ref('');
+  /** The last whole combo pressed while recording; saved on Stop. */
+  const candidate = ref('');
   const snapped = ref(false);
   let snapTimer = 0;
 
   watch(listening, (on) => {
     void pauseShortcuts(on).catch(() => undefined);
-    held.value = '';
-    pressed.value = '';
+    live.value = '';
+    candidate.value = '';
   });
   onUnmounted(() => {
     window.clearTimeout(snapTimer);
     if (listening.value) void pauseShortcuts(false).catch(() => undefined);
   });
 
-  /** What the field shows: the combo going down, the modifiers so far, or what's saved. */
-  const shown = computed(() => (listening.value ? pressed.value || held.value : props.keys));
+  /** What the field shows: the keys going down, the last combo pressed, or what's saved. */
+  const shown = computed(() =>
+    listening.value ? live.value || candidate.value || props.keys : props.keys
+  );
+  /** Modifiers held with the key still to come. */
+  const waiting = computed(() => listening.value && !!live.value && live.value !== candidate.value);
+  const action = computed(() => {
+    if (listening.value) return 'Stop recording';
+    return props.keys ? 'Edit shortcut' : 'Record shortcut';
+  });
 
-  function start() {
-    if (!props.disabled) listening.value = true;
+  function toggle() {
+    if (props.disabled) return;
+    if (listening.value) stop();
+    else listening.value = true;
+  }
+
+  /** Ends recording, saving the last combo pressed if there was one. */
+  function stop() {
+    if (!listening.value) return;
+    const shortcut = candidate.value;
+    if (shortcut && shortcut !== props.keys) commit(shortcut);
+    else listening.value = false;
   }
 
   function onKeyDown(event: KeyboardEvent) {
@@ -55,16 +74,21 @@
     event.preventDefault();
     event.stopPropagation();
     if (event.repeat) return;
-    if (event.key === 'Escape') {
+    const modifiers = heldModifiers(event);
+    if (event.key === 'Escape' && !modifiers) {
       listening.value = false;
       return;
     }
-    if (props.clearable && event.key === 'Backspace' && !heldModifiers(event)) {
+    if (event.key === 'Enter' && !modifiers) {
+      stop();
+      return;
+    }
+    if (props.clearable && event.key === 'Backspace' && !modifiers) {
       commit('');
       return;
     }
     if (isModifierKey(event)) {
-      held.value = heldModifiers(event);
+      live.value = modifiers;
       return;
     }
     const shortcut = captureShortcut(event, props.functionKeys);
@@ -72,20 +96,19 @@
       emit('invalid', SHORTCUT_HELP);
       return;
     }
-    pressed.value = shortcut;
+    live.value = shortcut;
+    candidate.value = shortcut;
   }
 
-  // Letting go of the key binds what was pressed; letting go of a modifier before any key
-  // just takes it back off the field.
+  // Letting go keeps the combo on show until every key is up; letting go of a modifier
+  // before any key just takes it back off the field.
   function onKeyUp(event: KeyboardEvent) {
     if (!listening.value) return;
     event.preventDefault();
     event.stopPropagation();
-    if (pressed.value) {
-      commit(pressed.value);
-      return;
-    }
-    held.value = heldModifiers(event);
+    const modifiers = heldModifiers(event);
+    if (!modifiers) live.value = '';
+    else if (live.value !== candidate.value) live.value = modifiers;
   }
 
   function commit(shortcut: string) {
@@ -107,14 +130,15 @@
     :class="{ listening, snapped }"
     :disabled="disabled"
     :aria-pressed="listening"
-    @click="start"
-    @blur="listening = false"
+    @click="toggle"
+    @blur="stop"
   >
     <span v-if="shown" class="recorder-keys">
       <Keys :keys="shown" />
-      <kbd v-if="listening && !pressed" class="kbd recorder-waiting" aria-hidden="true">+</kbd>
+      <kbd v-if="waiting" class="kbd recorder-waiting" aria-hidden="true">+</kbd>
     </span>
     <span v-else-if="listening" class="recorder-prompt">Press a shortcut</span>
     <span v-else class="recorder-empty">{{ empty }}</span>
+    <span class="recorder-action">{{ action }}</span>
   </button>
 </template>
