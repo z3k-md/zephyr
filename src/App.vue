@@ -7,15 +7,23 @@
   const view = params.get('view');
   const isSettings = view === 'settings' || window.location.hash.startsWith('#settings');
 
-  const Page = defineAsyncComponent(() => {
-    if (view === 'grid') return import('./grid/GridView.vue');
-    if (view === 'osd') return import('./osd/OsdView.vue');
-    if (view === 'update') return import('./update/UpdateView.vue');
-    if (view === 'notes') return import('./notes/NotesView.vue');
-    if (view === 'onboarding') return import('./onboarding/OnboardingView.vue');
-    if (isSettings) return import('./settings/SettingsView.vue');
-    return import('./bar/BarView.vue');
-  });
+  // Keep each import in its own loader. Combining conditional imports inside one
+  // callback lets the production bundler attach only the last branch's CSS preload.
+  const pages = {
+    grid: () => import('./grid/GridView.vue'),
+    osd: () => import('./osd/OsdView.vue'),
+    update: () => import('./update/UpdateView.vue'),
+    notes: () => import('./notes/NotesView.vue'),
+    onboarding: () => import('./onboarding/OnboardingView.vue'),
+    settings: () => import('./settings/SettingsView.vue'),
+    bar: () => import('./bar/BarView.vue'),
+  };
+  const page = isSettings ? 'settings' : view;
+  const loader =
+    page && Object.prototype.hasOwnProperty.call(pages, page)
+      ? pages[page as keyof typeof pages]
+      : pages.bar;
+  const Page = defineAsyncComponent(loader);
 </script>
 
 <template>
