@@ -2780,3 +2780,202 @@ button.res-tile:hover {
 .weather-hour.on {
   background: rgba(255, 255, 255, 0.08);
 }
+
+/* The Sound view: the output device's level over each app's, with live meters. */
+.sound {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.sound > .footer {
+  flex: none;
+  margin-top: auto;
+}
+
+.sound > .notice {
+  margin: 0;
+  padding: 6px 16px 6px var(--gutter);
+  border-top: 1px solid var(--stroke);
+}
+
+.sound-empty {
+  padding: 18px var(--gutter);
+  color: var(--muted);
+  border-top: 1px solid var(--stroke);
+}
+
+.sound-list {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px 8px 8px;
+  border-top: 1px solid var(--stroke);
+}
+
+.sound-section {
+  padding: 8px 12px 2px;
+  color: var(--faint);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.sound-row {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 170px) 1fr 40px 26px;
+  align-items: center;
+  gap: 12px;
+  min-height: 40px;
+  padding: 4px 10px 4px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: default;
+}
+
+.sound-row.master {
+  min-height: 48px;
+  margin-bottom: 2px;
+  background: var(--panel);
+}
+
+.sound-row.selected {
+  background: var(--select);
+}
+
+.sound-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.sound-row.muted .sound-name,
+.sound-row.muted .sound-pct {
+  color: var(--muted);
+}
+
+.sound-name small {
+  display: flex;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.sound-device {
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: 99px;
+  background: var(--chip);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 16px;
+  cursor: pointer;
+}
+
+.sound-device:hover {
+  background: var(--chip-hover);
+  color: var(--fg);
+}
+
+.sound-device.on {
+  border-color: color-mix(in srgb, var(--focus) 45%, transparent);
+  background: var(--select);
+  color: var(--fg);
+}
+
+.sound-slider {
+  position: relative;
+  height: 20px;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.sound-track {
+  position: absolute;
+  top: 8px;
+  right: 0;
+  left: 0;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: var(--chip-hover);
+}
+
+.sound-peak {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  background: color-mix(in srgb, var(--ok) 40%, transparent);
+  transition: width 120ms linear;
+}
+
+.sound-fill {
+  position: absolute;
+  top: 8px;
+  left: 0;
+  height: 4px;
+  border-radius: 4px;
+  background: var(--fg);
+}
+
+.sound-knob {
+  position: absolute;
+  top: 4px;
+  width: 12px;
+  height: 12px;
+  margin-left: -6px;
+  border-radius: 50%;
+  background: var(--fg);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 25%, transparent);
+}
+
+.sound-row.muted .sound-fill,
+.sound-row.muted .sound-knob {
+  background: var(--faint);
+  box-shadow: none;
+}
+
+.sound-pct {
+  text-align: right;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.sound-row.selected .sound-pct {
+  color: var(--fg);
+}
+
+.sound-mute {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.sound-mute:hover {
+  background: var(--chip-hover);
+  color: var(--fg);
+}
+
+.sound-mute.on {
+  background: color-mix(in srgb, var(--bad) 16%, transparent);
+  color: var(--bad);
+}
+
+.sound-mute svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}

@@ -1,7 +1,7 @@
 // Turns a suggest response into the bar's sectioned list: the query row, command rows and
 // section headers. Pure functions, so the bar only wires them up.
 
-import { shortcutKeys } from '../keys';
+import { isMac, shortcutKeys } from '../keys';
 import type { Binding, LaunchGroup, Snapshot, SuggestionRow, SuggestResponse } from '../types';
 import type { PastAnswer } from './answerHistory';
 
@@ -53,7 +53,7 @@ export function rowKey(row: SuggestionRow): string {
 // What the bar's parts are called: answers are cards inline in the list, views take over
 // the bar, commands are one-shot actions, and the status bar is the footer and the chips
 // in the search row. Utilities is the umbrella name for the features Zephyr ships.
-const VIEWS = ['back', 'clip', 'notes', 'resources', 'network', 'shell', 'typing'];
+const VIEWS = ['back', 'clip', 'notes', 'resources', 'network', 'sound', 'shell', 'typing'];
 
 /** What a binding's target is, as Settings › Shortcuts names it. */
 export function targetKind(target: string): string {
@@ -86,7 +86,7 @@ function view(
 /** How many views the empty bar offers, filled by what's opened most. */
 const VIEW_SLOTS = 3;
 /** The views it can offer, in the order a fresh install shows them. */
-const OFFERED_VIEWS = ['clip', 'notes', 'network', 'resources', 'shell', 'typing'];
+const OFFERED_VIEWS = ['clip', 'notes', 'network', 'resources', 'sound', 'shell', 'typing'];
 
 /** The views to offer: most opened lately first (uses, fading over days, as apps rank),
  *  then the fresh-install order. */
@@ -101,6 +101,7 @@ function offeredViews(ctx: RowCtx): string[] {
     return entry.uses / (1 + ageDays);
   };
   return OFFERED_VIEWS.filter((id) => id !== 'clip' || settings?.clipboard.enabled)
+    .filter((id) => !commandFor(id)?.windowsOnly || !isMac)
     .map((id, order) => ({ id, order, score: score(id) }))
     .sort((a, b) => b.score - a.score || a.order - b.order)
     .slice(0, VIEW_SLOTS)
@@ -140,6 +141,8 @@ interface Command {
   names: string[];
   /** Words that offer it without letting Enter take it ("cpu" may be a search). */
   keywords?: string[];
+  /** Only offered on Windows (per-app volume needs a virtual driver on macOS). */
+  windowsOnly?: boolean;
 }
 
 // Every mode and scoped search, by name, so none needs a bang: typing "files" offers the
@@ -178,6 +181,14 @@ const COMMANDS: Command[] = [
     icon: 'glyph:pulse',
     names: ['network', 'internet', 'connection'],
     keywords: ['ping', 'latency', 'jitter', 'lag', 'packet loss'],
+  },
+  {
+    id: 'sound',
+    label: 'Sound',
+    icon: 'glyph:speaker',
+    names: ['sound', 'volume', 'vol', 'mixer', 'volume mixer', 'mix', 'audio'],
+    keywords: ['mute', 'speakers', 'headphones', 'output device', 'loudness'],
+    windowsOnly: true,
   },
   {
     id: 'speedtest',
@@ -225,6 +236,7 @@ function commandRows(ctx: RowCtx): { rows: SuggestionRow[]; exact: number | null
   let exact: number | null = null;
   for (const command of COMMANDS) {
     if (command.id === 'clip' && !settings?.clipboard.enabled) continue;
+    if (command.windowsOnly && isMac) continue;
     const names = [command.label.toLowerCase(), ...command.names];
     const words = command.label.toLowerCase().split(' ');
     const keyword = (command.keywords ?? []).some(
@@ -482,7 +494,7 @@ export function bindingTarget(row: SuggestionRow): { target: string; label: stri
 
 /** Every mode and scoped search, as binding targets, for Settings > Shortcuts. */
 export function commandTargets(): { target: string; label: string }[] {
-  return COMMANDS.map((command) => ({
+  return COMMANDS.filter((command) => !command.windowsOnly || !isMac).map((command) => ({
     target: command.id.startsWith('scope:') ? command.id : `view:${command.id}`,
     label: command.label,
   }));

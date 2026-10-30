@@ -1,5 +1,6 @@
 mod answer;
 mod apps;
+mod audio;
 mod bindings;
 mod bookmarks;
 mod browser;
@@ -142,6 +143,11 @@ pub fn run() {
             commands::files::drag_finished,
             commands::files::file_preview,
             commands::files::quick_look,
+            commands::sound::sound_snapshot,
+            commands::sound::sound_set_volume,
+            commands::sound::sound_step,
+            commands::sound::sound_set_muted,
+            commands::sound::sound_set_device,
             commands::resources::system_stats,
             commands::resources::resources_snapshot,
             commands::resources::resources_closed,

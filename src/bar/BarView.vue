@@ -49,6 +49,7 @@
   } from '../api';
   import ResourcesView from './ResourcesView.vue';
   import NetworkView from './NetworkView.vue';
+  import SoundView from './SoundView.vue';
   import NetworkCard from './NetworkCard.vue';
   import PortCard from './PortCard.vue';
   import { useNetworkSummary } from './network';
@@ -151,7 +152,7 @@
   // Views that take over the bar. Workspaces (typing and Shell) stick: every open lands back
   // in them until Esc leaves. Esc to the main bar only parks a workspace; a second Esc there
   // clears it. Clipboard is a picker: it sticks until something is picked.
-  type View = 'root' | 'clip' | 'typing' | 'shell' | 'resources' | 'network';
+  type View = 'root' | 'clip' | 'typing' | 'shell' | 'resources' | 'network' | 'sound';
   const WORKSPACES = ['typing', 'shell'];
   const MODE_NAMES: Record<string, string> = {
     typing: 'typing test',
@@ -171,6 +172,7 @@
   const clipQuery = ref('');
   const resourcesView = ref<InstanceType<typeof ResourcesView> | null>(null);
   const networkView = ref<InstanceType<typeof NetworkView> | null>(null);
+  const soundView = ref<InstanceType<typeof SoundView> | null>(null);
   const clipView = ref<InstanceType<typeof ClipboardViewComponent> | null>(null);
   const typingView = ref<InstanceType<typeof TypingViewComponent> | null>(null);
   // Other computers asking to join sync; checked when the bar opens and every minute.
@@ -600,6 +602,7 @@
     // Still inside a view (a workspace, or a picker mid-search): reopen right there.
     if (view.value === 'resources') resourcesView.value?.start();
     if (view.value === 'network') networkView.value?.start();
+    if (view.value === 'sound') soundView.value?.start();
     // Copies made while the bar was hidden.
     if (view.value === 'clip') void clipView.value?.refresh();
     if (view.value !== 'root') return;
@@ -626,6 +629,7 @@
     hiddenAtWall = Date.now();
     resourcesView.value?.stop();
     networkView.value?.stop();
+    soundView.value?.stop();
     typingView.value?.pause();
   }
 
@@ -734,7 +738,7 @@
   });
 
   /** Views the empty bar can offer, counted each time one opens so the busiest come first. */
-  const COUNTED_VIEWS = ['clip', 'network', 'resources', 'shell', 'typing'];
+  const COUNTED_VIEWS = ['clip', 'network', 'resources', 'shell', 'sound', 'typing'];
 
   watch(view, async () => {
     if (COUNTED_VIEWS.includes(view.value)) {
@@ -831,6 +835,8 @@
       enter(id);
     } else if (id === 'clip') {
       openClip('');
+    } else if (id === 'sound') {
+      enter('sound');
     } else if (id === 'network') {
       enter('network');
     } else if (id === 'speedtest') {
@@ -997,6 +1003,8 @@
     switch (view.value) {
       case 'clip':
         return clipView.value;
+      case 'sound':
+        return soundView.value;
       case 'network':
         return networkView.value;
       case 'resources':
@@ -1591,6 +1599,7 @@
       @network="openView('network')"
       :initial-filter="resourcesFilter"
     />
+    <SoundView v-if="view === 'sound'" ref="soundView" @exit="leave" />
     <NetworkView
       v-if="view === 'network'"
       ref="networkView"

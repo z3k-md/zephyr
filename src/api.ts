@@ -1,6 +1,8 @@
 import { Channel, invoke } from '@tauri-apps/api/core';
 import type {
   ClipDetail,
+  Sound,
+  SoundLevel,
   ClipList,
   ClipboardSettings,
   DispatchOutcome,
@@ -703,4 +705,29 @@ export function cpuTempStatus(): Promise<{
  *  no such one. */
 export function quote(symbol: string, crypto: boolean, range: QuoteRange): Promise<Quote | null> {
   return invoke<Quote | null>('quote', { symbol, crypto, range });
+}
+
+/** The default output device, every device and each app's level, with how loud each is now;
+ *  null where per-app levels aren't available (macOS). */
+export function soundSnapshot(): Promise<Sound | null> {
+  return invoke<Sound | null>('sound_snapshot');
+}
+
+/** Sets master (`key` = `master`) or an app's level, 0–1. */
+export function soundSetVolume(key: string, volume: number): Promise<SoundLevel | null> {
+  return invoke<SoundLevel | null>('sound_set_volume', { key, volume });
+}
+
+/** Moves master or an app by `delta`, -1–1. */
+export function soundStep(key: string, delta: number): Promise<SoundLevel | null> {
+  return invoke<SoundLevel | null>('sound_step', { key, delta });
+}
+
+export function soundSetMuted(key: string, muted: boolean): Promise<SoundLevel | null> {
+  return invoke<SoundLevel | null>('sound_set_muted', { key, muted });
+}
+
+/** Makes a device the default output for media, games and calls. */
+export function soundSetDevice(id: string): Promise<void> {
+  return invoke('sound_set_device', { id });
 }

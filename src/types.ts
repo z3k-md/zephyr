@@ -685,3 +685,46 @@ export interface Quote {
 
 /** A ticker chart's span. */
 export type QuoteRange = '1d' | '5d' | '1mo' | '1y';
+
+/** An output device, as Windows' sound settings name it. */
+export interface SoundDevice {
+  id: string;
+  /** "Speakers", "Headphones". */
+  name: string;
+  /** The hardware: "Realtek High Definition Audio". */
+  detail: string;
+}
+
+/** One app in the volume mixer, all its sessions together. */
+export interface AppAudio {
+  /** What the setters take: the program's path in lowercase, or `system`. */
+  key: string;
+  name: string;
+  icon: string;
+  /** 0–1. */
+  volume: number;
+  muted: boolean;
+  /** 0–1, how loud it is right now. */
+  peak: number;
+  /** Playing now, rather than open and quiet. */
+  active: boolean;
+}
+
+/** The default output device and what's on it. */
+export interface Sound {
+  device: SoundDevice | null;
+  devices: SoundDevice[];
+  volume: number;
+  muted: boolean;
+  peak: number;
+  apps: AppAudio[];
+}
+
+/** A level after a change: master (`key` = `master`) or an app. */
+export interface SoundLevel {
+  key: string;
+  name: string;
+  icon: string;
+  volume: number;
+  muted: boolean;
+}
