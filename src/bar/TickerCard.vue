@@ -119,8 +119,8 @@
         :key="option.range"
         type="button"
         role="tab"
-        :aria-selected="option.range === range"
-        :class="{ on: option.range === range }"
+        :aria-selected="option.range === props.range"
+        :class="{ on: option.range === props.range }"
         @click="$emit('range', option.range)"
       >
         {{ option.label }}
