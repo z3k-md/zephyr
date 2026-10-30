@@ -136,8 +136,9 @@ export function wetNote(forecast: Forecast): string | null {
   return `${word}${day} from ${hourLabel(forecast, hour.time)}`;
 }
 
-/** "Portland, Oregon". */
+/** "Portland, Oregon"; a city that is its own region ("Mexico City") is named once. */
 export function placeName(forecast: Forecast): string {
   const { name, region } = forecast.place;
-  return [name, region].filter(Boolean).join(', ');
+  if (!region || region.toLowerCase() === name.toLowerCase()) return name;
+  return name ? `${name}, ${region}` : region;
 }
