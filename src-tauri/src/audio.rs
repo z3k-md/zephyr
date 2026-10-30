@@ -61,6 +61,8 @@ pub struct Level {
     pub icon: String,
     pub volume: f32,
     pub muted: bool,
+    /// Playing now (master always is).
+    pub active: bool,
 }
 
 #[cfg(windows)]
@@ -78,7 +80,7 @@ impl Target {
 }
 
 #[cfg(windows)]
-pub use win::{set_default_device, set_muted, set_volume, snapshot, step};
+pub use win::{levels, set_default_device, set_muted, set_volume, snapshot, step, toggle_mute};
 
 #[cfg(not(windows))]
 mod other {
@@ -448,6 +450,40 @@ mod win {
         })
     }
 
+    /// Master and each app's level, in the order the overlay steps through them: master,
+    /// then apps playing now, then the rest. System sounds are left out.
+    pub fn levels() -> Vec<Level> {
+        let Some(sound) = snapshot() else {
+            return Vec::new();
+        };
+        let mut list = vec![Level {
+            key: MASTER_KEY.to_string(),
+            name: sound
+                .device
+                .as_ref()
+                .map(|device| device.name.clone())
+                .unwrap_or_else(|| "Master".to_string()),
+            icon: "glyph:speaker".to_string(),
+            volume: sound.volume,
+            muted: sound.muted,
+            active: true,
+        }];
+        list.extend(
+            sound
+                .apps
+                .into_iter()
+                .filter(|app| app.key != SYSTEM_KEY)
+                .map(|app| Level {
+                    key: app.key,
+                    name: app.name,
+                    icon: app.icon,
+                    volume: app.volume,
+                    muted: app.muted,
+                    active: app.active,
+                }),
+        );
+        list
+    }
     /// Changes `target`'s level and mute with `change`, which gets the current pair and
     /// returns the new one. Every session of an app lands on the same level.
     fn change(target: &Target, change: impl Fn(f32, bool) -> (f32, bool)) -> Option<Level> {
@@ -478,6 +514,7 @@ mod win {
                         icon: "glyph:speaker".to_string(),
                         volume: next,
                         muted: mute,
+                        active: true,
                     })
                 }
             }
@@ -505,6 +542,7 @@ mod win {
                         icon: app_icon(first),
                         volume: next,
                         muted: mute,
+                        active: found.iter().any(|session| session.active),
                     })
                 }
             }
@@ -512,12 +550,15 @@ mod win {
     }
 
     pub fn set_volume(target: &Target, volume: f32) -> Option<Level> {
-        // Turning a muted level up unmutes it, as Windows' own slider does.
-        change(target, |_, muted| (volume, muted && volume <= 0.0))
+        change(target, |_, muted| (volume, muted))
     }
 
     pub fn set_muted(target: &Target, muted: bool) -> Option<Level> {
         change(target, |level, _| (level, muted))
+    }
+
+    pub fn toggle_mute(target: &Target) -> Option<Level> {
+        change(target, |level, muted| (level, !muted))
     }
 
     /// Moves `target` by `delta` (0–1), snapped to whole percents; going up unmutes.

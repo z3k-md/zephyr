@@ -43,6 +43,7 @@ mod timer;
 mod tray;
 mod updater;
 mod util;
+mod volume_keys;
 mod weather;
 mod web;
 mod window;
@@ -148,6 +149,9 @@ pub fn run() {
             commands::sound::sound_step,
             commands::sound::sound_set_muted,
             commands::sound::sound_set_device,
+            commands::sound::save_volume_keys,
+            commands::sound::osd_wheel,
+            commands::sound::osd_open_sound,
             commands::resources::system_stats,
             commands::resources::resources_snapshot,
             commands::resources::resources_closed,
@@ -304,6 +308,7 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     power::resume(app.handle());
     browser::start();
     nowplaying::start(app.handle());
+    volume_keys::set_enabled(app.handle(), snapshot.volume_keys);
 
     if let Err(err) = tray::init(app) {
         log::error!("tray setup failed: {err}");

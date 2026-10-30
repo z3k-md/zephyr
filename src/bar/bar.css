@@ -1940,6 +1940,7 @@ button.res-tile:hover {
 .res-memory,
 .res-disk {
   color: var(--fg);
+  font-variant-numeric: tabular-nums;
   text-align: right;
   white-space: nowrap;
 }
@@ -2975,6 +2976,45 @@ button.res-tile:hover {
   height: 15px;
   fill: none;
   stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* The volume keys while the bar is open: a few levels over the bottom of the bar. */
+.sound-drawer {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  left: 10px;
+  z-index: 5;
+  padding: 6px;
+  border: 1px solid var(--stroke-strong);
+  border-radius: 12px;
+  background: var(--bg-solid);
+  box-shadow: 0 -12px 30px rgba(0, 0, 0, 0.35);
+  font-variant-numeric: tabular-nums;
+  animation: sound-drawer-in 120ms ease-out;
+}
+
+@keyframes sound-drawer-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+.sound-drawer .sound-row {
+  grid-template-columns: 20px minmax(0, 150px) 1fr 40px;
+  min-height: 34px;
+}
+
+.sound-drawer .sound-pct svg {
+  display: inline-block;
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: var(--bad);
   stroke-width: 1.7;
   stroke-linecap: round;
   stroke-linejoin: round;

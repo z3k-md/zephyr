@@ -65,6 +65,7 @@ Type a utility's name to open it.
 - **Shell**: `>` or `!sh` runs commands in the bar (Git Bash, PowerShell or WSL on Windows; your login shell on macOS). Ctrl+C stops a command, and Ctrl+Enter hands off to a real terminal.
 - **Resources** (`top`): CPU, memory, GPU and network over the last 15 minutes, with apps above background processes. Ctrl+Backspace quits a process.
 - **Network** (`ping`): what's wrong right now, with router, internet and DNS latency over time.
+- **Sound** (`vol`, `mixer`; Windows): every app's volume with live meters, mute and the output device. ↑↓ picks a row, ←→ moves it (Shift for 10%), M mutes, 1–9 and 0 jump to 10–100%, Tab switches device. Settings > Sound can take over the volume keys: Zephyr's own overlay replaces Windows' flyout, Alt with a volume key picks an app for the keys to change, and with the bar open the levels show in the bar.
 - **Speed test**: download, upload and lag under load, from Cloudflare.
 - **Weather**: `weather`, `weather raleigh nc` or `stockholm sweden weather`, from Open-Meteo. Tab steps through the next 48 hours with each hour's chance of rain.
 - **Now playing**: what's playing shows at the end of the search row, with play, pause and skip. Ctrl+Space plays or pauses, and scrolling over it changes the volume.

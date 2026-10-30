@@ -9,6 +9,7 @@
 
   const Page = defineAsyncComponent(() => {
     if (view === 'grid') return import('./grid/GridView.vue');
+    if (view === 'osd') return import('./osd/OsdView.vue');
     if (view === 'update') return import('./update/UpdateView.vue');
     if (view === 'notes') return import('./notes/NotesView.vue');
     if (view === 'onboarding') return import('./onboarding/OnboardingView.vue');

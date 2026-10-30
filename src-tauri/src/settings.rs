@@ -55,6 +55,7 @@ pub fn catalog() -> &'static [Setting] {
         ZEPHYR
             .iter()
             .filter(|setting| cfg!(target_os = "macos") || setting.id != "zephyr.permissions")
+            .filter(|setting| cfg!(windows) || setting.id != "zephyr.sound")
             .chain(system.iter().filter(|setting| installed(setting)))
             .copied()
             .collect()
@@ -556,6 +557,12 @@ const ZEPHYR: &[Setting] = &[
             "fahrenheit",
             "temperature units",
         ],
+    ),
+    zephyr(
+        "zephyr.sound",
+        "Zephyr Sound",
+        "sound",
+        &["volume keys", "volume overlay", "volume flyout"],
     ),
     zephyr(
         "zephyr.network",

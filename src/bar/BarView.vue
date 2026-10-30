@@ -50,6 +50,7 @@
   import ResourcesView from './ResourcesView.vue';
   import NetworkView from './NetworkView.vue';
   import SoundView from './SoundView.vue';
+  import SoundDrawer from './SoundDrawer.vue';
   import NetworkCard from './NetworkCard.vue';
   import PortCard from './PortCard.vue';
   import { useNetworkSummary } from './network';
@@ -88,6 +89,7 @@
     type SystemStats,
     type SuggestResponse,
     type PortUse,
+    type VolumeShown,
   } from '../types';
   // Views used now and then load on demand, and are fetched in the background on the first
   // summon, so startup parses less and opening one later doesn't wait.
@@ -173,6 +175,20 @@
   const resourcesView = ref<InstanceType<typeof ResourcesView> | null>(null);
   const networkView = ref<InstanceType<typeof NetworkView> | null>(null);
   const soundView = ref<InstanceType<typeof SoundView> | null>(null);
+  // The volume keys while the bar is open (volume_keys.rs): levels over the bottom of the
+  // bar for a moment after each press. The Sound view already shows them, so not there.
+  const volumeShown = shallowRef<VolumeShown | null>(null);
+  let volumeTimer = 0;
+  function showVolume(shown: VolumeShown) {
+    if (view.value === 'sound') return;
+    volumeShown.value = shown;
+    window.clearTimeout(volumeTimer);
+    volumeTimer = window.setTimeout(() => (volumeShown.value = null), 2000);
+  }
+  function openSoundFromDrawer() {
+    volumeShown.value = null;
+    openView('sound');
+  }
   const clipView = ref<InstanceType<typeof ClipboardViewComponent> | null>(null);
   const typingView = ref<InstanceType<typeof TypingViewComponent> | null>(null);
   // Other computers asking to join sync; checked when the bar opens and every minute.
@@ -657,6 +673,8 @@
         void focusInput();
       }),
       listen('clipboard-shown', () => openClip('')),
+      listen<VolumeShown>('sound-key', (event) => showVolume(event.payload)),
+      listen('sound-open', () => openView('sound')),
       // A hotkey the user gave a mode or scoped search (Settings > Shortcuts).
       listen<string>('bar-open', (event) => {
         query.value = '';
@@ -1030,6 +1048,11 @@
     if (event.isComposing || event.keyCode === 229) return;
     // A fresh Esc press closes the bar on release only if the root takes it, below.
     if (event.key === 'Escape' && !event.repeat) closeOnEscapeUp = false;
+    if (event.key === 'Escape' && volumeShown.value) {
+      event.preventDefault();
+      volumeShown.value = null;
+      return;
+    }
     // A computer asking to join sync: never plain Enter, only ⌘Y and ⌘N.
     if (devices.onKey(event)) return;
     if (mediaKey(event)) return;
@@ -1600,6 +1623,7 @@
       :initial-filter="resourcesFilter"
     />
     <SoundView v-if="view === 'sound'" ref="soundView" @exit="leave" />
+    <SoundDrawer v-if="volumeShown" :shown="volumeShown" @open="openSoundFromDrawer" />
     <NetworkView
       v-if="view === 'network'"
       ref="networkView"

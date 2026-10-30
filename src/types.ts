@@ -50,6 +50,8 @@ export interface Snapshot {
   lastSpeed: SpeedResult | null;
   /** Windows: the CPU temperature helper (PawnIO) is turned on. */
   cpuTemp: boolean;
+  /** Windows: Zephyr takes the volume keys and shows its own overlay. */
+  volumeKeys: boolean;
 }
 
 export type WeatherUnit = 'c' | 'f';
@@ -727,4 +729,14 @@ export interface SoundLevel {
   icon: string;
   volume: number;
   muted: boolean;
+  /** Playing now (master always is). */
+  active: boolean;
+}
+
+/** After a volume key: the keys' target and every level, for the overlay and the bar's drawer. */
+export interface VolumeShown {
+  /** `master` or an app's key. */
+  key: string;
+  /** Master first, then the apps. */
+  levels: SoundLevel[];
 }

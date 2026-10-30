@@ -1,5 +1,8 @@
-use super::blocking;
+use tauri::AppHandle;
+
+use super::{blocking, save};
 use crate::audio::{self, Level, Sound, Target};
+use crate::state::Persisted;
 
 /// The Sound view's refresh: devices, master and every app, with how loud each is now.
 #[tauri::command]
@@ -34,4 +37,27 @@ pub async fn sound_set_muted(key: String, muted: bool) -> Result<Option<Level>, 
 #[tauri::command]
 pub async fn sound_set_device(id: String) -> Result<(), String> {
     blocking(move || audio::set_default_device(&id)).await
+}
+
+/// Settings › Sound: whether Zephyr takes the volume keys and shows its own overlay.
+#[tauri::command]
+pub async fn save_volume_keys(app: AppHandle, on: bool) -> Result<Persisted, String> {
+    crate::volume_keys::set_enabled(&app, on);
+    save(app, move |persisted| {
+        persisted.volume_keys = on;
+        Ok(())
+    })
+    .await
+}
+
+/// The wheel over the volume overlay: the target a notch louder or quieter.
+#[tauri::command]
+pub fn osd_wheel(delta: f32) {
+    crate::volume_keys::wheel(delta.clamp(-0.2, 0.2));
+}
+
+/// A click on the volume overlay opens the Sound view.
+#[tauri::command]
+pub fn osd_open_sound(app: AppHandle) {
+    crate::volume_keys::open_sound(&app);
 }

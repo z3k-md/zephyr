@@ -731,3 +731,18 @@ export function soundSetMuted(key: string, muted: boolean): Promise<SoundLevel |
 export function soundSetDevice(id: string): Promise<void> {
   return invoke('sound_set_device', { id });
 }
+
+/** Settings › Sound: whether Zephyr takes the volume keys and shows its own overlay. */
+export function saveVolumeKeys(on: boolean): Promise<Snapshot> {
+  return invoke<Snapshot>('save_volume_keys', { on });
+}
+
+/** The wheel over the volume overlay: its target a notch louder or quieter. */
+export function osdWheel(delta: number): Promise<void> {
+  return invoke('osd_wheel', { delta });
+}
+
+/** A click on the volume overlay: the Sound view, in the bar. */
+export function osdOpenSound(): Promise<void> {
+  return invoke('osd_open_sound');
+}

@@ -102,6 +102,8 @@ pub struct Persisted {
     pub last_speed: Option<crate::net::speed::SpeedResult>,
     /// Windows: read the CPU's temperature through PawnIO and an elevated helper (cputemp.rs).
     pub cpu_temp: bool,
+    /// Windows: Zephyr takes the volume keys and shows its own overlay (volume_keys.rs).
+    pub volume_keys: bool,
 }
 
 /// The palettes Settings > Appearance offers; the first is the default.
@@ -248,6 +250,7 @@ impl Persisted {
             watch_connection: true,
             last_speed: None,
             cpu_temp: false,
+            volume_keys: false,
         }
     }
 

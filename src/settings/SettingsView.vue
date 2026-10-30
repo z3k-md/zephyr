@@ -20,6 +20,7 @@
     saveTheme,
     saveBugCapture,
     saveShowStats,
+    saveVolumeKeys,
     saveWatchConnection,
     saveCpuTemp,
     cpuTempStatus,
@@ -165,6 +166,17 @@
     ...(isMac ? [{ id: 'permissions', label: 'Permissions', icon: 'shield' }] : []),
     { id: 'clipboard', label: 'Clipboard', icon: 'clipboard', group: 'utilities' },
     { id: 'resources', label: 'Resources', icon: 'cpu', group: 'utilities' },
+    ...(isMac
+      ? []
+      : [
+          {
+            id: 'sound',
+            label: 'Sound',
+            icon: 'speaker',
+            group: 'utilities',
+            keywords: 'volume keys overlay mixer',
+          },
+        ]),
     { id: 'terminal', label: 'Terminal', icon: 'prompt', group: 'utilities' },
     { id: 'notes', label: 'Notes', icon: 'note', group: 'utilities' },
     {
@@ -524,6 +536,10 @@
     } catch (error) {
       formError.value = errorMessage(error);
     }
+  }
+
+  async function toggleVolumeKeys() {
+    if (snapshot.value) await save(saveVolumeKeys(!snapshot.value.volumeKeys));
   }
 
   async function toggleStats() {
@@ -1065,6 +1081,21 @@
         </template>
       </section>
 
+      <section v-if="snapshot && !isMac" v-show="!search && active === 'sound'" id="section-sound">
+        <h2>Sound</h2>
+        <label class="check">
+          <input
+            type="checkbox"
+            :checked="snapshot.volumeKeys"
+            :disabled="busy"
+            @change="toggleVolumeKeys"
+          />
+          Volume keys show Zephyr's overlay
+          <InfoTip
+            text="Replaces Windows' volume flyout. The keys change master; Alt with a volume key picks an app, which the keys change until the overlay fades. With the bar open, the levels show in the bar instead."
+          />
+        </label>
+      </section>
       <section v-if="snapshot" v-show="!search && active === 'network'" id="section-network">
         <h2>Network</h2>
         <label class="check">

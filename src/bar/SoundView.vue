@@ -127,7 +127,7 @@
     };
     try {
       if (volume !== row.volume) await soundSetVolume(row.key, volume);
-      if (muted !== row.muted || (volume !== row.volume && muted)) {
+      if (muted !== row.muted) {
         await soundSetMuted(row.key, muted);
       }
     } catch (error) {
