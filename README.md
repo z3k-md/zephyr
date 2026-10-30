@@ -15,7 +15,7 @@ Math, unit conversions and time zones answer in the top row as you type (`12 * 7
 
 Other apps and scripts can drive Zephyr with links: `zephyr://open?q=text` shows the bar with text typed in, and `zephyr://search?q=crispr` searches the web for it (or opens it, when it is a web address). Links never launch apps, open files or reach the shell. On macOS the link scheme comes from the installed app.
 
-**Clipboard history** (macOS for now): press ⌘⇧V or type `!clip` to search everything you've copied, including text, links, colors, images and files. Text in copied screenshots is searchable too. Enter pastes into the app you're in, ⌘Enter copies, ⇧Enter pastes as plain text, and ⌘K shows more. History stays on this computer, encrypted with a key in the system keychain, and copies from password managers are never recorded.
+**Clipboard history**: press ⌘⇧V (Alt+Shift+V on Windows) or type `!clip` to search everything you've copied, including text, links, colors, images and files. Text in copied screenshots is searchable too. Enter pastes into the app you're in, Ctrl+Enter (⌘Enter) copies, Shift+Enter pastes as plain text, and Ctrl+K (⌘K) shows more. History stays on this computer, encrypted with a key in the system keychain (Credential Manager on Windows), and copies from password managers are never recorded.
 
 **Notes**: press ⌥⌘N (Ctrl+Alt+N on Windows) for a small always-on-top notes window with rich text, or type `!note` to find a note or start one. Notes are HTML files in Zephyr's settings folder.
 

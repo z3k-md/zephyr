@@ -1,5 +1,5 @@
-//! Windows capture and paste: the Win32 clipboard for reading and writing, and SendInput for
-//! Ctrl+V. Text in images isn't recognized here yet.
+//! Windows capture and paste: the Win32 clipboard for reading and writing, SendInput for
+//! Ctrl+V, and Windows.Media.Ocr for text in images.
 
 use std::path::Path;
 use std::sync::atomic::{AtomicIsize, Ordering};
@@ -497,14 +497,84 @@ impl Platform for WinClipboard {
         }
     }
 
-    fn recognize_text(&self, _png: &[u8]) -> Option<String> {
-        None
+    fn recognize_text(&self, png: &[u8]) -> Option<String> {
+        recognize(png).ok().flatten()
     }
+}
+
+/// The text in a PNG, line by line, from the OCR engine for the user's languages. Images
+/// larger than the engine accepts are scaled down to fit first.
+fn recognize(png: &[u8]) -> ::windows::core::Result<Option<String>> {
+    use ::windows::Graphics::Imaging::{
+        BitmapAlphaMode, BitmapDecoder, BitmapInterpolationMode, BitmapPixelFormat,
+        BitmapTransform, ColorManagementMode, ExifOrientationMode,
+    };
+    use ::windows::Media::Ocr::OcrEngine;
+    use ::windows::Storage::Streams::{DataWriter, InMemoryRandomAccessStream};
+    use ::windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
+
+    // Recognition runs on its own short-lived thread, which COM hasn't seen yet.
+    let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+
+    let stream = InMemoryRandomAccessStream::new()?;
+    let writer = DataWriter::CreateDataWriter(&stream)?;
+    writer.WriteBytes(png)?;
+    writer.StoreAsync()?.join()?;
+    writer.DetachStream()?;
+    stream.Seek(0)?;
+
+    let decoder = BitmapDecoder::CreateAsync(&stream)?.join()?;
+    let transform = BitmapTransform::new()?;
+    let max = OcrEngine::MaxImageDimension()?;
+    if let Some((width, height)) = fit_within(decoder.PixelWidth()?, decoder.PixelHeight()?, max) {
+        transform.SetScaledWidth(width)?;
+        transform.SetScaledHeight(height)?;
+        transform.SetInterpolationMode(BitmapInterpolationMode::Fant)?;
+    }
+    let bitmap = decoder
+        .GetSoftwareBitmapTransformedAsync(
+            BitmapPixelFormat::Bgra8,
+            BitmapAlphaMode::Premultiplied,
+            &transform,
+            ExifOrientationMode::IgnoreExifOrientation,
+            ColorManagementMode::DoNotColorManage,
+        )?
+        .join()?;
+
+    let engine = OcrEngine::TryCreateFromUserProfileLanguages()?;
+    let result = engine.RecognizeAsync(&bitmap)?.join()?;
+    let lines: Vec<String> = result
+        .Lines()?
+        .into_iter()
+        .filter_map(|line| line.Text().ok().map(|text| text.to_string()))
+        .collect();
+    let text = lines.join("\n");
+    Ok((!text.trim().is_empty()).then_some(text))
+}
+
+/// The size that fits an image within `max` on its longest side, keeping its shape, or None
+/// when it already fits.
+fn fit_within(width: u32, height: u32, max: u32) -> Option<(u32, u32)> {
+    let longest = width.max(height);
+    if longest <= max {
+        return None;
+    }
+    let scale = |side: u32| ((u64::from(side) * u64::from(max)) / u64::from(longest)).max(1) as u32;
+    Some((scale(width), scale(height)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn oversized_images_shrink_to_the_ocr_limit_keeping_their_shape() {
+        assert_eq!(fit_within(2000, 1000, 2600), None);
+        assert_eq!(fit_within(2600, 2600, 2600), None);
+        assert_eq!(fit_within(5200, 1300, 2600), Some((2600, 650)));
+        assert_eq!(fit_within(1000, 10400, 2600), Some((250, 2600)));
+        assert_eq!(fit_within(100_000, 1, 2600), Some((2600, 1)));
+    }
 
     #[test]
     fn dropped_file_lists_round_trip() {
