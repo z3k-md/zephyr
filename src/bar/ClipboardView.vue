@@ -19,6 +19,7 @@
   import ActionMenu from '../components/ActionMenu.vue';
   import { MENU_HINTS, useActionMenu, type MenuAction } from '../components/actionMenu';
   import KeyHints from '../components/KeyHints.vue';
+  import BackButton from './BackButton.vue';
 
   const props = defineProps<{ initialQuery: string }>();
   // `picked` means an item was pasted or copied, which ends the clipboard picker.
@@ -312,10 +313,7 @@
   <div ref="clipEl" class="clip">
     <SelectMenu ref="filterMenu" :root="clipEl" />
     <div class="input-row">
-      <svg class="mark" viewBox="0 0 24 24" aria-hidden="true">
-        <rect x="6" y="4" width="12" height="16" rx="2" />
-        <path d="M9 4h6v3H9z" />
-      </svg>
+      <BackButton @back="emit('exit')" />
       <input
         ref="inputEl"
         v-model="query"

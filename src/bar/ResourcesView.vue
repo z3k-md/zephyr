@@ -8,6 +8,7 @@
   import { isMac } from '../keys';
   import { useLater, usePoll } from '../poll';
   import KeyHints from '../components/KeyHints.vue';
+  import BackButton from './BackButton.vue';
   import ActionMenu from '../components/ActionMenu.vue';
   import { MENU_HINTS, isMenuKey, useActionMenu, type MenuAction } from '../components/actionMenu';
   import ResourceDetailPane from './ResourceDetail.vue';
@@ -709,7 +710,7 @@
 <template>
   <div class="resources">
     <div class="input-row">
-      <svg class="mark" viewBox="0 0 24 24" aria-hidden="true" v-html="GLYPHS.cpu" />
+      <BackButton @back="emit('exit')" />
       <span class="chip scope-label">Resources</span>
       <input
         ref="inputEl"

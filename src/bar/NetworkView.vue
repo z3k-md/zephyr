@@ -5,6 +5,7 @@
   import { bytes, elapsed } from '../format';
   import { usePoll } from '../poll';
   import KeyHints from '../components/KeyHints.vue';
+  import BackButton from './BackButton.vue';
   import ActionMenu from '../components/ActionMenu.vue';
   import SpeedPanel from '../components/SpeedPanel.vue';
   import { MENU_HINTS, useActionMenu, type MenuAction } from '../components/actionMenu';
@@ -386,7 +387,7 @@
 <template>
   <div class="network">
     <div class="input-row">
-      <svg class="mark" viewBox="0 0 24 24" aria-hidden="true" v-html="GLYPHS.pulse" />
+      <BackButton @back="emit('exit')" />
       <span class="chip scope-label">Network</span>
       <span class="net-title">Last 15 minutes</span>
       <span
