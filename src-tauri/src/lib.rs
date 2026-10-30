@@ -71,6 +71,10 @@ pub fn init_logging() {
 
 pub fn run() {
     let builder = tauri::Builder::default();
+    // We use window keyboard/mouse events, not raw device events. On Windows,
+    // leave physical input on the normal hook path used by PowerToys and our OSD.
+    #[cfg(windows)]
+    let builder = builder.device_event_filter(tauri::DeviceEventFilter::Always);
     #[cfg(target_os = "macos")]
     let builder = builder.plugin(tauri_nspanel::init());
     builder
@@ -152,6 +156,7 @@ pub fn run() {
             commands::sound::save_volume_keys,
             commands::sound::save_volume_overlay,
             commands::sound::osd_wheel,
+            commands::sound::volume_key,
             commands::sound::osd_open_sound,
             commands::resources::system_stats,
             commands::resources::resources_snapshot,
@@ -426,6 +431,8 @@ fn set_up_bar(app: &tauri::AppHandle) {
     window::install_snapping(&main_window);
     #[cfg(windows)]
     clipboard::set_owner_window(&main_window);
+    #[cfg(windows)]
+    volume_keys::guard(&main_window);
 
     let watched = main_window.clone();
     main_window.on_window_event(move |event| match event {

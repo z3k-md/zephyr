@@ -312,7 +312,7 @@
   /** Apps first, then background processes; each by name or by its smoothed value. */
   function ranked(next: ResourceRow[]): ResourceRow[] {
     const byName = (a: ResourceRow, b: ResourceRow) =>
-      a.name.toLowerCase().localeCompare(b.name.toLowerCase());
+      a.label.toLowerCase().localeCompare(b.label.toLowerCase());
     return [...next].sort((a, b) => {
       if (a.windowed !== b.windowed) return a.windowed ? -1 : 1;
       if (sort.value === 'name') return byName(a, b);
@@ -390,7 +390,7 @@
     const row = current.value;
     if (!row) return;
     if (force && row.protected) {
-      notice.value = `${row.name} keeps the system running, so it can't be force quit.`;
+      notice.value = `${row.label} keeps the system running, so it can't be force quit.`;
       return;
     }
     const same = confirming.value?.key === row.key && confirming.value.force === force;
@@ -404,10 +404,10 @@
     try {
       if (row.relaunch && !force) {
         await resourcesRelaunch(row.name, row.pids);
-        notice.value = `Relaunched ${row.name}.`;
+        notice.value = `Relaunched ${row.label}.`;
       } else {
         await resourcesQuit(row.name, row.pids, force);
-        notice.value = `${force ? 'Force quit' : 'Quit'} ${row.name}.`;
+        notice.value = `${force ? 'Force quit' : 'Quit'} ${row.label}.`;
       }
       heldUntil = 0;
       later(tick, 400);
@@ -431,7 +431,7 @@
     const found =
       detail.value?.key === row.key ? detail.value : await resourcesDetail(row.key, row.pids);
     if (found?.command) await copy(found.command, 'command');
-    else notice.value = `${row.name}'s command line needs administrator rights to read.`;
+    else notice.value = `${row.label}'s command line needs administrator rights to read.`;
   }
 
   async function copy(text: string, what: string) {
@@ -453,11 +453,11 @@
     if (!row) return [];
     const noPath = row.locked ? 'Needs administrator rights' : 'Not known';
     const list: MenuAction[] = [
-      { label: `Switch to ${row.name}`, keys: 'enter', run: () => switchTo(row) },
+      { label: `Switch to ${row.label}`, keys: 'enter', run: () => switchTo(row) },
       { label: 'Show info', keys: 'shift+space', run: () => openDetail() },
       row.relaunch
-        ? { label: `${RELAUNCH} ${row.name}`, keys: QUIT_KEYS, run: () => quit(row, false) }
-        : { label: `Quit ${row.name}`, keys: QUIT_KEYS, run: () => quit(row, false) },
+        ? { label: `${RELAUNCH} ${row.label}`, keys: QUIT_KEYS, run: () => quit(row, false) }
+        : { label: `Quit ${row.label}`, keys: QUIT_KEYS, run: () => quit(row, false) },
       {
         label: 'Force quit',
         keys: FORCE_KEYS,
@@ -469,7 +469,7 @@
         disabled: row.path ? undefined : noPath,
         run: () => reveal(),
       },
-      { label: `Search the web for ${row.name}`, run: () => emit('search', row.name) },
+      { label: `Search the web for ${row.label}`, run: () => emit('search', row.label) },
       {
         label: row.pids.length > 1 ? 'Copy process IDs' : 'Copy process ID',
         run: () => copy(row.pids.join(' '), row.pids.length > 1 ? 'process IDs' : 'process ID'),
@@ -734,21 +734,6 @@
         autocomplete="off"
         autocapitalize="off"
       />
-      <span
-        class="res-live"
-        :class="{ on: live }"
-        v-tip="live ? `Live, every ${rate / 1000} s` : 'Paused'"
-        aria-hidden="true"
-      />
-      <button
-        type="button"
-        class="chip"
-        v-tip="'Sort (Tab)'"
-        @mousedown.prevent
-        @click="cycleSort(false)"
-      >
-        {{ SORTS.find((item) => item.id === sort)?.label }}
-      </button>
     </div>
 
     <div v-if="tiles" class="res-tiles">
@@ -926,10 +911,10 @@
             </span>
             <span class="res-cpu">
               <template v-if="entry.process.cpu !== null">
-                {{ percent(entry.process.cpu) }}
                 <span class="res-bar" aria-hidden="true"
                   ><span :style="{ width: cpuWidth(entry.process) }"
                 /></span>
+                {{ percent(entry.process.cpu) }}
               </template>
               <template v-else>—</template>
             </span>
@@ -968,7 +953,7 @@
             }"
             v-tip="
               entry.row.locked
-                ? `${entry.row.name} runs as ${entry.row.user || 'another user'}; its use needs administrator rights to read`
+                ? `${entry.row.label} runs as ${entry.row.user || 'another user'}; its use needs administrator rights to read`
                 : undefined
             "
             @mousedown.prevent
@@ -976,10 +961,10 @@
             @dblclick="switchTo(entry.row)"
           >
             <span class="res-name">
-              <RowIcon :icon="entry.row.icon" :label="entry.row.name" :size="20" />
+              <RowIcon :icon="entry.row.icon" :label="entry.row.label" :size="20" />
               <span class="res-text">
                 <span class="label">
-                  {{ entry.row.name }}
+                  {{ entry.row.label }}
                   <button
                     v-if="entry.row.pids.length > 1"
                     type="button"
@@ -1004,18 +989,18 @@
             <span v-if="confirming?.key === entry.row.key" class="res-confirm">
               {{
                 entry.row.relaunch && !confirming.force
-                  ? `${RELAUNCH} ${entry.row.name}?`
-                  : `${confirming.force ? 'Force quit' : 'Quit'} ${entry.row.name}?`
+                  ? `${RELAUNCH} ${entry.row.label}?`
+                  : `${confirming.force ? 'Force quit' : 'Quit'} ${entry.row.label}?`
               }}
               <KeyHints :hints="CONFIRM_HINTS" />
             </span>
             <template v-else>
               <span class="res-cpu">
                 <template v-if="entry.row.cpu !== null">
-                  {{ percent(entry.row.cpu) }}
                   <span class="res-bar" aria-hidden="true"
                     ><span :style="{ width: cpuWidth(entry.row) }"
                   /></span>
+                  {{ percent(entry.row.cpu) }}
                 </template>
                 <template v-else>—</template>
               </span>

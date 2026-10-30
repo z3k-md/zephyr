@@ -528,13 +528,15 @@
 /* Long text panes inside the bar scroll, but never show a scrollbar. */
 .results,
 .clip-list,
-.shell-output {
+.shell-output,
+.res-list {
   scrollbar-width: none;
 }
 
 .results::-webkit-scrollbar,
 .clip-list::-webkit-scrollbar,
-.shell-output::-webkit-scrollbar {
+.shell-output::-webkit-scrollbar,
+.res-list::-webkit-scrollbar {
   display: none;
 }
 

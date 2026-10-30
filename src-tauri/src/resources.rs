@@ -32,7 +32,11 @@ const RELAUNCHED: &[&str] = &["Finder", "Dock", "explorer"];
 pub struct Row {
     /// Stable across ticks, so the selection follows the app, not its position.
     pub key: String,
+    /// What quit, relaunch and the protected list go by: the program (Windows, without
+    /// ".exe") or the app bundle's name.
     pub name: String,
+    /// What the list shows: on Windows, the program's own name for itself ("Google Chrome").
+    pub label: String,
     /// For a command-line program: its command and folder ("bun dev · ~/code/zephyr").
     pub subtitle: String,
     /// `app:<bundle path>` for an app, else a glyph.
@@ -100,6 +104,7 @@ struct Table {
 struct Identity {
     key: String,
     name: String,
+    label: String,
     icon: String,
     path: String,
     command: String,
@@ -126,6 +131,7 @@ impl Identity {
         if let Some((bundle, stem)) = process.exe().and_then(app_bundle) {
             return Some(Identity {
                 key: format!("app:{bundle}"),
+                label: stem.clone(),
                 name: stem,
                 icon: format!("app:{bundle}"),
                 path: bundle,
@@ -134,7 +140,7 @@ impl Identity {
                 user,
             });
         }
-        let label = if cfg!(windows) {
+        let program = if cfg!(windows) {
             name.trim_end_matches(".exe").to_string()
         } else {
             name.clone()
@@ -153,7 +159,7 @@ impl Identity {
                 .filter(|cwd| cwd != "/")
                 .map(|cwd| format!(" · {cwd}"))
                 .unwrap_or_default();
-            format!("{label} {args}{folder}")
+            format!("{program} {args}{folder}")
         } else {
             String::new()
         };
@@ -167,9 +173,11 @@ impl Identity {
         } else {
             "glyph:terminal".to_string()
         };
+        let label = described(&path).unwrap_or_else(|| program.clone());
         Some(Identity {
             key: format!("proc:{}", name.to_lowercase()),
-            name: label,
+            name: program,
+            label,
             icon,
             path,
             command: command.join(" "),
@@ -183,6 +191,7 @@ impl Identity {
         Row {
             key: self.key.clone(),
             name: self.name.clone(),
+            label: self.label.clone(),
             subtitle: self.subtitle.clone(),
             icon: self.icon.clone(),
             pids: Vec::new(),
@@ -236,6 +245,27 @@ pub(crate) fn app_bundle(exe: &Path) -> Option<(String, String)> {
             return Some((path.to_string_lossy().into_owned(), stem.to_string()));
         }
     }
+    None
+}
+
+/// Windows: the program's own name for itself, read once per program ("svchost" runs dozens
+/// of times). Elsewhere a program goes by its name.
+#[cfg(windows)]
+fn described(path: &str) -> Option<String> {
+    static LABELS: Mutex<Option<HashMap<String, Option<String>>>> = Mutex::new(None);
+    if path.is_empty() {
+        return None;
+    }
+    let mut labels = LABELS.lock().unwrap_or_else(|poison| poison.into_inner());
+    labels
+        .get_or_insert_with(HashMap::new)
+        .entry(path.to_string())
+        .or_insert_with(|| crate::util::file_description(path))
+        .clone()
+}
+
+#[cfg(not(windows))]
+fn described(_path: &str) -> Option<String> {
     None
 }
 
@@ -302,6 +332,7 @@ pub fn snapshot(sort: &str, filter: &str, limit: usize) -> Snapshot {
     rows.retain(|row| {
         filter.is_empty()
             || row.name.to_lowercase().contains(&filter)
+            || row.label.to_lowercase().contains(&filter)
             || row.path.to_lowercase().contains(&filter)
             || row.pids.iter().any(|pid| pid.to_string() == filter)
     });
@@ -551,13 +582,13 @@ fn by_value(left: &Row, right: &Row, sort: &str) -> std::cmp::Ordering {
         }
     };
     if sort == "name" {
-        return left.name.to_lowercase().cmp(&right.name.to_lowercase());
+        return left.label.to_lowercase().cmp(&right.label.to_lowercase());
     }
     match (value(left), value(right)) {
-        (Some(a), Some(b)) => b.total_cmp(&a).then_with(|| left.name.cmp(&right.name)),
+        (Some(a), Some(b)) => b.total_cmp(&a).then_with(|| left.label.cmp(&right.label)),
         (Some(_), None) => std::cmp::Ordering::Less,
         (None, Some(_)) => std::cmp::Ordering::Greater,
-        (None, None) => left.name.cmp(&right.name),
+        (None, None) => left.label.cmp(&right.label),
     }
 }
 
@@ -1151,6 +1182,7 @@ mod tests {
         Row {
             key: name.into(),
             name: name.into(),
+            label: name.into(),
             subtitle: String::new(),
             icon: String::new(),
             pids: Vec::new(),

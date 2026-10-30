@@ -841,6 +841,8 @@ fn build_settings(app: &AppHandle, section: Option<&str>) -> Result<(), String> 
     let window = window.build().map_err(|err| err.to_string())?;
     #[cfg(windows)]
     no_window_menu(app, &window);
+    #[cfg(windows)]
+    crate::volume_keys::guard(&window);
     open_on_active_space(app, &window);
     // Closing only hides it, so the next open is instant.
     let hidden = window.clone();

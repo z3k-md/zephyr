@@ -46,6 +46,7 @@
     captureRecording,
     openUrl,
     resourcesQuit,
+    volumeKey,
   } from '../api';
   import ResourcesView from './ResourcesView.vue';
   import NetworkView from './NetworkView.vue';
@@ -185,6 +186,11 @@
     window.clearTimeout(volumeTimer);
     volumeTimer = window.setTimeout(() => (volumeShown.value = null), 2000);
   }
+  const VOLUME_KEYS: Record<string, 'up' | 'down' | 'mute'> = {
+    AudioVolumeUp: 'up',
+    AudioVolumeDown: 'down',
+    AudioVolumeMute: 'mute',
+  };
   function openSoundFromDrawer() {
     volumeShown.value = null;
     openView('sound');
@@ -1051,6 +1057,13 @@
     if (event.key === 'Escape' && volumeShown.value) {
       event.preventDefault();
       volumeShown.value = null;
+      return;
+    }
+    // With the bar in front, the volume keys reach the page instead of Zephyr's hook.
+    const volume = VOLUME_KEYS[event.key];
+    if (volume && snapshot.value?.volumeKeys) {
+      event.preventDefault();
+      void volumeKey(volume, event.altKey);
       return;
     }
     // A computer asking to join sync: never plain Enter, only ⌘Y and ⌘N.

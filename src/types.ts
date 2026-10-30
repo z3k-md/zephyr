@@ -433,7 +433,10 @@ export interface SystemStats {
 export interface ResourceRow {
   /** Stable across ticks, so the selection follows the app, not its position. */
   key: string;
+  /** What quit and relaunch go by: the program ("chrome") or the app's name. */
   name: string;
+  /** What the list shows ("Google Chrome"). */
+  label: string;
   /** A lone command-line program: what it runs and where ("bun dev · ~/code/zephyr"). */
   subtitle: string;
   icon: string;

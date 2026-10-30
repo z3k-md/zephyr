@@ -21,7 +21,7 @@ pub struct Shown {
 }
 
 #[cfg(windows)]
-pub use win::{open_sound, set_enabled, set_position, wheel};
+pub use win::{guard, open_sound, press, set_enabled, set_position, wheel};
 
 #[cfg(not(windows))]
 pub fn set_enabled(_app: &tauri::AppHandle, _on: bool) {}
@@ -29,6 +29,8 @@ pub fn set_enabled(_app: &tauri::AppHandle, _on: bool) {}
 pub fn set_position(_position: &str) {}
 #[cfg(not(windows))]
 pub fn wheel(_delta: f32) {}
+#[cfg(not(windows))]
+pub fn press(_key: &str, _alt: bool) {}
 #[cfg(not(windows))]
 pub fn open_sound(_app: &tauri::AppHandle) {}
 
@@ -128,6 +130,118 @@ mod win {
         send(Press::Wheel(delta));
     }
 
+    /// A volume key the bar's page got: with Zephyr's own window in front, the hook never
+    /// sees the volume keys, so the bar hands them on itself.
+    pub fn press(key: &str, alt: bool) {
+        if !ENABLED.load(Ordering::SeqCst) {
+            return;
+        }
+        log::info!("volume key {key} from the bar's page");
+        let key = match key {
+            "up" => Key::Up,
+            "down" => Key::Down,
+            _ => Key::Mute,
+        };
+        from_window(key, alt, Source::Page);
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Key {
+        Up,
+        Down,
+        Mute,
+    }
+
+    /// Which of the two ways a key reached a Zephyr window, when the hook didn't see it.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Source {
+        Page,
+        Command,
+    }
+
+    /// The last key a Zephyr window handed on, so the same press arriving the other way
+    /// (the page's keydown and the window's WM_APPCOMMAND) counts once.
+    static LAST_FROM_WINDOW: Mutex<Option<(Key, Source, Instant)>> = Mutex::new(None);
+    const SAME_PRESS: Duration = Duration::from_millis(120);
+
+    fn from_window(key: Key, alt: bool, source: Source) {
+        let now = Instant::now();
+        let mut last = LAST_FROM_WINDOW
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if let Some((was, from, at)) = *last
+            && was == key
+            && from != source
+            && now.duration_since(at) < SAME_PRESS
+        {
+            *last = None;
+            return;
+        }
+        *last = Some((key, source, now));
+        drop(last);
+        send(match key {
+            Key::Up => Press::Up { alt },
+            Key::Down => Press::Down { alt },
+            Key::Mute => Press::Mute { alt },
+        });
+    }
+
+    /// With a Zephyr window in front, the hook doesn't see the volume keys: the window gets
+    /// them, and lets Windows change the level and show its flyout (WM_APPCOMMAND, passed up
+    /// from the webview). Zephyr's windows take those commands here instead.
+    pub fn guard(window: &tauri::WebviewWindow) {
+        use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_MENU};
+        use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
+        use windows::Win32::UI::WindowsAndMessaging::WM_APPCOMMAND;
+
+        const APPCOMMAND_VOLUME_MUTE: u32 = 8;
+        const APPCOMMAND_VOLUME_DOWN: u32 = 9;
+        const APPCOMMAND_VOLUME_UP: u32 = 10;
+
+        unsafe extern "system" fn proc(
+            hwnd: HWND,
+            message: u32,
+            wparam: WPARAM,
+            lparam: LPARAM,
+            _id: usize,
+            _data: usize,
+        ) -> LRESULT {
+            if message == WM_APPCOMMAND && ENABLED.load(Ordering::Relaxed) {
+                // GET_APPCOMMAND_LPARAM: the high word, less the device bits.
+                let command = ((lparam.0 as u32) >> 16) & 0x0FFF;
+                let key = match command {
+                    APPCOMMAND_VOLUME_UP => Some(Key::Up),
+                    APPCOMMAND_VOLUME_DOWN => Some(Key::Down),
+                    APPCOMMAND_VOLUME_MUTE => Some(Key::Mute),
+                    _ => None,
+                };
+                if let Some(key) = key {
+                    // SAFETY: a plain key state read.
+                    let alt = unsafe { GetKeyState(i32::from(VK_MENU.0)) } < 0;
+                    log::info!("volume key {key:?} from a Zephyr window");
+                    from_window(key, alt, Source::Command);
+                    // Handled, so Windows neither changes the level nor shows its flyout.
+                    return LRESULT(1);
+                }
+            }
+            // SAFETY: the default handling for every other message.
+            unsafe { DefSubclassProc(hwnd, message, wparam, lparam) }
+        }
+
+        let Ok(hwnd) = window.hwnd() else {
+            return;
+        };
+        let hwnd = hwnd.0 as isize;
+        // A window is subclassed on the thread that owns it.
+        let _ = window.app_handle().run_on_main_thread(move || {
+            // SAFETY: a live window handle and a subclass procedure that lives as long as
+            // the app.
+            unsafe {
+                let _ = SetWindowSubclass(HWND(hwnd as *mut _), Some(proc), 0x766f6c, 0);
+            }
+        });
+    }
+
     /// A click on the overlay: the Sound view, in the bar.
     pub fn open_sound(app: &AppHandle) {
         HIDE.cancel();
@@ -198,6 +312,10 @@ mod win {
     fn work(app: AppHandle, presses: mpsc::Receiver<Press>) {
         let mut picked: Option<Picked> = None;
         for press in presses {
+            log::info!(
+                "volume key {press:?}, bar open: {}",
+                crate::stats::bar_visible()
+            );
             if let Press::Reset = press {
                 picked = None;
                 continue;
@@ -305,6 +423,7 @@ mod win {
             return;
         };
         // SAFETY: the overlay's own window handle; a stale one only makes the calls fail.
+        // Moved and sized first, then shown, so a resize never shows half drawn.
         unsafe {
             let _ = SetWindowPos(
                 HWND(hwnd.0),
@@ -313,7 +432,7 @@ mod win {
                 y,
                 width,
                 height,
-                SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                SWP_NOACTIVATE,
             );
             let _ = SetWindowPos(
                 HWND(hwnd.0),
@@ -322,7 +441,7 @@ mod win {
                 0,
                 0,
                 0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
             );
         }
     }
@@ -370,6 +489,11 @@ mod win {
                 .map_err(|err| err.to_string())?;
         if let Ok(hwnd) = overlay.hwnd() {
             popup(HWND(hwnd.0));
+            // Dropping the frame grows the client area, but the page keeps the old size (a
+            // title bar short, which cut off the strip) until Tauri sees a resize; so resize
+            // through Tauri, there and back.
+            let _ = overlay.set_size(tauri::LogicalSize::new(WIDTH, HEIGHT + 1.0));
+            let _ = overlay.set_size(tauri::LogicalSize::new(WIDTH, HEIGHT));
         }
         Ok(())
     }

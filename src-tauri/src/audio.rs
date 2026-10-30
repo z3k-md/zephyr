@@ -274,7 +274,7 @@ mod win {
         names
             .entry(session.key.clone())
             .or_insert_with(|| {
-                file_description(&session.path).unwrap_or_else(|| stem(&session.path))
+                crate::util::file_description(&session.path).unwrap_or_else(|| stem(&session.path))
             })
             .clone()
     }
@@ -294,61 +294,6 @@ mod win {
             .or_else(|| file.strip_suffix(".EXE"))
             .unwrap_or(file)
             .to_string()
-    }
-
-    /// The program's own name for itself ("Google Chrome"), from its version info.
-    fn file_description(path: &str) -> Option<String> {
-        use windows::Win32::Storage::FileSystem::{
-            GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW,
-        };
-        let wide: Vec<u16> = path.encode_utf16().chain([0]).collect();
-        // SAFETY: a buffer sized by the first call, and pointers into it from VerQueryValue,
-        // read only while the buffer lives.
-        unsafe {
-            let size = GetFileVersionInfoSizeW(PCWSTR(wide.as_ptr()), None);
-            if size == 0 {
-                return None;
-            }
-            let mut block = vec![0u8; size as usize];
-            GetFileVersionInfoW(PCWSTR(wide.as_ptr()), None, size, block.as_mut_ptr() as _).ok()?;
-            let mut pointer = std::ptr::null_mut();
-            let mut length = 0u32;
-            let translation: Vec<u16> = "\\VarFileInfo\\Translation"
-                .encode_utf16()
-                .chain([0])
-                .collect();
-            let (language, page) = if VerQueryValueW(
-                block.as_ptr() as _,
-                PCWSTR(translation.as_ptr()),
-                &mut pointer,
-                &mut length,
-            )
-            .as_bool()
-                && length >= 4
-            {
-                let pair = pointer as *const u16;
-                (*pair, *pair.add(1))
-            } else {
-                (0x0409, 0x04b0)
-            };
-            let query = format!("\\StringFileInfo\\{language:04x}{page:04x}\\FileDescription");
-            let query: Vec<u16> = query.encode_utf16().chain([0]).collect();
-            if !VerQueryValueW(
-                block.as_ptr() as _,
-                PCWSTR(query.as_ptr()),
-                &mut pointer,
-                &mut length,
-            )
-            .as_bool()
-                || length == 0
-            {
-                return None;
-            }
-            let text = std::slice::from_raw_parts(pointer as *const u16, length as usize);
-            let text = String::from_utf16_lossy(text);
-            let text = text.trim_end_matches('\0').trim();
-            (!text.is_empty()).then(|| text.to_string())
-        }
     }
 
     fn endpoint_volume(device: &IMMDevice) -> Option<IAudioEndpointVolume> {

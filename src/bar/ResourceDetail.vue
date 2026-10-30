@@ -72,9 +72,9 @@
 <template>
   <section class="res-detail" aria-label="Process details">
     <div class="res-detail-head">
-      <RowIcon :icon="row.icon" :label="row.name" :size="32" />
+      <RowIcon :icon="row.icon" :label="row.label" :size="32" />
       <div class="res-detail-title">
-        <b>{{ row.name }}</b>
+        <b>{{ row.label }}</b>
         <span>{{ row.path || detail?.command || 'Path needs administrator rights' }}</span>
       </div>
       <button type="button" class="chip" @mousedown.prevent @click="emit('close')">

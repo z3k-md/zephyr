@@ -75,3 +75,9 @@ pub fn osd_wheel(delta: f32) {
 pub fn osd_open_sound(app: AppHandle) {
     crate::volume_keys::open_sound(&app);
 }
+
+/// A volume key pressed with the bar in front, where the hook doesn't see it.
+#[tauri::command]
+pub fn volume_key(key: String, alt: bool) {
+    crate::volume_keys::press(&key, alt);
+}

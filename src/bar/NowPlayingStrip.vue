@@ -9,7 +9,7 @@
 
   // What's playing, at the end of the search row: one card with the cover (or the playing
   // app's icon), the title and artist, and previous, play/pause and next, under one hover
-  // highlight. Clicking the title switches to what's playing; the scroll wheel over the card
+  // highlight. Right-clicking the card switches to what's playing; the scroll wheel over it
   // turns that app up or down (its volume mixer level on Windows, Spotify's or Music's own
   // volume on macOS), and the level shows in place of the artist.
 
@@ -53,14 +53,14 @@
 </script>
 
 <template>
-  <span class="now-playing" @wheel.prevent="onWheel">
+  <span class="now-playing" @wheel.prevent="onWheel" @contextmenu.prevent="emit('focus')">
     <!-- mousedown.prevent keeps the typing caret in the bar's field. -->
     <button
       type="button"
       class="now-playing-title"
-      v-tip="`Switch to ${track.title}`"
+      v-tip="`${track.playing ? 'Pause' : 'Play'} · right-click to switch to it`"
       @mousedown.prevent
-      @click="emit('focus')"
+      @click="emit('toggle')"
     >
       <img v-if="cover" class="now-playing-cover" :src="cover" alt="" />
       <svg v-else class="now-playing-cover glyph" viewBox="0 0 24 24" aria-hidden="true">

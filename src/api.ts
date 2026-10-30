@@ -751,3 +751,8 @@ export function osdOpenSound(): Promise<void> {
 export function saveVolumeOverlay(position: string): Promise<Snapshot> {
   return invoke<Snapshot>('save_volume_overlay', { position });
 }
+
+/** A volume key pressed with the bar in front, handed to Zephyr's volume keys. */
+export function volumeKey(key: 'up' | 'down' | 'mute', alt: boolean): Promise<void> {
+  return invoke('volume_key', { key, alt });
+}

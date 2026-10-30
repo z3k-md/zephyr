@@ -381,14 +381,13 @@ pub fn browser_exe(source_app: &str) -> Option<&'static str> {
     .map(|(_, exe)| exe)
 }
 
-/// Brings the app playing the song forward: the browser tab through the extension, or the
-/// app's own window.
+/// Brings the playing app forward before asking its extension to select the media tab.
+/// A successful extension reply alone doesn't guarantee Windows foreground activation.
 pub fn focus_source(source_app: &str, title: &str) -> bool {
     if let Some(exe) = browser_exe(source_app) {
-        if crate::browser::focus_playing(title) == Some(true) {
-            return true;
-        }
-        return focus_app(exe);
+        let app_focused = focus_app(exe);
+        let tab_focused = crate::browser::focus_playing(title) == Some(true);
+        return app_focused || tab_focused;
     }
     focus_app(source_app)
 }
