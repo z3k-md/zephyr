@@ -3,7 +3,7 @@ use tauri::AppHandle;
 use super::save;
 use crate::state::Persisted;
 
-/// The last weather fetched for the Today line, if any.
+/// The last weather fetched for the footer, if any.
 #[tauri::command]
 pub fn weather() -> Option<crate::weather::Forecast> {
     crate::weather::latest()

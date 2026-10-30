@@ -1,6 +1,7 @@
-//! What's playing on this computer, for the strip in the bar's footer: the song or video,
-//! its artwork, and play/pause, next and previous. Each platform lists its media sessions
-//! through [`Sessions`]; the choosing, the artwork cache and the events to the bar are shared.
+//! What's playing on this computer, for the strip at the end of the search row:
+//! the song or video, its artwork, and play/pause, next and previous. Each platform lists its
+//! media sessions through [`Sessions`]; the choosing, the artwork cache and the events to the
+//! bar are shared.
 
 // Windows and macOS have backends; elsewhere the shared watcher is built but unused.
 #![cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]

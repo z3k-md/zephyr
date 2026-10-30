@@ -5,29 +5,81 @@
 
 A launcher bar for Windows and macOS. Summon it over any app and type to open an app, a setting, a file or a link, or search Google.
 
-`Alt+Space` opens the bar (`Command+Space` on a Mac keyboard). Typing the start of an app's name (`chr`, `excel`, or initials like `vsc`) selects that app, and Enter opens it; other free text is searched on Google, and a link (`example.com/docs`) opens directly. Picking the Google row for text that matched an app sends it to the web, and Zephyr remembers that choice for the same text next time. `!app` searches only apps.
+## Using the bar
 
-`!set` searches settings: Windows Settings pages and Control Panel tools, macOS System Settings panes, and Zephyr's own settings (`!set dark mode`, `!set bluetooth`, `display !set`, `!set zephyr shortcut`). Enter opens the top match. Without `!set`, a clear match shows as at most two rows under the other results, and Enter never picks one unless you arrow to it.
+`Alt+Space` opens the bar (`Command+Space` on a Mac keyboard). Typing the start of an app's name (`chr`, `excel`, or initials like `vsc`) selects that app, and Enter opens it; other free text is searched on Google, and a link (`example.com/docs`) opens directly. Picking the Google row for text that matched an app sends it to the web, and Zephyr remembers that choice for the same text next time. Shift+Enter on a search opens it in Google's AI Mode; on a browser, it opens a private window.
 
-Shift+Enter on a Google search opens it in Google's AI Mode instead of the usual results.
+- Alt+1..9 (⌘1..9) runs the Nth row; hold the key to see the numbers. → or End accepts the faint type-ahead.
+- Ctrl+K (⌘K) lists more actions for the selected row: copy the link, text or path, show a file in its folder, quit an app, or give it a hotkey or alias.
+- Ctrl+drag (⌘-drag) moves the bar, with a snap grid; it reopens where you left it.
+- Ctrl+S (⌘S) opens Settings. Esc steps back to the main bar.
+- The empty bar shows recent searches, recent apps, the utilities you use most, and your IP address.
+- Reopening the bar soon after closing it returns to the view you were in (Settings > General).
+- The footer shows CPU, GPU and memory, network trouble and the weather; click any of them for more.
 
-Math, unit conversions and time zones answer in the top row as you type (`12 * 7`, `5 km to miles`, `time in tokyo`, `3pm pst to cet`); Enter copies the answer. Ctrl+K (⌘K on a Mac) lists more actions for the selected row: copy the link, text or path, or show a file in its folder.
+### Scopes
+
+A `!word` before or after the text narrows the search. Unknown `!words` stay as search text.
+
+| Scope         | Searches                                                                                                                |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `!app`        | Apps and installed Steam games                                                                                          |
+| `!set`        | Windows Settings and Control Panel, macOS System Settings, and Zephyr's own settings (`!set bluetooth`, `display !set`) |
+| `!f`, `!file` | File and folder names under your home folder                                                                            |
+| `!bm`         | Bookmarks from Chrome, Edge, Brave, Vivaldi, Arc and other Chromium browsers                                            |
+| `!note`       | Notes, or a new one                                                                                                     |
+| `!clip`       | Clipboard history                                                                                                       |
+| `!sh`, `>`    | The shell                                                                                                               |
+| `!type`       | The typing test                                                                                                         |
+
+Without a scope, a clear match for a setting, file or bookmark shows as at most two rows under the other results, and Enter never picks one unless you arrow to it. Only files you've opened from Zephyr before appear unscoped.
+
+### Answers
+
+These answer in the top row as you type; Enter copies the answer.
+
+- Math and units: `12 * 7`, `5 km to miles`
+- Time zones: `time in tokyo`, `3pm pst to cet`
+- Dates and timestamps: `unix`, `1760000000 unix`, `week`, `day of year`, `now iso`
+- Network: `ip` shows local and public addresses; `port 3000` or `:3000` shows what's listening there and can quit it; `ports` lists every listening port
+
+### Apps, windows and launch groups
+
+- On Windows a running app's row switches to its window, and typing part of a window title finds it. Ctrl+K switches to another window, opens a new one, closes it or quits the app. On macOS, Ctrl+K quits a running app.
+- **Launch groups** open several apps, links and folders at once ("Coding", "Gaming"); apps already running come forward. Set them up in Settings > Launch groups and run them by name or hotkey.
+- **Hotkeys and aliases**: any command, app, bookmark, setting or launch group can have a global hotkey or an alias typed in the bar (Settings > Shortcuts, or Ctrl+K > Set hotkey or alias).
+- **Power**: `shutdown`, `restart`, `sleep`, `lock`, `sign out`, and on Windows `bios` (restart to UEFI). Shutting down, restarting and signing out need a second Enter. `shutdown in 30m` or `restart at 11pm` schedules one, and `cancel shutdown` stops it.
+- With the [browser extension](extension/README.md), opening a bookmark switches to its tab when it's already open.
+
+### Files
+
+`!f budget` searches file and folder names under your home folder. Enter opens the top match, Ctrl+Enter shows it in Explorer or Finder, Ctrl+Shift+C copies its path, Shift+Space previews it, and you can drag a row out into another app. Hidden folders, `.gitignore`d files, `node_modules` and build caches are skipped; Settings > Files picks other folders or leaves some out.
+
+### Utilities
+
+Type a utility's name to open it.
+
+- **Clipboard history**: ⌘⇧V (Alt+Shift+V on Windows) or `!clip` searches everything you've copied, including text, links, colors, images and files, and the text in copied screenshots. Enter pastes into the app you're in, Ctrl+Enter (⌘Enter) copies, Shift+Enter pastes as plain text. History stays on this computer, encrypted with a key in the system keychain (Credential Manager on Windows), and copies from password managers are never recorded.
+- **Notes**: ⌥⌘N (Ctrl+Alt+N on Windows) opens a small rich-text note in its own window, and `!note` finds one or starts one. Notes are HTML files in Zephyr's settings folder, and open notes come back at the next start.
+- **Shell**: `>` or `!sh` runs commands in the bar (Git Bash, PowerShell or WSL on Windows; your login shell on macOS). Ctrl+C stops a command, and Ctrl+Enter hands off to a real terminal.
+- **Resources** (`top`): CPU, memory, GPU and network over the last 15 minutes, with apps above background processes. Ctrl+Backspace quits a process.
+- **Network** (`ping`): what's wrong right now, with router, internet and DNS latency over time.
+- **Speed test**: download, upload and lag under load, from Cloudflare.
+- **Weather**: `weather` or `weather in tokyo`, from Open-Meteo.
+- **Now playing**: what's playing shows at the end of the search row, with play, pause and skip. Ctrl+Space plays or pauses, and scrolling over it changes the volume.
+- **Typing test**: `!type` runs a Monkeytype-style test (15/30/60 seconds or 10/25/50 words) with WPM, accuracy, consistency and personal bests.
+
+### Links
 
 Other apps and scripts can drive Zephyr with links: `zephyr://open?q=text` shows the bar with text typed in, and `zephyr://search?q=crispr` searches the web for it (or opens it, when it is a web address). Links never launch apps, open files or reach the shell. On macOS the link scheme comes from the installed app.
 
-**Clipboard history**: press ⌘⇧V (Alt+Shift+V on Windows) or type `!clip` to search everything you've copied, including text, links, colors, images and files. Text in copied screenshots is searchable too. Enter pastes into the app you're in, Ctrl+Enter (⌘Enter) copies, Shift+Enter pastes as plain text, and Ctrl+K (⌘K) shows more. History stays on this computer, encrypted with a key in the system keychain (Credential Manager on Windows), and copies from password managers are never recorded.
+### Sync (in progress)
 
-**Notes**: press ⌥⌘N (Ctrl+Alt+N on Windows) for a small always-on-top notes window with rich text, or type `!note` to find a note or start one. Notes are HTML files in Zephyr's settings folder.
-
-**Typing test**: `!type` runs a Monkeytype-style test (15/30/60 seconds or 10/25/50 words) with WPM, accuracy, consistency and personal bests.
-
-Reopening the bar soon after closing it returns to the view you were in. The window is set in Settings > General. Esc steps back to the main bar, and with nothing typed the bar offers clipboard history and notes.
-
-`!f` (or `!file`, `!files`) searches file and folder names under your home folder (`!f budget`, `!f taxes 2025 return`). Enter opens the top match with its default app, `Ctrl+Enter` shows it in Explorer or Finder, and `Ctrl+Shift+C` copies its path. Hidden folders, `.gitignore`d files, `node_modules` and build caches are skipped; Settings > Files picks other folders or leaves some out. Without `!f`, only files you've opened from Zephyr before can appear, sharing the same two rows as settings.
+Settings > Sync signs in with Google, sets up end-to-end encryption keys and a recovery key, and approves new computers from one you already use. Syncing notes and clipboard history comes next; nothing syncs yet.
 
 ## Install
 
-Download the latest installer from [Releases](https://github.com/z3k-md/zephyr/releases/latest): the `-setup.exe` for Windows, or the `.dmg` for macOS. Installed copies check for updates at launch and every six hours, and install them automatically. Settings and the tray menu also have **Check for updates**.
+Download the latest installer from [Releases](https://github.com/z3k-md/zephyr/releases/latest): the `-setup.exe` for Windows, or the `.dmg` for macOS. Installed copies check for updates shortly after launch and whenever the bar opens (at most every few minutes), and install them automatically. Settings and the tray menu also have **Check for updates**.
 
 The Windows installer isn't Authenticode-signed, so SmartScreen warns about an unrecognized app the first time: choose **More info > Run anyway**. Updates are still verified against Zephyr's own updater key.
 

@@ -130,7 +130,7 @@
   <section id="section-sync">
     <h2>
       Sync
-      <InfoTip text="Notes and clipboard, end-to-end encrypted." />
+      <InfoTip text="Device keys and approval now; notes and clipboard sync next." />
     </h2>
     <p v-if="error" class="notice">{{ error }}</p>
 

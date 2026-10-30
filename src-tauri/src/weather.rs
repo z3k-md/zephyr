@@ -1,4 +1,4 @@
-//! Weather for the empty bar's Today line and the "weather" card, from Open-Meteo, which
+//! Weather for the footer and the "weather" card, from Open-Meteo, which
 //! needs no key. A background thread fetches it at start and every 30 minutes after, never
 //! on summon, and the last reply is kept in the app's data folder so the bar has it at once
 //! after a restart. The place is the one set in Settings, or else where the computer's IP
