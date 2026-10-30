@@ -313,10 +313,169 @@ pub async fn warm() {
         .await;
 }
 
+/// A city from the geocoder, with its country code for matching "stockholm se".
+#[derive(Debug, Clone)]
+struct Found {
+    place: Place,
+    country_code: String,
+}
+
 /// Cities whose name starts with `text`, for the Settings field.
 pub async fn places(text: &str) -> Result<Vec<Place>, String> {
+    let text = text.trim();
+    if text.chars().count() < 2 {
+        return Ok(Vec::new());
+    }
+    Ok(search(text)
+        .await?
+        .into_iter()
+        .take(6)
+        .map(|found| found.place)
+        .collect())
+}
+
+/// The place typed in the bar: a city on its own ("raleigh"), or with its state, province or
+/// country after it ("raleigh nc", "raleigh, north carolina", "stockholm sweden", "leeds uk").
+async fn place_for(text: &str) -> Result<Option<Place>, String> {
+    let words: Vec<&str> = text
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|word| !word.is_empty())
+        .collect();
+    if words.join(" ").chars().count() < 2 {
+        return Ok(None);
+    }
+    // The last words as where it is first, up to three ("south carolina", "united kingdom"):
+    // a village called "San José Costa Rica" shouldn't beat San José in Costa Rica. A split
+    // only counts when the place really is there, so "new york" still falls through.
+    for split in (1..words.len())
+        .rev()
+        .filter(|split| words.len() - split <= 3)
+    {
+        let (city, qualifier) = (words[..split].join(" "), words[split..].join(" "));
+        if city.chars().count() < 2 {
+            continue;
+        }
+        if let Some(found) = search(&city)
+            .await?
+            .into_iter()
+            .find(|found| is_in(found, &qualifier))
+        {
+            return Ok(Some(found.place));
+        }
+    }
+    // Then the whole text as a city's name.
+    Ok(search(&words.join(" "))
+        .await?
+        .into_iter()
+        .next()
+        .map(|found| found.place))
+}
+
+/// Whether `qualifier` names where a city is: its region or country, by name or code.
+fn is_in(found: &Found, qualifier: &str) -> bool {
+    let qualifier = qualifier.replace('.', "").to_lowercase();
+    let qualifier = qualifier.as_str();
+    let code = found.country_code.to_lowercase();
+    let region = found.place.region.to_lowercase();
+    region == qualifier
+        || found.place.country.to_lowercase() == qualifier
+        || code == qualifier
+        || country_alias(qualifier) == Some(code.as_str())
+        || REGIONS.iter().any(|(country, short, name)| {
+            *short == qualifier && *country == code && *name == region
+        })
+}
+
+/// States and provinces by their abbreviations, with their country: "nc" is North Carolina.
+const REGIONS: &[(&str, &str, &str)] = &[
+    ("us", "al", "alabama"),
+    ("us", "ak", "alaska"),
+    ("us", "az", "arizona"),
+    ("us", "ar", "arkansas"),
+    ("us", "ca", "california"),
+    ("us", "co", "colorado"),
+    ("us", "ct", "connecticut"),
+    ("us", "de", "delaware"),
+    ("us", "dc", "washington, d.c."),
+    ("us", "fl", "florida"),
+    ("us", "ga", "georgia"),
+    ("us", "hi", "hawaii"),
+    ("us", "id", "idaho"),
+    ("us", "il", "illinois"),
+    ("us", "in", "indiana"),
+    ("us", "ia", "iowa"),
+    ("us", "ks", "kansas"),
+    ("us", "ky", "kentucky"),
+    ("us", "la", "louisiana"),
+    ("us", "me", "maine"),
+    ("us", "md", "maryland"),
+    ("us", "ma", "massachusetts"),
+    ("us", "mi", "michigan"),
+    ("us", "mn", "minnesota"),
+    ("us", "ms", "mississippi"),
+    ("us", "mo", "missouri"),
+    ("us", "mt", "montana"),
+    ("us", "ne", "nebraska"),
+    ("us", "nv", "nevada"),
+    ("us", "nh", "new hampshire"),
+    ("us", "nj", "new jersey"),
+    ("us", "nm", "new mexico"),
+    ("us", "ny", "new york"),
+    ("us", "nc", "north carolina"),
+    ("us", "nd", "north dakota"),
+    ("us", "oh", "ohio"),
+    ("us", "ok", "oklahoma"),
+    ("us", "or", "oregon"),
+    ("us", "pa", "pennsylvania"),
+    ("us", "ri", "rhode island"),
+    ("us", "sc", "south carolina"),
+    ("us", "sd", "south dakota"),
+    ("us", "tn", "tennessee"),
+    ("us", "tx", "texas"),
+    ("us", "ut", "utah"),
+    ("us", "vt", "vermont"),
+    ("us", "va", "virginia"),
+    ("us", "wa", "washington"),
+    ("us", "wv", "west virginia"),
+    ("us", "wi", "wisconsin"),
+    ("us", "wy", "wyoming"),
+    ("ca", "ab", "alberta"),
+    ("ca", "bc", "british columbia"),
+    ("ca", "mb", "manitoba"),
+    ("ca", "nb", "new brunswick"),
+    ("ca", "nl", "newfoundland and labrador"),
+    ("ca", "ns", "nova scotia"),
+    ("ca", "on", "ontario"),
+    ("ca", "pe", "prince edward island"),
+    ("ca", "qc", "quebec"),
+    ("ca", "sk", "saskatchewan"),
+    ("au", "nsw", "new south wales"),
+    ("au", "vic", "victoria"),
+    ("au", "qld", "queensland"),
+    ("au", "wa", "western australia"),
+    ("au", "sa", "south australia"),
+    ("au", "tas", "tasmania"),
+    ("au", "act", "australian capital territory"),
+];
+
+/// Everyday names for countries the geocoder names otherwise: "uk" is GB.
+fn country_alias(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "usa" | "america" | "united states of america" => "us",
+        "uk" | "britain" | "great britain" | "england" | "scotland" | "wales" => "gb",
+        "uae" | "emirates" => "ae",
+        "holland" => "nl",
+        "korea" => "kr",
+        "czechia" | "czech republic" => "cz",
+        _ => return None,
+    })
+}
+
+/// Cities named `text`, biggest first. Remembered, since backspacing and retyping asks for
+/// the same text again and the answer doesn't change.
+async fn search(text: &str) -> Result<Vec<Found>, String> {
     #[derive(Deserialize)]
-    struct Found {
+    struct Reply {
         #[serde(default)]
         results: Vec<City>,
     }
@@ -327,28 +486,25 @@ pub async fn places(text: &str) -> Result<Vec<Place>, String> {
         admin1: String,
         #[serde(default)]
         country: String,
+        #[serde(default)]
+        country_code: String,
         latitude: f64,
         longitude: f64,
         #[serde(default)]
         population: u64,
     }
-    let text = text.trim();
-    if text.chars().count() < 2 {
-        return Ok(Vec::new());
-    }
-    // Backspacing and retyping asks for the same text again; the answer doesn't change.
-    static SEEN: Mutex<Vec<(String, Vec<Place>)>> = Mutex::new(Vec::new());
+    static SEEN: Mutex<Vec<(String, Vec<Found>)>> = Mutex::new(Vec::new());
     let key = text.to_lowercase();
-    if let Some((_, places)) = SEEN
+    if let Some((_, found)) = SEEN
         .lock()
         .ok()
         .and_then(|seen| seen.iter().find(|(seen, _)| *seen == key).cloned())
     {
-        return Ok(places);
+        return Ok(found);
     }
-    let found: Found = client()
+    let found: Reply = client()
         .get(format!(
-            "https://geocoding-api.open-meteo.com/v1/search?name={}&count=20&language=en",
+            "https://geocoding-api.open-meteo.com/v1/search?name={}&count=30&language=en",
             urlencoding::encode(text)
         ))
         .timeout(TIMEOUT)
@@ -363,24 +519,26 @@ pub async fn places(text: &str) -> Result<Vec<Place>, String> {
     // the biggest places are the likely ones.
     let mut results = found.results;
     results.sort_by_key(|city| std::cmp::Reverse(city.population));
-    let places = results
+    let found = results
         .into_iter()
-        .take(6)
-        .map(|found| Place {
-            name: found.name,
-            region: found.admin1,
-            country: found.country,
-            latitude: found.latitude,
-            longitude: found.longitude,
+        .map(|city| Found {
+            place: Place {
+                name: city.name,
+                region: city.admin1,
+                country: city.country,
+                latitude: city.latitude,
+                longitude: city.longitude,
+            },
+            country_code: city.country_code,
         })
         .collect::<Vec<_>>();
     if let Ok(mut seen) = SEEN.lock() {
         if seen.len() >= 64 {
             seen.remove(0);
         }
-        seen.push((key, places.clone()));
+        seen.push((key, found.clone()));
     }
-    Ok(places)
+    Ok(found)
 }
 
 /// The forecast for a city typed in the bar ("weather tokyo"), kept for 30 minutes.
@@ -397,7 +555,7 @@ pub async fn forecast_at(text: &str) -> Result<Option<Forecast>, String> {
     {
         return Ok(Some(forecast.clone()));
     }
-    let Some(place) = places(&key).await?.into_iter().next() else {
+    let Some(place) = place_for(&key).await? else {
         return Ok(None);
     };
     let found = forecast(client(), place).await?;
@@ -508,6 +666,43 @@ impl Raw {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn city(region: &str, country: &str, code: &str) -> Found {
+        Found {
+            place: Place {
+                region: region.into(),
+                country: country.into(),
+                ..Place::default()
+            },
+            country_code: code.into(),
+        }
+    }
+
+    #[test]
+    fn a_place_is_in_its_region_or_country_by_name_code_or_everyday_name() {
+        let raleigh = city("North Carolina", "United States", "US");
+        for qualifier in [
+            "nc",
+            "NC",
+            "n.c.",
+            "north carolina",
+            "us",
+            "usa",
+            "united states",
+        ] {
+            assert!(is_in(&raleigh, qualifier), "{qualifier}");
+        }
+        assert!(!is_in(&raleigh, "sc"));
+        assert!(!is_in(&raleigh, "ca"));
+
+        let stockholm = city("Stockholm County", "Sweden", "SE");
+        assert!(is_in(&stockholm, "sweden"));
+        assert!(is_in(&stockholm, "se"));
+        assert!(is_in(&city("England", "United Kingdom", "GB"), "uk"));
+        // Abbreviations belong to one country: "on" is Ontario, not anywhere in the US.
+        assert!(is_in(&city("Ontario", "Canada", "CA"), "on"));
+        assert!(!is_in(&city("Oregon", "United States", "US"), "on"));
+    }
 
     #[test]
     fn reads_open_meteo_columns_and_tolerates_gaps() {

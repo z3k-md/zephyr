@@ -1,11 +1,12 @@
-// The weather card: "weather", "forecast", or either with a city ("weather in tokyo").
-// Here comes from the Today line's forecast; a city is looked up as it's typed.
+// The weather card: "weather", "forecast", or either with a city ("weather in tokyo",
+// "raleigh nc weather"). Here comes from the footer's forecast; a city is looked up as it's
+// typed.
 
 import { computed, nextTick, onUnmounted, ref, watch, type Ref } from 'vue';
 import { errorMessage, openUrl, weatherAt } from '../api';
 import type { Forecast } from '../types';
 import { googleUrl } from './google';
-import { placeName, useWeather } from './weather';
+import { placeName, useWeather, weatherCityFor } from './weather';
 
 export function useWeatherCard(ctx: {
   query: Ref<string>;
@@ -19,9 +20,7 @@ export function useWeatherCard(ctx: {
   const { query, menuOpen, inputEl, notice } = ctx;
   const forecast = useWeather();
   const weatherCity = computed(() => {
-    if (!ctx.shown()) return null;
-    const asked = /^(?:weather|forecast)(?:\s+(?:in\s+|for\s+)?(.*))?$/i.exec(query.value.trim());
-    return asked ? (asked[1] ?? '').trim() : null;
+    return ctx.shown() ? weatherCityFor(query.value) : null;
   });
   const typedForecast = ref<{ city: string; forecast: Forecast | null } | null>(null);
   let weatherTimer = 0;

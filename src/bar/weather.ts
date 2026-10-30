@@ -142,3 +142,16 @@ export function placeName(forecast: Forecast): string {
   if (!region || region.toLowerCase() === name.toLowerCase()) return name;
   return name ? `${name}, ${region}` : region;
 }
+
+/**
+ * The city a weather question asks about: "" for here ("weather", "forecast"), the city for
+ * "weather in tokyo", "forecast for raleigh, nc" or "stockholm sweden weather", and null when
+ * the text isn't asking about the weather.
+ */
+export function weatherCityFor(text: string): string | null {
+  const typed = text.trim();
+  const before = /^(?:weather|forecast)(?:\s+(?:(?:in|for|at)\s+)?(.*))?$/i.exec(typed);
+  if (before) return (before[1] ?? '').trim();
+  const after = /^(.+?)\s+(?:weather|forecast)$/i.exec(typed);
+  return after ? after[1].trim() : null;
+}
