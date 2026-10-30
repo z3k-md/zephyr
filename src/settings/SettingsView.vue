@@ -21,6 +21,7 @@
     saveBugCapture,
     saveShowStats,
     saveVolumeKeys,
+    saveVolumeOverlay,
     saveWatchConnection,
     saveCpuTemp,
     cpuTempStatus,
@@ -540,6 +541,15 @@
 
   async function toggleVolumeKeys() {
     if (snapshot.value) await save(saveVolumeKeys(!snapshot.value.volumeKeys));
+  }
+
+  const OVERLAY_PLACES = [
+    { id: 'bottom', label: 'Bottom center' },
+    { id: 'top', label: 'Top center' },
+    { id: 'bottom-right', label: 'Bottom right' },
+  ];
+  async function changeOverlayPlace(event: Event) {
+    await save(saveVolumeOverlay((event.target as HTMLSelectElement).value));
   }
 
   async function toggleStats() {
@@ -1094,6 +1104,18 @@
           <InfoTip
             text="Replaces Windows' volume flyout. The keys change master; Alt with a volume key picks an app, which the keys change until the overlay fades. With the bar open, the levels show in the bar instead."
           />
+        </label>
+        <label class="field">
+          <span>Overlay shows at</span>
+          <select
+            :value="snapshot.volumeOverlay"
+            :disabled="busy || !snapshot.volumeKeys"
+            @change="changeOverlayPlace"
+          >
+            <option v-for="place in OVERLAY_PLACES" :key="place.id" :value="place.id">
+              {{ place.label }}
+            </option>
+          </select>
         </label>
       </section>
       <section v-if="snapshot" v-show="!search && active === 'network'" id="section-network">

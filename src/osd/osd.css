@@ -113,3 +113,46 @@ html.osd-page #app {
   outline: 2px solid var(--focus);
   outline-offset: -1px;
 }
+
+/* App icons (RowIcon), as the bar draws them; this page doesn't load the bar's rules. */
+.osd .item-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: var(--icon);
+  height: var(--icon);
+  color: var(--muted);
+}
+
+.osd .item-icon .app-image {
+  width: 100%;
+  height: 100%;
+  border-radius: 4px;
+  object-fit: contain;
+}
+
+.osd .item-icon .glyph {
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.osd .item-icon .monogram {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  border-radius: 5px;
+  color: #fff;
+  font-size: calc(var(--icon) * 0.55);
+  font-weight: 600;
+}
+
+.osd .speaker-icon {
+  flex: none;
+  color: var(--fg);
+}

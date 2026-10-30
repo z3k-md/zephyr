@@ -3,6 +3,7 @@
   import { computed, onMounted, onUnmounted, ref } from 'vue';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import RowIcon from '../bar/RowIcon.vue';
+  import SpeakerIcon from '../bar/SpeakerIcon.vue';
   import { GLYPHS } from '../bar/glyphs';
   import { osdOpenSound, osdWheel } from '../api';
   import type { VolumeShown } from '../types';
@@ -63,7 +64,13 @@
     @click="osdOpenSound"
   >
     <div class="osd-top">
-      <RowIcon :icon="target.icon" :label="target.name" :size="20" />
+      <SpeakerIcon
+        v-if="target.key === 'master'"
+        :volume="target.volume"
+        :muted="target.muted"
+        :size="22"
+      />
+      <RowIcon v-else :icon="target.icon" :label="target.name" :size="20" />
       <span class="osd-name">
         {{ target.name }}
         <small>{{ subtitle }}</small>
@@ -86,7 +93,13 @@
         class="osd-app"
         :class="{ on: level.key === target.key, quiet: !level.active }"
       >
-        <RowIcon :icon="level.icon" :label="level.name" :size="16" />
+        <SpeakerIcon
+          v-if="level.key === 'master'"
+          :volume="level.volume"
+          :muted="level.muted"
+          :size="16"
+        />
+        <RowIcon v-else :icon="level.icon" :label="level.name" :size="16" />
       </span>
     </div>
   </div>

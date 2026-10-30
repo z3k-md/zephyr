@@ -21,10 +21,12 @@ pub struct Shown {
 }
 
 #[cfg(windows)]
-pub use win::{open_sound, set_enabled, wheel};
+pub use win::{open_sound, set_enabled, set_position, wheel};
 
 #[cfg(not(windows))]
 pub fn set_enabled(_app: &tauri::AppHandle, _on: bool) {}
+#[cfg(not(windows))]
+pub fn set_position(_position: &str) {}
 #[cfg(not(windows))]
 pub fn wheel(_delta: f32) {}
 #[cfg(not(windows))]
@@ -32,9 +34,9 @@ pub fn open_sound(_app: &tauri::AppHandle) {}
 
 #[cfg(windows)]
 mod win {
-    use std::sync::OnceLock;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc::{self, Sender};
+    use std::sync::{Mutex, OnceLock};
     use std::time::{Duration, Instant};
 
     use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
@@ -45,9 +47,12 @@ mod win {
         VK_VOLUME_DOWN, VK_VOLUME_MUTE, VK_VOLUME_UP,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        CallNextHookEx, DispatchMessageW, GetMessageW, HC_ACTION, HWND_TOPMOST, KBDLLHOOKSTRUCT,
-        LLKHF_ALTDOWN, MSG, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SetWindowPos,
-        SetWindowsHookExW, TranslateMessage, WH_KEYBOARD_LL, WM_KEYDOWN, WM_SYSKEYDOWN,
+        CallNextHookEx, DispatchMessageW, GWL_EXSTYLE, GWL_STYLE, GetMessageW, GetWindowLongPtrW,
+        HC_ACTION, HWND_TOPMOST, KBDLLHOOKSTRUCT, LLKHF_ALTDOWN, MSG, SW_HIDE, SWP_FRAMECHANGED,
+        SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SetWindowLongPtrW,
+        SetWindowPos, SetWindowsHookExW, ShowWindow, TranslateMessage, WH_KEYBOARD_LL, WM_KEYDOWN,
+        WM_SYSKEYDOWN, WS_CAPTION, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_MAXIMIZEBOX,
+        WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
     };
 
     use super::Shown;
@@ -58,10 +63,12 @@ mod win {
     /// The overlay stays this long after the last press; an app picked with Alt stays the
     /// target as long.
     const SHOWN_FOR: Duration = Duration::from_millis(1600);
-    /// The overlay's size, in logical pixels, and its gap from the screen's corner.
+    /// The overlay's size, in logical pixels, and its gap from the screen's edge: more at the
+    /// bottom, so it sits above the taskbar where Windows' own flyout does.
     const WIDTH: f64 = 300.0;
     const HEIGHT: f64 = 104.0;
     const MARGIN: f64 = 16.0;
+    const BOTTOM_MARGIN: f64 = 48.0;
     /// An unassigned key, pressed after an Alt+volume key is taken so the app in front
     /// doesn't read the lone Alt as a tap that opens its menu bar.
     const MENU_MASK: VIRTUAL_KEY = VIRTUAL_KEY(0xE8);
@@ -69,6 +76,9 @@ mod win {
     static ENABLED: AtomicBool = AtomicBool::new(false);
     static PRESSES: OnceLock<Sender<Press>> = OnceLock::new();
     static HIDE: crate::timer::Debounce = crate::timer::Debounce::new();
+    /// Where the overlay shows (Settings › Sound): `bottom` or `top`, centered, or
+    /// `bottom-right`.
+    static POSITION: Mutex<String> = Mutex::new(String::new());
 
     #[derive(Debug, Clone, Copy)]
     enum Press {
@@ -110,6 +120,10 @@ mod win {
         });
     }
 
+    pub fn set_position(position: &str) {
+        *POSITION.lock().unwrap_or_else(|poison| poison.into_inner()) = position.to_string();
+    }
+
     pub fn wheel(delta: f32) {
         send(Press::Wheel(delta));
     }
@@ -118,7 +132,7 @@ mod win {
     pub fn open_sound(app: &AppHandle) {
         HIDE.cancel();
         if let Some(overlay) = app.get_webview_window("osd") {
-            let _ = overlay.hide();
+            hide(&overlay);
         }
         send(Press::Reset);
         crate::window::show_bar(app);
@@ -253,11 +267,11 @@ mod win {
         place(app, &overlay);
         let hidden = overlay.clone();
         HIDE.schedule(SHOWN_FOR, move || {
-            let _ = hidden.hide();
+            hide(&hidden);
         });
     }
 
-    /// Bottom right of the screen the pointer is on, above the taskbar, without taking focus
+    /// On the screen the pointer is on, where Settings › Sound puts it, without taking focus
     /// from the app in front.
     fn place(app: &AppHandle, overlay: &tauri::WebviewWindow) {
         let monitor = app
@@ -272,8 +286,21 @@ mod win {
         let area = monitor.work_area();
         let (width, height) = ((WIDTH * scale) as i32, (HEIGHT * scale) as i32);
         let margin = (MARGIN * scale) as i32;
-        let x = area.position.x + area.size.width as i32 - width - margin;
-        let y = area.position.y + area.size.height as i32 - height - margin;
+        let (left, top) = (area.position.x, area.position.y);
+        let (across, down) = (area.size.width as i32, area.size.height as i32);
+        let centered = left + (across - width) / 2;
+        let position = POSITION
+            .lock()
+            .map(|position| position.clone())
+            .unwrap_or_default();
+        let (x, y) = match position.as_str() {
+            "top" => (centered, top + margin),
+            "bottom-right" => (left + across - width - margin, top + down - height - margin),
+            _ => (
+                centered,
+                top + down - height - (BOTTOM_MARGIN * scale) as i32,
+            ),
+        };
         let Ok(hwnd) = overlay.hwnd() else {
             return;
         };
@@ -325,21 +352,59 @@ mod win {
         if app.get_webview_window("osd").is_some() {
             return Ok(());
         }
-        WebviewWindowBuilder::new(app, "osd", WebviewUrl::App("index.html?view=osd".into()))
-            .title("Zephyr volume")
-            .background_color(crate::window::WINDOW_BACKGROUND)
-            .transparent(true)
-            .decorations(false)
-            .shadow(false)
-            .always_on_top(true)
-            .skip_taskbar(true)
-            .resizable(false)
-            .focusable(false)
-            .focused(false)
-            .visible(false)
-            .inner_size(WIDTH, HEIGHT)
-            .build()
-            .map(|_| ())
-            .map_err(|err| err.to_string())
+        let overlay =
+            WebviewWindowBuilder::new(app, "osd", WebviewUrl::App("index.html?view=osd".into()))
+                .title("Zephyr volume")
+                .background_color(crate::window::WINDOW_BACKGROUND)
+                .transparent(true)
+                .decorations(false)
+                .shadow(false)
+                .always_on_top(true)
+                .skip_taskbar(true)
+                .resizable(false)
+                .focusable(false)
+                .focused(false)
+                .visible(false)
+                .inner_size(WIDTH, HEIGHT)
+                .build()
+                .map_err(|err| err.to_string())?;
+        if let Ok(hwnd) = overlay.hwnd() {
+            popup(HWND(hwnd.0));
+        }
+        Ok(())
+    }
+
+    /// A bare popup: no title bar or frame (which showed despite `decorations(false)`), out
+    /// of the taskbar and Alt+Tab, and never activated by a click.
+    fn popup(hwnd: HWND) {
+        let frame = (WS_CAPTION | WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX).0;
+        // SAFETY: the overlay's own window handle, its styles read and written back.
+        unsafe {
+            let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
+            SetWindowLongPtrW(hwnd, GWL_STYLE, ((style & !frame) | WS_POPUP.0) as isize);
+            let extended = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+            let extended = extended | WS_EX_NOACTIVATE.0 | WS_EX_TOOLWINDOW.0;
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, extended as isize);
+            let _ = SetWindowPos(
+                hwnd,
+                None,
+                0,
+                0,
+                0,
+                0,
+                SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+    }
+
+    /// Hides it straight through Windows. It's shown that way, so Tauri still thinks it's
+    /// hidden and its own hide does nothing.
+    fn hide(overlay: &tauri::WebviewWindow) {
+        if let Ok(hwnd) = overlay.hwnd() {
+            // SAFETY: the overlay's own window handle; a stale one only makes the call fail.
+            unsafe {
+                let _ = ShowWindow(HWND(hwnd.0), SW_HIDE);
+            }
+        }
     }
 }

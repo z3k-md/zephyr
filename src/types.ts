@@ -52,6 +52,8 @@ export interface Snapshot {
   cpuTemp: boolean;
   /** Windows: Zephyr takes the volume keys and shows its own overlay. */
   volumeKeys: boolean;
+  /** Where the volume overlay shows: `bottom` or `top`, centered, or `bottom-right`. */
+  volumeOverlay: string;
 }
 
 export type WeatherUnit = 'c' | 'f';

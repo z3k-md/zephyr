@@ -50,6 +50,20 @@ pub async fn save_volume_keys(app: AppHandle, on: bool) -> Result<Persisted, Str
     .await
 }
 
+/// Settings › Sound: where the overlay shows, `bottom`, `top` or `bottom-right`.
+#[tauri::command]
+pub async fn save_volume_overlay(app: AppHandle, position: String) -> Result<Persisted, String> {
+    if !["bottom", "top", "bottom-right"].contains(&position.as_str()) {
+        return Err(format!("Unknown overlay position {position}"));
+    }
+    crate::volume_keys::set_position(&position);
+    save(app, move |persisted| {
+        persisted.volume_overlay = position;
+        Ok(())
+    })
+    .await
+}
+
 /// The wheel over the volume overlay: the target a notch louder or quieter.
 #[tauri::command]
 pub fn osd_wheel(delta: f32) {

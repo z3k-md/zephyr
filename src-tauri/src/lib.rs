@@ -150,6 +150,7 @@ pub fn run() {
             commands::sound::sound_set_muted,
             commands::sound::sound_set_device,
             commands::sound::save_volume_keys,
+            commands::sound::save_volume_overlay,
             commands::sound::osd_wheel,
             commands::sound::osd_open_sound,
             commands::resources::system_stats,
@@ -308,6 +309,7 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     power::resume(app.handle());
     browser::start();
     nowplaying::start(app.handle());
+    volume_keys::set_position(&snapshot.volume_overlay);
     volume_keys::set_enabled(app.handle(), snapshot.volume_keys);
 
     if let Err(err) = tray::init(app) {

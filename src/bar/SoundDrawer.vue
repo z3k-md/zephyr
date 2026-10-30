@@ -1,6 +1,7 @@
 <script setup lang="ts">
   import { computed } from 'vue';
   import RowIcon from './RowIcon.vue';
+  import SpeakerIcon from './SpeakerIcon.vue';
   import { GLYPHS } from './glyphs';
   import type { VolumeShown } from '../types';
 
@@ -37,7 +38,8 @@
       class="sound-row"
       :class="{ selected: level.key === shown.key, muted: level.muted }"
     >
-      <RowIcon :icon="level.icon" :label="level.name" :size="20" />
+      <SpeakerIcon v-if="level.key === 'master'" :volume="level.volume" :muted="level.muted" />
+      <RowIcon v-else :icon="level.icon" :label="level.name" :size="20" />
       <span class="sound-name">{{ level.name }}</span>
       <span class="sound-slider">
         <span class="sound-track" />

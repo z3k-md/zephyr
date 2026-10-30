@@ -104,6 +104,8 @@ pub struct Persisted {
     pub cpu_temp: bool,
     /// Windows: Zephyr takes the volume keys and shows its own overlay (volume_keys.rs).
     pub volume_keys: bool,
+    /// Where the volume overlay shows: `bottom` or `top`, centered, or `bottom-right`.
+    pub volume_overlay: String,
 }
 
 /// The palettes Settings > Appearance offers; the first is the default.
@@ -251,6 +253,7 @@ impl Persisted {
             last_speed: None,
             cpu_temp: false,
             volume_keys: false,
+            volume_overlay: "bottom".to_string(),
         }
     }
 

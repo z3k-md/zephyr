@@ -746,3 +746,8 @@ export function osdWheel(delta: number): Promise<void> {
 export function osdOpenSound(): Promise<void> {
   return invoke('osd_open_sound');
 }
+
+/** Settings › Sound: where the volume overlay shows, `bottom`, `top` or `bottom-right`. */
+export function saveVolumeOverlay(position: string): Promise<Snapshot> {
+  return invoke<Snapshot>('save_volume_overlay', { position });
+}

@@ -1,6 +1,7 @@
 <script setup lang="ts">
   import { computed, onMounted, onUnmounted, ref } from 'vue';
   import RowIcon from './RowIcon.vue';
+  import SpeakerIcon from './SpeakerIcon.vue';
   import { GLYPHS } from './glyphs';
   import { vTip } from '../tip';
   import { usePoll } from '../poll';
@@ -301,7 +302,8 @@
           @mousemove="selected = index"
           @wheel="wheel(row, $event)"
         >
-          <RowIcon :icon="row.icon" :label="row.name" :size="20" />
+          <SpeakerIcon v-if="index === 0" :volume="row.volume" :muted="row.muted" />
+          <RowIcon v-else :icon="row.icon" :label="row.name" :size="20" />
           <span class="sound-name">
             {{ row.name }}
             <small v-if="index === 0 && (sound?.devices.length ?? 0) > 1">
