@@ -1096,10 +1096,13 @@
     }
 
     // Tab would only move focus out of the search box. On the ticker card it steps through the
-    // chart's spans.
+    // chart's spans, and on the weather card through the hours.
     if (event.key === 'Tab') {
       event.preventDefault();
-      if (cardQuote.value && !modifier && !event.altKey) stepRange(event.shiftKey ? -1 : 1);
+      if (!modifier && !event.altKey) {
+        if (cardQuote.value) stepRange(event.shiftKey ? -1 : 1);
+        else if (cardForecast.value) stepHour(event.shiftKey ? -1 : 1);
+      }
       return;
     }
 
@@ -1187,14 +1190,15 @@
   }
 
   // The weather card: "weather", "forecast", or either with a city ("weather in tokyo").
-  const { forecast, cardForecast, openForecast, showWeather } = useWeatherCard({
-    query,
-    shown: () => !scope.value && view.value === 'root',
-    menuOpen: actionsOpen,
-    inputEl,
-    notice,
-    clearAfterOpen,
-  });
+  const { forecast, cardForecast, cardHour, stepHour, pickHour, openForecast, showWeather } =
+    useWeatherCard({
+      query,
+      shown: () => !scope.value && view.value === 'root',
+      menuOpen: actionsOpen,
+      inputEl,
+      notice,
+      clearAfterOpen,
+    });
 
   // The ticker card: a stock or crypto typed on its own ("TSLA", "eth", "$aapl").
   const { cardQuote, quoteRange, stepRange, pickRange, openQuote } = useTickerCard({
@@ -1669,7 +1673,13 @@
       <p v-if="loadError || notice" class="notice">{{ loadError || notice }}</p>
 
       <div class="bar-body">
-        <WeatherCard v-if="cardForecast" :forecast="cardForecast" @open="openForecast" />
+        <WeatherCard
+          v-if="cardForecast"
+          :forecast="cardForecast"
+          :hour="cardHour"
+          @open="openForecast"
+          @hour="pickHour"
+        />
         <TickerCard
           v-else-if="cardQuote"
           :quote="cardQuote"

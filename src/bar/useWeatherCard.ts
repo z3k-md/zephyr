@@ -41,6 +41,22 @@ export function useWeatherCard(ctx: {
     return typedForecast.value?.city === city ? typedForecast.value.forecast : null;
   });
 
+  /** The hour picked on the card, from the next 48; null is now. A new place starts at now. */
+  const cardHour = ref<number | null>(null);
+  watch(weatherCity, () => (cardHour.value = null));
+
+  /** Tab on the card: the next hour (Shift+Tab, the one before, and back to now). */
+  function stepHour(by: 1 | -1) {
+    const count = cardForecast.value?.hourly.length ?? 0;
+    if (!count) return;
+    const next = (cardHour.value ?? -1) + by;
+    cardHour.value = next < 0 ? null : Math.min(next, count - 1);
+  }
+
+  function pickHour(hour: number) {
+    cardHour.value = hour;
+  }
+
   /** Ctrl+Enter on the card: a full forecast. */
   function openForecast() {
     const shown = cardForecast.value;
@@ -62,5 +78,5 @@ export function useWeatherCard(ctx: {
     });
   }
 
-  return { forecast, cardForecast, openForecast, showWeather };
+  return { forecast, cardForecast, cardHour, stepHour, pickHour, openForecast, showWeather };
 }

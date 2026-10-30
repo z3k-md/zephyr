@@ -2772,3 +2772,11 @@ button.res-tile:hover {
 .ticker-spans .key-hints {
   margin-left: auto;
 }
+
+.weather-hour {
+  border-radius: 6px;
+}
+
+.weather-hour.on {
+  background: rgba(255, 255, 255, 0.08);
+}

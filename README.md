@@ -66,7 +66,7 @@ Type a utility's name to open it.
 - **Resources** (`top`): CPU, memory, GPU and network over the last 15 minutes, with apps above background processes. Ctrl+Backspace quits a process.
 - **Network** (`ping`): what's wrong right now, with router, internet and DNS latency over time.
 - **Speed test**: download, upload and lag under load, from Cloudflare.
-- **Weather**: `weather` or `weather in tokyo`, from Open-Meteo.
+- **Weather**: `weather`, `weather raleigh nc` or `stockholm sweden weather`, from Open-Meteo. Tab steps through the next 48 hours with each hour's chance of rain.
 - **Now playing**: what's playing shows at the end of the search row, with play, pause and skip. Ctrl+Space plays or pauses, and scrolling over it changes the volume.
 - **Typing test**: `!type` runs a Monkeytype-style test (15/30/60 seconds or 10/25/50 words) with WPM, accuracy, consistency and personal bests.
 

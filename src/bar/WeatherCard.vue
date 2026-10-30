@@ -15,12 +15,18 @@
   } from './weather';
 
   // The weather card over the results for "weather", "forecast" or "weather <city>": now,
-  // the next eight hours with their temperatures as a line, and four days as ranges. Enter
-  // stays on the search row; Ctrl+Enter opens a full forecast.
-  const props = defineProps<{ forecast: Forecast }>();
-  defineEmits<{ open: [] }>();
+  // eight hours with their temperatures as a line, and four days as ranges. Tab (or hovering
+  // an hour) steps through the next 48 hours, eight at a time, showing that hour's sky and
+  // chance of rain; Shift+Tab back past the first returns to now. Enter stays on the search
+  // row; Ctrl+Enter opens a full forecast.
+  const props = defineProps<{ forecast: Forecast; hour: number | null }>();
+  defineEmits<{ open: []; hour: [hour: number] }>();
 
-  const hours = computed(() => props.forecast.hourly.slice(0, 8));
+  const start = computed(() => (props.hour === null ? 0 : Math.floor(props.hour / 8) * 8));
+  const hours = computed(() => props.forecast.hourly.slice(start.value, start.value + 8));
+  const picked = computed(() =>
+    props.hour === null ? null : (props.forecast.hourly[props.hour] ?? null)
+  );
   const days = computed(() => props.forecast.daily.slice(0, 4));
   const uv = computed(() => Math.round(props.forecast.daily[0]?.uv ?? 0));
 
@@ -56,9 +62,32 @@
     <div class="weather-now">
       <div class="weather-head">
         <span class="weather-place">{{ placeName(forecast) }}</span>
-        <KeyHints :hints="[{ keys: 'mod+enter', label: 'Forecast' }]" @click="$emit('open')" />
+        <KeyHints
+          :hints="[
+            { keys: 'tab', label: 'Hours' },
+            { keys: 'mod+enter', label: 'Forecast' },
+          ]"
+          @click="$emit('open')"
+        />
       </div>
-      <div class="weather-main">
+      <div v-if="picked" class="weather-main">
+        <svg
+          class="weather-big"
+          :class="weatherTone(picked.code, picked.isDay)"
+          viewBox="0 0 24 24"
+          aria-hidden="true"
+          v-html="GLYPHS[weatherGlyph(picked.code, picked.isDay)]"
+        />
+        <span class="weather-temp">{{ degrees(picked.temperature) }}</span>
+        <span class="weather-detail">
+          <b>{{ condition(picked.code) }}</b>
+          <span
+            >{{ weekday(forecast, picked.time) }} {{ hourLabel(forecast, picked.time) }} · Rain
+            {{ Math.round(picked.precipitation) }}%</span
+          >
+        </span>
+      </div>
+      <div v-else class="weather-main">
         <svg
           class="weather-big"
           :class="weatherTone(forecast.current.code, forecast.current.isDay)"
@@ -84,7 +113,13 @@
         >
           <polyline :points="line" />
         </svg>
-        <span v-for="hour in hours" :key="hour.time" class="weather-hour">
+        <span
+          v-for="(hour, index) in hours"
+          :key="hour.time"
+          class="weather-hour"
+          :class="{ on: start + index === props.hour }"
+          @mouseenter="$emit('hour', start + index)"
+        >
           <span class="weather-hour-temp">{{ degrees(hour.temperature) }}</span>
           <svg
             :class="weatherTone(hour.code, hour.isDay)"
