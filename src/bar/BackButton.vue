@@ -1,5 +1,6 @@
 <script setup lang="ts">
   import { GLYPHS } from './glyphs';
+  import { vTip } from '../tip';
 
   // Where a view's mark would be: back to the main bar, for the mouse (Esc does it by key).
   defineEmits<{ back: [] }>();
