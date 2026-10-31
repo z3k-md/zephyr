@@ -199,11 +199,13 @@ group: LaunchGroup, index: number) { if (event.key === 'Delete' || event.key ===
         <span class="spacer" />
         <button
           type="button"
-          class="launch-button danger"
+          class="launch-button danger launch-delete"
           :disabled="busy"
+          :aria-label="`Delete ${group.name}`"
+          title="Delete group"
           @click="remove(group.id)"
         >
-          Delete group
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17" /></svg>
         </button>
       </div>
       <p v-if="failures.includes(`group:${group.id}`)" class="notice">

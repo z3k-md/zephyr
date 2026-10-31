@@ -5,9 +5,9 @@
   import { useWindowListener } from '../windowEvents';
   import Keys from './Keys.vue';
 
-  // One field for recording a shortcut, shared by every hotkey in Settings: the shortcut on
-  // the left, Record / Edit on the right. A click starts recording (the field turns red) and
-  // it keeps recording until Stop, a click away or Enter: the keys show as they go down, and
+  // One field for recording a shortcut, shared by every hotkey in Settings. A click starts
+  // recording (the field turns red) and it keeps recording until another click, a click
+  // away or Enter: the keys show as they go down, and
   // each new combo replaces the last, so a slip is fixed by pressing again. Esc leaves it as
   // it was, and Zephyr's own shortcuts are off while it records so they record too.
   const props = withDefaults(
@@ -50,10 +50,6 @@
   );
   /** Modifiers held with the key still to come. */
   const waiting = computed(() => listening.value && !!live.value && live.value !== candidate.value);
-  const action = computed(() => {
-    if (listening.value) return 'Stop recording';
-    return props.keys ? 'Edit shortcut' : 'Record shortcut';
-  });
 
   function toggle() {
     if (props.disabled) return;
@@ -139,6 +135,5 @@
     </span>
     <span v-else-if="listening" class="recorder-prompt">Press a shortcut</span>
     <span v-else class="recorder-empty">{{ empty }}</span>
-    <span class="recorder-action">{{ action }}</span>
   </button>
 </template>
