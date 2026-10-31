@@ -253,6 +253,8 @@ pub fn run() {
             commands::capture::capture_snapshot,
             commands::capture::save_bug_capture,
             commands::capture::reveal_captures,
+            commands::diagnostics::log_webview,
+            commands::diagnostics::diagnostics,
             commands::sync::sync_status,
             commands::sync::sync_google_sign_in,
             commands::sync::sync_cancel_sign_in,
@@ -282,6 +284,7 @@ pub fn run() {
             tauri::RunEvent::Exit => {
                 clipboard::flush();
                 shell::stop_all();
+                log::info!("Zephyr exiting");
             }
             _ => {}
         });
@@ -296,6 +299,7 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
     startup::mark("setup began");
+    logger::session_started(&app.package_info().version.to_string());
     move_from_old_identifier(app.handle());
     shell::clean_terminal_scripts();
     let config_dir = app.path().app_config_dir()?;
@@ -303,13 +307,14 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let snapshot = state
         .snapshot()
         .map_err(Box::<dyn std::error::Error>::from)?;
+    // Before anything that starts a thread or takes a shortcut, which may look settings up.
+    app.manage(state);
 
     register_shortcuts(app.handle(), &snapshot);
     apply_autostart_later(app.handle(), &snapshot);
     start_monitors(app.handle(), &snapshot);
     open_stores(app, &config_dir, &snapshot)?;
 
-    app.manage(state);
     handoff::start();
     power::resume(app.handle());
     browser::start();

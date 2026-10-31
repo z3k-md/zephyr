@@ -11,6 +11,8 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 use tungstenite::{Message, WebSocket};
 
+use crate::util::LogErr;
+
 /// Fixed so the extension knows where to connect.
 pub const PORT: u16 = 47391;
 
@@ -51,7 +53,7 @@ pub fn start() {
                 std::thread::spawn(move || serve(stream));
             }
         })
-        .ok();
+        .log_err("couldn't start the browser extension link");
 }
 
 /// Zephyr's own extension. The `key` in `extension/manifest.json` fixes its id wherever it's

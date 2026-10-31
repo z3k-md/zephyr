@@ -136,7 +136,7 @@ mod win {
         if !ENABLED.load(Ordering::SeqCst) {
             return;
         }
-        log::info!("volume key {key} from the bar's page");
+        log::debug!("volume key {key} from the bar's page");
         let key = match key {
             "up" => Key::Up,
             "down" => Key::Down,
@@ -218,7 +218,7 @@ mod win {
                 if let Some(key) = key {
                     // SAFETY: a plain key state read.
                     let alt = unsafe { GetKeyState(i32::from(VK_MENU.0)) } < 0;
-                    log::info!("volume key {key:?} from a Zephyr window");
+                    log::debug!("volume key {key:?} from a Zephyr window");
                     from_window(key, alt, Source::Command);
                     // Handled, so Windows neither changes the level nor shows its flyout.
                     return LRESULT(1);
@@ -312,7 +312,7 @@ mod win {
     fn work(app: AppHandle, presses: mpsc::Receiver<Press>) {
         let mut picked: Option<Picked> = None;
         for press in presses {
-            log::info!(
+            log::debug!(
                 "volume key {press:?}, bar open: {}",
                 crate::stats::bar_visible()
             );

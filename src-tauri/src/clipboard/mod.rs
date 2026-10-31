@@ -21,7 +21,7 @@ use sha2::{Digest, Sha256};
 
 use crypto::Cipher;
 
-use crate::util::{now_secs, write_atomic};
+use crate::util::{LogErr, now_secs, write_atomic};
 
 /// Most items kept, pinned ones aside; older ones go first.
 const MAX_ITEMS: usize = 2000;
@@ -412,7 +412,8 @@ impl History {
             Some((png, width, height)) => {
                 let cipher = self.cipher.as_ref()?;
                 let sealed = cipher.seal(&png).ok()?;
-                write_atomic(&self.image_path(id), &sealed).ok()?;
+                write_atomic(&self.image_path(id), &sealed)
+                    .log_err("couldn't save a copied image")?;
                 Some(ImageInfo {
                     width,
                     height,
@@ -625,7 +626,8 @@ fn read_saved(dir: &Path, cipher: &Cipher) -> Option<Saved> {
             // Set aside rather than overwritten by the next save, so a key that comes back
             // (a restored keychain) can still read it.
             let aside = dir.join("history.unreadable.bin");
-            let _ = fs::rename(dir.join("history.bin"), &aside);
+            fs::rename(dir.join("history.bin"), &aside)
+                .log_err("couldn't set the unreadable clipboard history aside");
             log::error!(
                 "couldn't read clipboard history, starting over (kept it as {}): {err}",
                 aside.display()

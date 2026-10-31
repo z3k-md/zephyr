@@ -32,6 +32,7 @@
     saveOnboardingEveryLaunch,
     permissionRequest,
     revealCaptures,
+    diagnostics,
     saveShellProgram,
     shellInfo,
     saveNotesShortcut,
@@ -630,6 +631,16 @@
     }
   }
 
+  const diagnosticsMessage = ref('');
+  async function copyDiagnostics() {
+    try {
+      await navigator.clipboard.writeText(await diagnostics());
+      diagnosticsMessage.value = 'Copied the build and the recent log.';
+    } catch (error) {
+      diagnosticsMessage.value = errorMessage(error);
+    }
+  }
+
   async function changeResume(event: Event) {
     await save(saveResumeSeconds(Number((event.target as HTMLSelectElement).value)));
   }
@@ -936,6 +947,8 @@
         </label>
         <div class="field inline">
           <button type="button" @click="showCaptures">Show captures</button>
+          <button type="button" @click="copyDiagnostics">Copy diagnostics</button>
+          <span v-if="diagnosticsMessage" class="hint-text">{{ diagnosticsMessage }}</span>
         </div>
         <template v-if="isDev">
           <h3>Dev build</h3>

@@ -1,4 +1,5 @@
-import { Channel, invoke } from '@tauri-apps/api/core';
+import { Channel, invoke as call, type InvokeArgs } from '@tauri-apps/api/core';
+import { logCommandFailure } from './log';
 import type {
   ClipDetail,
   Sound,
@@ -44,6 +45,14 @@ import type {
   CoreHeat,
   MemoryBreakdown,
 } from './types';
+
+/** Every command goes through here, so one that fails is logged even where the page ignores it. */
+function invoke<T>(command: string, args?: InvokeArgs): Promise<T> {
+  return call<T>(command, args).catch((error: unknown) => {
+    logCommandFailure(command, args, error);
+    throw error;
+  });
+}
 
 export function getSnapshot(): Promise<Snapshot> {
   return invoke<Snapshot>('get_snapshot');
@@ -561,6 +570,11 @@ export function saveBugCapture(enabled: boolean): Promise<Snapshot> {
 
 export function revealCaptures(): Promise<void> {
   return invoke('reveal_captures');
+}
+
+/** The build and the end of this run's log, for a bug report. */
+export function diagnostics(): Promise<string> {
+  return invoke<string>('diagnostics');
 }
 
 /** Lets file search into Desktop, Documents and Downloads (macOS asks for each). */

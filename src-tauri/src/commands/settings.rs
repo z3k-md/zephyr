@@ -6,6 +6,7 @@ use super::{blocking, publish, save, save_now};
 use crate::files;
 use crate::shortcut;
 use crate::state::{AppState, Persisted};
+use crate::util::LogErr;
 use crate::window;
 
 /// Opens first-run setup again (Settings › General › Run setup again).
@@ -144,7 +145,8 @@ pub async fn save_settings(
             Ok(snapshot) => publish(&app, snapshot),
             Err(err) => {
                 restore_shortcut();
-                let _ = apply_autostart(&app, previous.launch_at_startup, previous.instant_startup);
+                apply_autostart(&app, previous.launch_at_startup, previous.instant_startup)
+                    .log_err("couldn't put launch at startup back");
                 Err(err)
             }
         }

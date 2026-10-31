@@ -4,6 +4,8 @@
 
 use std::sync::atomic::{AtomicU16, Ordering};
 
+use crate::util::LogErr;
+
 static PORT: AtomicU16 = AtomicU16::new(0);
 
 /// The listener's port; 0 until it is up (or if it couldn't start).
@@ -30,7 +32,7 @@ pub fn start() {
                 handle(request);
             }
         })
-        .ok();
+        .log_err("couldn't start the handoff server");
 }
 
 fn handle(request: tiny_http::Request) {

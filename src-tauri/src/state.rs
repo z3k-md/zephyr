@@ -9,6 +9,7 @@ use crate::clipboard::ClipboardSettings;
 use crate::files;
 use crate::history::{self, HistoryEntry};
 use crate::shortcut::{DEFAULT_SHORTCUT, LEGACY_DEFAULT_SHORTCUT};
+use crate::util::LogErr;
 
 /// A field missing from the file falls back to its default instead of discarding every setting.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -492,7 +493,8 @@ impl Persisted {
                 log::error!("{} could not be read", source.display());
                 // Kept aside for recovery by hand; never over the good backup.
                 if at == 0 && !bytes.is_empty() {
-                    let _ = fs::write(path.with_extension("json.corrupt"), &bytes);
+                    fs::write(path.with_extension("json.corrupt"), &bytes)
+                        .log_err("couldn't keep the unreadable settings aside");
                 }
                 continue;
             };

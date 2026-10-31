@@ -11,6 +11,7 @@ use tauri::{
 };
 
 use crate::state::{AppState, NoteWindow};
+use crate::util::LogErr;
 
 const LABEL_PREFIX: &str = "note-";
 const WIDTH: f64 = 380.0;
@@ -262,7 +263,7 @@ fn remember(app: &AppHandle, window: &tauri::WebviewWindow, id: &str) {
         height: size.height,
     };
     let state = app.state::<AppState>();
-    let _ = state.update(|persisted| {
+    let saved = state.update(|persisted| {
         match persisted
             .note_windows
             .iter_mut()
@@ -273,14 +274,17 @@ fn remember(app: &AppHandle, window: &tauri::WebviewWindow, id: &str) {
         }
         Ok(())
     });
+    saved.log_err("couldn't save a note window's place");
 }
 
 fn forget(app: &AppHandle, id: &str) {
     let state = app.state::<AppState>();
-    let _ = state.update(|persisted| {
-        persisted.note_windows.retain(|saved| saved.id != id);
-        Ok(())
-    });
+    state
+        .update(|persisted| {
+            persisted.note_windows.retain(|saved| saved.id != id);
+            Ok(())
+        })
+        .log_err("couldn't forget a closed note window");
 }
 
 fn saved(app: &AppHandle) -> Vec<NoteWindow> {

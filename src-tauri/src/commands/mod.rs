@@ -9,6 +9,7 @@ pub mod apps;
 pub mod bar;
 pub mod capture;
 pub mod clipboard;
+pub mod diagnostics;
 pub mod files;
 pub mod media;
 pub mod net;

@@ -188,6 +188,18 @@ pub fn http() -> &'static reqwest::Client {
     })
 }
 
+/// Logs a failure that would otherwise be dropped, then carries on: for work whose failure
+/// the user never sees but a bug hunt wants to.
+pub trait LogErr<T> {
+    fn log_err(self, context: &str) -> Option<T>;
+}
+
+impl<T, E: std::fmt::Display> LogErr<T> for Result<T, E> {
+    fn log_err(self, context: &str) -> Option<T> {
+        self.map_err(|err| log::warn!("{context}: {err}")).ok()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

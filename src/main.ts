@@ -4,7 +4,10 @@ import App from './App.vue';
 import { captureSnapshot, captureToggle, getSnapshot } from './api';
 import { isSnapshot, type Snapshot } from './types';
 import { pickedUnit } from './bar/weather';
+import { captureConsole } from './log';
 import './styles.css';
+
+captureConsole();
 
 // Lets the styles follow the native window chrome, which differs between platforms.
 if (navigator.userAgent.includes('Windows')) document.documentElement.dataset.platform = 'windows';

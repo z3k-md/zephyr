@@ -143,10 +143,6 @@ fn run(app: AppHandle) {
     let Some((shared, wake)) = SHARED.get() else {
         return;
     };
-    // Settings are managed later in setup than this starts.
-    while app.try_state::<AppState>().is_none() {
-        std::thread::sleep(Duration::from_millis(200));
-    }
     let mut last_try = 0u64;
     loop {
         let (chosen, by_ip) = app

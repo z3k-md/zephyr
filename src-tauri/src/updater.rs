@@ -337,7 +337,9 @@ pub fn install_now(app: &AppHandle) {
                 }
             },
         };
-        log::info!("installing update {version}");
+        // On Windows the installer closes the app without an Exit event; logged now, so
+        // scripts/logscan.mjs doesn't take the update for a crash.
+        log::info!("Zephyr exiting to install update {version}");
         match update.install(&bytes) {
             Ok(()) => {
                 // Windows never gets here: the installer has already closed the app.
@@ -422,6 +424,9 @@ fn publish(app: &AppHandle, status: Status) {
     // After Later, the rest of the download happens out of sight.
     if DEFERRED.load(Ordering::SeqCst) && matches!(status, Status::Downloading { .. }) {
         return;
+    }
+    if let Status::Failed { message, .. } = &status {
+        log::error!("update failed: {message}");
     }
     if let Ok(mut saved) = status_slot().lock() {
         *saved = Some(status.clone());
