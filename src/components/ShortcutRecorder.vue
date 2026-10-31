@@ -6,10 +6,9 @@
   import Keys from './Keys.vue';
 
   // One field for recording a shortcut, shared by every hotkey in Settings. A click starts
-  // recording (the field turns red) and it keeps recording until another click, a click
-  // away or Enter: the keys show as they go down, and
-  // each new combo replaces the last, so a slip is fixed by pressing again. Esc leaves it as
-  // it was, and Zephyr's own shortcuts are off while it records so they record too.
+  // recording (the field turns red); the keys show as they go down and letting go binds
+  // them with a small snap. Esc, another click or a click away leaves it as it was, and
+  // Zephyr's own shortcuts are off while it records so they record too.
   const props = withDefaults(
     defineProps<{
       /** The shortcut as saved ("alt+g"), or empty for none. */
@@ -29,7 +28,7 @@
   const listening = ref(false);
   /** What's down right now: modifiers so far ("ctrl+alt"), or a whole combo. */
   const live = ref('');
-  /** The last whole combo pressed while recording; saved on Stop. */
+  /** The last whole combo pressed while recording; bound once its keys are let go. */
   const candidate = ref('');
   const snapped = ref(false);
   let snapTimer = 0;
@@ -96,14 +95,15 @@
     candidate.value = shortcut;
   }
 
-  // Letting go keeps the combo on show until every key is up; letting go of a modifier
-  // before any key just takes it back off the field.
+  // Letting go of the modifiers binds the combo; while they're held another key replaces
+  // it. Letting go of a modifier before any key just takes it back off the field.
   function onKeyUp(event: KeyboardEvent) {
     if (!listening.value) return;
     event.preventDefault();
     event.stopPropagation();
     const modifiers = heldModifiers(event);
-    if (!modifiers) live.value = '';
+    if (!modifiers && candidate.value) stop();
+    else if (!modifiers) live.value = '';
     else if (live.value !== candidate.value) live.value = modifiers;
   }
 
