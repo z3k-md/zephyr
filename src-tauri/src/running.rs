@@ -160,7 +160,9 @@ pub fn belongs(app: &App, app_exe: Option<&str>, window: &OpenWindow) -> bool {
         }
         if let Some((folder, _)) = app_exe.rsplit_once('\\')
             && own_folder(folder)
-            && exe.starts_with(&format!("{folder}\\"))
+            && let Some(inside) = exe.strip_prefix(&format!("{folder}\\"))
+            // Games Steam installed live in its folder but aren't Steam's windows.
+            && !inside.starts_with("steamapps\\")
         {
             return true;
         }
@@ -695,6 +697,16 @@ mod tests {
             &steam_app,
             Some(r"C:\Program Files (x86)\Steam\Steam.exe"),
             &steam
+        ));
+        let game = window(
+            "Hades",
+            r"C:\Program Files (x86)\Steam\steamapps\common\Hades\x64\Hades.exe",
+            "",
+        );
+        assert!(!belongs(
+            &steam_app,
+            Some(r"C:\Program Files (x86)\Steam\Steam.exe"),
+            &game
         ));
         let github = window(
             "GitHub Desktop",
