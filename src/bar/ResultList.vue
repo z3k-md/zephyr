@@ -85,6 +85,8 @@
             selected: group.start + offset === selected,
             'is-answer': row.kind === 'answer',
             'is-card': row.kind === 'netCard' || row.kind === 'portCard',
+            'is-calendar': row.kind === 'calendar',
+            'is-dim': row.calendar?.past,
           }"
           @mousedown.prevent="gesture.down($event, group.start + offset)"
           @mouseup="gesture.up()"
@@ -101,9 +103,18 @@
             :selected="group.start + offset === selected"
           />
           <template v-else>
-            <RowIcon :icon="row.icon" :label="row.label" :size="20" />
+            <span
+              v-if="row.calendar"
+              class="cal-mark"
+              :style="{ background: row.calendar.color }"
+              aria-hidden="true"
+            />
+            <RowIcon v-else :icon="row.icon" :label="row.label" :size="20" />
             <span class="item-text">
-              <span class="label">{{ row.label }}</span>
+              <span class="label">
+                <span v-if="row.calendar?.time" class="cal-time">{{ row.calendar.time }}</span>
+                {{ row.label }}
+              </span>
               <span v-if="row.subtitle" class="item-sub">{{ row.subtitle }}</span>
             </span>
             <span class="item-acc">

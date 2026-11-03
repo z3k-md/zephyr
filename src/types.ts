@@ -68,6 +68,8 @@ export interface Snapshot {
   emojiSkin: number;
   /** Emoji and symbols pasted from the picker, newest first. */
   emojiRecents: string[];
+  /** iCal feeds. The link for each one stays in the keychain. */
+  calendarFeeds: CalendarFeed[];
 }
 
 export type WeatherUnit = 'c' | 'f';
@@ -106,6 +108,58 @@ export interface Forecast {
     precipitation: number;
     uv: number;
   }[];
+}
+
+/** An iCal feed as Settings stores it. The link is not included. */
+export interface CalendarFeed {
+  id: string;
+  name: string;
+  color: string;
+  order: number;
+}
+
+/** One event from a feed, limited to the days the bar shows. */
+export interface CalEvent {
+  id: string;
+  feedId: string;
+  color: string;
+  title: string;
+  startMs: number;
+  endMs: number;
+  allDay: boolean;
+  /** Inclusive first day, YYYY-MM-DD, when all-day. */
+  startDate: string;
+  /** Exclusive last day, YYYY-MM-DD, when all-day. */
+  endDate: string;
+  location: string;
+  url: string;
+  provider: string;
+}
+
+/** A feed plus when it last updated, or the error. */
+export interface CalFeedStatus {
+  id: string;
+  name: string;
+  color: string;
+  order: number;
+  updatedAt: number;
+  error: string;
+}
+
+export interface Agenda {
+  events: CalEvent[];
+  feeds: CalFeedStatus[];
+}
+
+/** What a calendar row draws and what Enter does with it. */
+export interface CalendarRow {
+  id: string;
+  color: string;
+  /** Clock time, or "All day". Empty on the empty bar's soon row. */
+  time: string;
+  url: string;
+  details: string;
+  past: boolean;
 }
 
 /** The song or video playing on this computer. */
@@ -245,6 +299,8 @@ export interface Suggestion {
     | 'powerPending'
     | 'timer'
     | 'timerPending'
+    | 'calendar'
+    | 'calendarSoon'
     | 'netCard'
     | 'portCard'
     | 'port'
@@ -287,6 +343,8 @@ export interface SuggestionRow extends Suggestion {
   /** For timer rows: the length to start, or the running timer (with its id) to cancel.
    *  `focus` is a focus session, which uses the same rows. */
   timer?: { id?: number; seconds: number; label: string; focus?: boolean };
+  /** A calendar row: the feed color, and what Enter joins or copies. */
+  calendar?: CalendarRow;
 }
 
 export interface NoteSummary {

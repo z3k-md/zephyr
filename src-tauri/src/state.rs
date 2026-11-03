@@ -126,6 +126,8 @@ pub struct Persisted {
     /// character without a skin tone.
     #[serde(default)]
     pub emoji_recents: Vec<String>,
+    /// iCal feeds. The link for each one is in the keychain, not here.
+    pub calendar_feeds: Vec<crate::calendar::Feed>,
 }
 
 /// The palettes Settings > Appearance offers; the first is the default.
@@ -295,6 +297,7 @@ impl Persisted {
             update_channel: "stable".to_string(),
             emoji_skin: 0,
             emoji_recents: Vec::new(),
+            calendar_feeds: Vec::new(),
         }
     }
 

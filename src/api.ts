@@ -16,6 +16,7 @@ import type {
   FilePreview,
   MediaControl,
   NowPlaying,
+  Agenda,
   Forecast,
   Place,
   Quote,
@@ -827,4 +828,27 @@ export function pickerChoose(hex: string): Promise<void> {
 /** Close the color picker and drop the screenshot. */
 export function pickerCancel(): Promise<void> {
   return invoke('picker_cancel');
+}
+
+/** Today's and tomorrow's events, and each feed's last update or error. */
+export function calendarAgenda(): Promise<Agenda> {
+  return invoke<Agenda>('calendar_agenda');
+}
+
+/** Adds an iCal feed. The link is stored in the keychain. */
+export function calendarAddFeed(name: string, url: string): Promise<Snapshot> {
+  return invoke<Snapshot>('calendar_add_feed', { name, url });
+}
+
+export function calendarRenameFeed(id: string, name: string): Promise<Snapshot> {
+  return invoke<Snapshot>('calendar_rename_feed', { id, name });
+}
+
+export function calendarRemoveFeed(id: string): Promise<Snapshot> {
+  return invoke<Snapshot>('calendar_remove_feed', { id });
+}
+
+/** Moves a feed up or down. */
+export function calendarMoveFeed(id: string, up: boolean): Promise<Snapshot> {
+  return invoke<Snapshot>('calendar_move_feed', { id, up });
 }

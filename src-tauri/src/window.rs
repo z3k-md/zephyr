@@ -487,6 +487,10 @@ pub fn show_bar(app: &AppHandle) {
     crate::stats::set_bar_visible(true);
     // What's playing may have changed while the bar was hidden (macOS doesn't poll then).
     crate::nowplaying::refresh();
+    // A calendar older than five minutes is fetched again. A fresh one is left alone.
+    if !was_visible {
+        crate::calendar::on_summon();
+    }
     if let Err(err) = window.emit(event, ()) {
         log::error!("couldn't notify the bar: {err}");
     }

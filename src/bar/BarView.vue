@@ -82,6 +82,8 @@
   import { useDevices } from './useDevices';
   import { usePower } from './usePower';
   import { useTimers } from './useTimers';
+  import { useCalendar } from './useCalendar';
+  import { enterAction } from './calendar';
   import { useRunKey } from './useRunKey';
   import { useSuggest } from './useSuggest';
   import { useTypeAhead } from './useTypeAhead';
@@ -280,6 +282,18 @@
   });
   const focusNow = computed(() => snapshot.value?.timers?.find((timer) => timer.focus) ?? null);
 
+  // `cal` lists the day. A meeting about to start leads the empty bar.
+  const calendar = useCalendar();
+  const calendarChip = computed(() => calendar.chip());
+  function showCalendar() {
+    query.value = 'agenda';
+    void nextTick(() => {
+      const input = inputEl.value;
+      input?.focus();
+      input?.setSelectionRange(input.value.length, input.value.length);
+    });
+  }
+
   const { scheduleSuggest } = useSuggest({
     text: typedText,
     shown: () => lastResponse.value?.items ?? [],
@@ -290,8 +304,13 @@
   });
 
   const built = computed(() => {
-    if (!lastResponse.value) return { rows: [] as SuggestionRow[], preselect: null };
+    const typed = scope.value ? '' : lastQuery.value;
+    const agenda = calendar.rowsFor(typed);
+    if (agenda?.leads) return agenda;
+    if (!lastResponse.value) return agenda ?? { rows: [] as SuggestionRow[], preselect: null };
     const result = buildRows(lastResponse.value, rowCtx.value);
+    // A bare `cal` or `calendar` keeps Calculator or the Calendar app on top; the day follows.
+    if (agenda) result.rows.push(...agenda.rows);
     // Power rows lead; a command named outright ("shutdown") takes Enter.
     const power = powerRows();
     if (power.length) {
@@ -310,6 +329,14 @@
             ? null
             : result.preselect + timers.rows.length
           : timers.preselect;
+    }
+    if (!typed.trim()) {
+      const soon = calendar.soon();
+      if (soon) {
+        result.rows.unshift(soon);
+        if (soon.calendar?.url) result.preselect = 0;
+        else if (result.preselect !== null) result.preselect += 1;
+      }
     }
     if (looksLikeCommand(lastQuery.value)) {
       result.rows.push({
@@ -490,6 +517,21 @@
       if (item.appId) {
         const appId = item.appId;
         list.push({ label: `Quit ${item.hint}`, run: () => quitApp(appId, item.hint) });
+      }
+    } else if (item?.kind === 'calendar' || item?.kind === 'calendarSoon') {
+      const cal = item.calendar;
+      if (cal?.url) {
+        const url = cal.url;
+        list.push({
+          label: 'Join',
+          keys: 'enter',
+          run: () => openUrl(url).catch((error) => (notice.value = errorMessage(error))),
+        });
+        list.push({ label: 'Copy link', run: () => copyText(url) });
+      }
+      if (cal?.details) {
+        const details = cal.details;
+        list.push({ label: 'Copy details', run: () => copyText(details) });
       }
     } else if (item?.kind === 'file' && item.path) {
       const path = item.path;
@@ -1508,6 +1550,26 @@
         else openView('network');
         return;
       }
+      if (item.kind === 'calendar' || item.kind === 'calendarSoon') {
+        const action = enterAction(item);
+        if (action === 'join' && item.calendar?.url) {
+          try {
+            await openUrl(item.calendar.url);
+            query.value = '';
+          } catch (error) {
+            notice.value = errorMessage(error);
+          }
+        } else if (action === 'copy' && item.calendar?.details) {
+          await copyText(item.calendar.details);
+        } else if (action === 'settings') {
+          try {
+            await openSettings();
+          } catch (error) {
+            notice.value = errorMessage(error);
+          }
+        }
+        return;
+      }
       if (item.kind === 'timer' && item.timer) {
         await startTimer(item.timer.seconds, item.timer.label, item.timer.focus);
         return;
@@ -1914,9 +1976,12 @@
       />
 
       <!-- What's playing at the left, then a running focus session, then the meters (a click
-           opens System Resources); the weather at the right. -->
+           opens System Resources); the next meeting, then the weather at the right. -->
       <footer
-        v-if="!emojiOpen && ((statsShown && meters) || forecast || playingNow || focusNow)"
+        v-if="
+          !emojiOpen &&
+          ((statsShown && meters) || forecast || playingNow || focusNow || calendarChip)
+        "
         ref="statsEl"
         class="stats"
         :class="{ playing: playingNow, focusing: focusNow }"
@@ -2009,6 +2074,17 @@
           <svg viewBox="0 0 24 24" aria-hidden="true" v-html="GLYPHS.updown" />
           {{ netAlertText }}
         </span>
+        <button
+          v-if="calendarChip"
+          v-tip="'Calendar'"
+          type="button"
+          class="cal-chip"
+          @mousedown.prevent
+          @click.stop="showCalendar"
+        >
+          <span class="cal-chip-title">{{ calendarChip.title }}</span>
+          <span class="cal-chip-when">{{ calendarChip.when }}</span>
+        </button>
         <FooterWeather v-if="forecast" :forecast="forecast" @open="showWeather" />
       </footer>
     </template>

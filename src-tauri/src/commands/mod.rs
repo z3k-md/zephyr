@@ -7,6 +7,7 @@ use crate::state::{AppState, Persisted};
 
 pub mod apps;
 pub mod bar;
+pub mod calendar;
 pub mod capture;
 pub mod clipboard;
 pub mod countdown;

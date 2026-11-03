@@ -15,7 +15,7 @@ A launcher bar for Windows and macOS. Summon it over any app and type to open an
 - Ctrl+S (⌘S) opens Settings. Esc steps back to the main bar.
 - The empty bar shows recent searches, recent apps, the utilities you use most, and your IP address.
 - Reopening the bar soon after closing it returns to the view you were in (Settings > General).
-- The footer shows CPU, GPU and memory, network trouble and the weather; click any of them for more.
+- The footer shows CPU, GPU and memory, network trouble, the weather and the next meeting; click any of them for more.
 
 ### Scopes
 
@@ -72,6 +72,7 @@ Type a utility's name to open it.
 - **Speed test**: download, upload and lag under load, from Cloudflare.
 - **Weather**: `weather`, `weather raleigh nc` or `stockholm sweden weather`, from Open-Meteo. Tab steps through the next 48 hours with each hour's chance of rain.
 - **Color picker**: `pick color`, `color picker` or `eyedropper`, or a hotkey from Settings > Shortcuts, freezes the screen and magnifies the pixel under the cursor. Click or Enter copies its hex; Esc cancels. On macOS it needs Screen Recording and reads the main display.
+- **Calendar**: `agenda` or `cal today` lists today; `cal tomorrow` lists tomorrow. A bare `cal` or `calendar` lists today under the other results, so Calculator and the Calendar app stay on top. Enter joins the meeting, or copies the details when there is no link. A meeting starting within 10 minutes (or one that started less than 5 minutes ago) leads the empty bar, and the footer names the next one within 15 minutes. Settings > Calendar takes a secret iCal link: Google Calendar's Secret address in iCal format (calendar settings, Integrate calendar), Outlook's published ICS link, or iCloud's public calendar link (Share Calendar). The link stays in the system keychain.
 - **Now playing**: what's playing shows at the end of the search row, with play, pause and skip. Ctrl+Space plays or pauses, and scrolling over it changes the volume.
 - **Timers and focus**: `timer 5m tea` counts down and notifies; `timer` offers 5, 10 and 15 minutes, and Enter on a running one cancels it. `focus` offers 25, 50 and 90 minutes; `focus 50m`, `focus 1h deep work` or `focus deep work` starts a focus session (one at a time; starting another replaces it). The footer shows it. Settings > Focus sets the default length, a break that starts as a timer when it ends, apps to minimize, and sites the browser extension blocks until it's done.
 - **Typing test**: `!type` runs a Monkeytype-style test (15/30/60 seconds or 10/25/50 words) with WPM, accuracy, consistency and personal bests.

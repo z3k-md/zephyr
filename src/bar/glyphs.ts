@@ -99,4 +99,6 @@ export const GLYPHS: Record<string, string> = {
     '<path d="M14 4.5H6.5a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2H14"/><path d="M10 12h10M16.5 8.5 20 12l-3.5 3.5"/>',
   eyedropper:
     '<path d="m14.2 5.2 4.6 4.6"/><path d="m5 19 6.4-6.4"/><path d="m10.2 6.8 6.4 6.4-2.6 2.6a2.4 2.4 0 0 1-3.4 0l-3-3a2.4 2.4 0 0 1 0-3.4z"/>',
+  calendar:
+    '<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 9.5h16M8 3.5v3M16 3.5v3"/>',
 };

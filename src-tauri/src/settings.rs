@@ -574,6 +574,12 @@ const ZEPHYR: &[Setting] = &[
         &["focus session", "pomodoro", "break", "block sites"],
     ),
     zephyr(
+        "zephyr.calendar",
+        "Zephyr Calendar",
+        "calendar",
+        &["agenda", "ical", "meetings", "calendar feed"],
+    ),
+    zephyr(
         "zephyr.sound",
         "Zephyr Sound",
         "sound",
