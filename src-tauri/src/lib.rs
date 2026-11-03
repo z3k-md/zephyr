@@ -279,6 +279,8 @@ pub fn run() {
             commands::net::speed_test,
             commands::net::speed_test_cancel,
             commands::net::network_addresses,
+            commands::emoji::paste_text,
+            commands::emoji::save_emoji_prefs,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Zephyr")

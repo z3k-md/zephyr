@@ -117,6 +117,13 @@ pub struct Persisted {
     pub volume_overlay: String,
     /// Where updates come from: `stable` releases from main, or `nightly` builds of develop.
     pub update_channel: String,
+    /// Skin tone for emoji that take one: 0 is the default, 1–5 the five tones.
+    #[serde(default)]
+    pub emoji_skin: u8,
+    /// Emoji and symbols pasted from the picker, newest first, at most 24. Each is the
+    /// character without a skin tone.
+    #[serde(default)]
+    pub emoji_recents: Vec<String>,
 }
 
 /// The palettes Settings > Appearance offers; the first is the default.
@@ -283,6 +290,8 @@ impl Persisted {
             volume_keys: false,
             volume_overlay: "bottom".to_string(),
             update_channel: "stable".to_string(),
+            emoji_skin: 0,
+            emoji_recents: Vec::new(),
         }
     }
 
@@ -347,6 +356,26 @@ impl Persisted {
         {
             return Err(format!("That shortcut already runs {}", binding.label));
         }
+        Ok(())
+    }
+
+    /// The skin tone and the emoji pasted lately. Skin is 0–5; at most 24 recents, each a
+    /// short character.
+    pub fn set_emoji(&mut self, skin: u8, recents: Vec<String>) -> Result<(), String> {
+        if skin > 5 {
+            return Err("That skin tone isn't one of the five".into());
+        }
+        if recents.len() > 24 {
+            return Err("Too many recent emoji".into());
+        }
+        if recents.iter().any(|recent| {
+            let count = recent.chars().count();
+            count == 0 || count > 32
+        }) {
+            return Err("That recent emoji doesn't look right".into());
+        }
+        self.emoji_skin = skin;
+        self.emoji_recents = recents;
         Ok(())
     }
 
@@ -786,6 +815,23 @@ mod tests {
         let json = serde_json::to_value(&picked).unwrap();
         assert_eq!(json["style"], "mac");
         assert_eq!(json["mode"], "system");
+    }
+
+    #[test]
+    fn emoji_prefs_default_and_reject_a_bad_tone() {
+        let state = Persisted::parse(br#"{"version": 4, "theme": "ocean"}"#).unwrap();
+        assert_eq!(state.emoji_skin, 0);
+        assert!(state.emoji_recents.is_empty());
+
+        let mut state = Persisted::fresh();
+        assert!(state.set_emoji(6, Vec::new()).is_err());
+        assert!(state.set_emoji(0, vec!["x".into(); 25]).is_err());
+        assert!(state.set_emoji(2, vec!["🔥".into(), "→".into()]).is_ok());
+        assert_eq!(state.emoji_skin, 2);
+        assert_eq!(state.emoji_recents, ["🔥", "→"]);
+        let json = serde_json::to_value(&state).unwrap();
+        assert_eq!(json["emojiSkin"], 2);
+        assert_eq!(json["emojiRecents"][0], "🔥");
     }
 
     #[test]

@@ -215,6 +215,19 @@ export function clipPaste(id: number, plain: boolean): Promise<'pasted' | 'needs
   return invoke('clip_paste', { id, plain });
 }
 
+/** Puts `text` on the clipboard and pastes it, or only copies when `copyOnly`. Resolves to
+ *  'pasted', 'copied', or 'needsPermission' when it could only copy. */
+export function pasteText(
+  text: string,
+  copyOnly: boolean
+): Promise<'pasted' | 'copied' | 'needsPermission'> {
+  return invoke('paste_text', { text, copyOnly });
+}
+
+export function saveEmojiPrefs(skin: number, recents: string[]): Promise<Snapshot> {
+  return invoke<Snapshot>('save_emoji_prefs', { skin, recents });
+}
+
 export function clipCopy(id: number): Promise<void> {
   return invoke('clip_copy', { id });
 }

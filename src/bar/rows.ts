@@ -231,6 +231,12 @@ const COMMANDS: Command[] = [
     names: ['settings', 'setting', 'preferences'],
   },
   { id: 'scope:apps', label: 'Search apps', icon: 'glyph:grid', names: ['apps', 'applications'] },
+  {
+    id: 'scope:emoji',
+    label: 'Emoji',
+    icon: 'glyph:sparkle',
+    names: ['emoji', 'emojis', 'symbols'],
+  },
 ];
 
 /**

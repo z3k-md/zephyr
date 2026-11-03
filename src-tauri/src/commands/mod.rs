@@ -11,6 +11,7 @@ pub mod capture;
 pub mod clipboard;
 pub mod countdown;
 pub mod diagnostics;
+pub mod emoji;
 pub mod files;
 pub mod media;
 pub mod net;

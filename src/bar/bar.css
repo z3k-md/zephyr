@@ -3131,3 +3131,90 @@ button.res-tile:hover {
   stroke-linecap: round;
   stroke-linejoin: round;
 }
+
+/* Emoji and symbols. The grid scrolls inside the bar; the bar stays its fixed height. */
+.emoji-panel {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.emoji-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 2px 8px 8px;
+  scrollbar-width: none;
+}
+
+.emoji-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.emoji-grid {
+  display: grid;
+  gap: 2px;
+}
+
+.emoji-heading {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 10px 6px 2px;
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.emoji-cell {
+  display: grid;
+  place-items: center;
+  height: 36px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font-family: 'Segoe UI Emoji', 'Apple Color Emoji', 'Segoe UI Symbol', sans-serif;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.emoji-cell:hover,
+.emoji-cell.selected {
+  background: var(--select);
+}
+
+:root[data-style='windows'] .emoji-cell.selected {
+  background: color-mix(in srgb, var(--fg) 7%, transparent);
+}
+
+.emoji-foot {
+  flex: none;
+  min-width: 0;
+}
+
+.emoji-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.emoji-meta b {
+  overflow: hidden;
+  color: var(--fg);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.emoji-entity {
+  flex: none;
+}

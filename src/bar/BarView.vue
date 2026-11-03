@@ -74,6 +74,7 @@
   import { useNowPlaying } from './nowPlaying';
   import { useFooterStats } from './footerStats';
   import { bindingForAlias, bindingTarget, buildRows, groups, rowKey, type RowCtx } from './rows';
+  import { colonEmojiQuery, isEmojiColon, takeEmojiScope } from './emoji/query';
   import { googleUrl } from './google';
   import { useDevices } from './useDevices';
   import { usePower } from './usePower';
@@ -99,21 +100,25 @@
   import type ClipboardViewComponent from './ClipboardView.vue';
   import type TypingViewComponent from '../typing/TypingView.vue';
   import type ShellViewComponent from '../shell/ShellView.vue';
+  import type EmojiGridComponent from './EmojiGrid.vue';
   const loadClipboard = () => import('./ClipboardView.vue');
   const loadTyping = () => import('../typing/TypingView.vue');
   const loadShell = () => import('../shell/ShellView.vue');
   const loadPreview = () => import('./FilePreviewPane.vue');
+  const loadEmojiGrid = () => import('./EmojiGrid.vue');
   const ClipboardView = defineAsyncComponent(loadClipboard);
   const TypingView = defineAsyncComponent(loadTyping);
   const ShellView = defineAsyncComponent(loadShell);
   const FilePreviewPane = defineAsyncComponent(loadPreview);
+  const EmojiGrid = defineAsyncComponent(loadEmojiGrid);
   let prefetched = false;
   function prefetchViews() {
     if (prefetched) return;
     prefetched = true;
-    for (const load of [loadClipboard, loadTyping, loadShell, loadPreview]) {
+    for (const load of [loadClipboard, loadTyping, loadShell, loadPreview, loadEmojiGrid]) {
       void load().catch(() => (prefetched = false));
     }
+    void import('./emoji/catalog').then((mod) => mod.loadCatalog()).catch(() => undefined);
   }
 
   const root = ref<HTMLElement | null>(null);
@@ -139,8 +144,18 @@
     settings: { bang: 'set', name: 'Settings' },
     app: { bang: 'app', name: 'Apps' },
     apps: { bang: 'app', name: 'Apps' },
+    emoji: { bang: 'emoji', name: 'Emoji' },
   };
   const scope = ref<Scope | null>(null);
+  /** `:fire` or the Emoji scope. A colon and digits (`:3000`) stays a port lookup. */
+  function emojiActive(): boolean {
+    return scope.value?.bang === 'emoji' || (!scope.value && isEmojiColon(query.value));
+  }
+  const emojiQuery = computed(() => {
+    if (scope.value?.bang === 'emoji') return colonEmojiQuery(query.value) ?? query.value.trim();
+    return colonEmojiQuery(query.value) ?? '';
+  });
+  const emojiGrid = ref<InstanceType<typeof EmojiGridComponent> | null>(null);
   /** What Rust sees: the text, behind its scope's bang when there is one. */
   function typedText(): string {
     return scope.value ? `!${scope.value.bang} ${query.value}` : query.value;
@@ -164,6 +179,7 @@
     shell: 'Shell',
   };
   const view = ref<View>('root');
+  const emojiOpen = computed(() => view.value === 'root' && emojiActive());
   const parked = ref('');
   // A view is mounted on first use and then kept, so its state survives leaving it.
   const visited = reactive<Record<string, boolean>>({});
@@ -308,7 +324,7 @@
     query,
     inputEl,
     snapshot,
-    scoped: () => scope.value !== null,
+    scoped: () => scope.value !== null || isEmojiColon(query.value),
     items,
     selectedItem,
   });
@@ -929,6 +945,14 @@
       query.value = scoped[2];
       return;
     }
+    if (!scope.value) {
+      const emoji = takeEmojiScope(query.value);
+      if (emoji) {
+        scope.value = SCOPES.emoji;
+        query.value = emoji.query;
+        return;
+      }
+    }
     if (/^!type$/i.test(query.value.trim()) && query.value.endsWith(' ')) {
       query.value = '';
       enter('typing');
@@ -954,6 +978,7 @@
     userMoved = false;
     notice.value = null;
     if (query.value) updateCheck.value = null;
+    if (emojiActive()) return;
     scheduleSuggest();
   });
 
@@ -965,6 +990,7 @@
     }
     selected.value = -1;
     userMoved = false;
+    if (next?.bang === 'emoji') return;
     scheduleSuggest();
   });
 
@@ -1112,6 +1138,7 @@
       viewShowing()?.onKey(event);
       return;
     }
+    if (emojiOpen.value && emojiGrid.value?.onKey(event)) return;
     if (event.key === 'Enter' && /^!(?:sh|shell)$/i.test(query.value.trim())) {
       event.preventDefault();
       query.value = '';
@@ -1773,61 +1800,71 @@
       </p>
 
       <div class="bar-body">
-        <WeatherCard
-          v-if="cardForecast"
-          :forecast="cardForecast"
-          :hour="cardHour"
-          @open="openForecast"
-          @hour="pickHour"
+        <EmojiGrid
+          v-if="emojiOpen"
+          ref="emojiGrid"
+          :query="emojiQuery"
+          :skin="snapshot?.emojiSkin ?? 0"
+          :recents="snapshot?.emojiRecents"
+          @notice="notice = $event"
         />
-        <TickerCard
-          v-else-if="cardQuote"
-          :quote="cardQuote"
-          :range="quoteRange"
-          @open="openQuote"
-          @range="pickRange"
-        />
-        <ActionMenu
-          v-if="actionsOpen"
-          id="actions"
-          :actions="actions"
-          :index="actionIndex"
-          @run="menu.run"
-          @hover="menu.hover"
-          @fit="menu.shown.value = $event"
-        />
+        <template v-else>
+          <WeatherCard
+            v-if="cardForecast"
+            :forecast="cardForecast"
+            :hour="cardHour"
+            @open="openForecast"
+            @hour="pickHour"
+          />
+          <TickerCard
+            v-else-if="cardQuote"
+            :quote="cardQuote"
+            :range="quoteRange"
+            @open="openQuote"
+            @range="pickRange"
+          />
+          <ActionMenu
+            v-if="actionsOpen"
+            id="actions"
+            :actions="actions"
+            :index="actionIndex"
+            @run="menu.run"
+            @hover="menu.hover"
+            @fit="menu.shown.value = $event"
+          />
 
-        <ResultList
-          v-else-if="items.length"
-          :groups="sections"
-          :selected="selected"
-          :numbered="showNumbers ? RUN_KEY : ''"
-          @choose="chooseAt"
-          @hover="hover"
-          @drag="dragRow"
-          @fit="visibleCount = $event"
-        >
-          <template #card="{ row, selected: chosen }">
-            <PortCard
-              v-if="row.kind === 'portCard'"
-              :row="row"
-              :selected="chosen"
-              :confirm="portConfirmText"
-            />
-            <NetworkCard
-              v-else
-              :row="row"
-              :selected="chosen"
-              :summary="netSummary"
-              :last-speed="snapshot?.lastSpeed ?? null"
-            />
-          </template>
-        </ResultList>
+          <ResultList
+            v-else-if="items.length"
+            :groups="sections"
+            :selected="selected"
+            :numbered="showNumbers ? RUN_KEY : ''"
+            @choose="chooseAt"
+            @hover="hover"
+            @drag="dragRow"
+            @fit="visibleCount = $event"
+          >
+            <template #card="{ row, selected: chosen }">
+              <PortCard
+                v-if="row.kind === 'portCard'"
+                :row="row"
+                :selected="chosen"
+                :confirm="portConfirmText"
+              />
+              <NetworkCard
+                v-else
+                :row="row"
+                :selected="chosen"
+                :summary="netSummary"
+                :last-speed="snapshot?.lastSpeed ?? null"
+              />
+            </template>
+          </ResultList>
+        </template>
       </div>
 
       <!-- After the list's v-if chain, which it must not join. -->
       <FilePreviewPane
-        v-if="previewShown && selectedItem?.path"
+        v-if="previewShown && !emojiOpen && selectedItem?.path"
         :path="selectedItem.path"
         :name="selectedItem.label"
         :icon="selectedItem.icon"
@@ -1837,7 +1874,7 @@
       <!-- What's playing at the left, then the meters (a click opens System Resources); the
            weather at the right. -->
       <footer
-        v-if="(statsShown && meters) || forecast || playingNow"
+        v-if="!emojiOpen && ((statsShown && meters) || forecast || playingNow)"
         ref="statsEl"
         class="stats"
         :class="{ playing: playingNow }"
