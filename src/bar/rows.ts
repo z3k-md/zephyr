@@ -238,6 +238,12 @@ const COMMANDS: Command[] = [
     icon: 'glyph:eyedropper',
     names: ['pick color', 'color picker', 'eyedropper'],
   },
+  {
+    id: 'scope:emoji',
+    label: 'Emoji',
+    icon: 'glyph:sparkle',
+    names: ['emoji', 'emojis', 'symbols'],
+  },
 ];
 
 /**

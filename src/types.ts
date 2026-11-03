@@ -64,6 +64,10 @@ export interface Snapshot {
   volumeOverlay: string;
   /** Where updates come from: `stable` releases, or `nightly` builds of develop. */
   updateChannel: string;
+  /** Skin tone for emoji that take one: 0 is the default, 1–5 the five tones. */
+  emojiSkin: number;
+  /** Emoji and symbols pasted from the picker, newest first. */
+  emojiRecents: string[];
 }
 
 export type WeatherUnit = 'c' | 'f';

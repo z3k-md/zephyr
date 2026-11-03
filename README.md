@@ -31,6 +31,7 @@ A `!word` before or after the text narrows the search. Unknown `!words` stay as 
 | `!clip`       | Clipboard history                                                                                                       |
 | `!sh`, `>`    | The shell                                                                                                               |
 | `!type`       | The typing test                                                                                                         |
+| `!emoji`      | Emoji and symbols (`:fire`, `:arrow`, `fire !emoji`)                                                                    |
 
 Without a scope, a clear match for a setting, file or bookmark shows as at most two rows under the other results, and Enter never picks one unless you arrow to it. Only files you've opened from Zephyr before appear unscoped.
 
@@ -62,6 +63,7 @@ These answer in the top row as you type; Enter copies the answer. The last few c
 Type a utility's name to open it.
 
 - **Clipboard history**: ⌘⇧V (Alt+Shift+V on Windows) or `!clip` searches everything you've copied, including text, links, colors, images and files, and the text in copied screenshots. Enter pastes into the app you're in, Ctrl+Enter (⌘Enter) copies, Shift+Enter pastes as plain text. History stays on this computer, encrypted with a key in the system keychain (Credential Manager on Windows), and copies from password managers are never recorded.
+- **Emoji**: `:fire` or `!emoji` searches emoji and symbols. Enter pastes into the app in front, Ctrl+Enter (⌘Enter) copies, and Tab cycles a skin tone. Recents and the skin tone are remembered.
 - **Notes**: ⌥⌘N (Ctrl+Alt+N on Windows) opens a small rich-text note in its own window, and `!note` finds one or starts one. Notes are HTML files in Zephyr's settings folder, and open notes come back at the next start.
 - **Shell**: `>` or `!sh` runs commands in the bar (Git Bash, PowerShell or WSL on Windows; your login shell on macOS). Ctrl+C stops a command, and Ctrl+Enter hands off to a real terminal.
 - **Resources** (`top`): CPU, memory, GPU and network over the last 15 minutes, with apps above background processes. Ctrl+Backspace quits a process.

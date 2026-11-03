@@ -286,6 +286,8 @@ pub fn run() {
             commands::picker::pick_color,
             commands::picker::picker_choose,
             commands::picker::picker_cancel,
+            commands::emoji::paste_text,
+            commands::emoji::save_emoji_prefs,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Zephyr")

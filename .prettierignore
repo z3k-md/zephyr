@@ -3,3 +3,4 @@ bun.lock
 dist
 node_modules
 .git
+src/bar/emoji/data.json
