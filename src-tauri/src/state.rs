@@ -117,6 +117,8 @@ pub struct Persisted {
     pub volume_overlay: String,
     /// Where updates come from: `stable` releases from main, or `nightly` builds of develop.
     pub update_channel: String,
+    /// iCal feeds. The link for each one is in the keychain, not here.
+    pub calendar_feeds: Vec<crate::calendar::Feed>,
 }
 
 /// The palettes Settings > Appearance offers; the first is the default.
@@ -283,6 +285,7 @@ impl Persisted {
             volume_keys: false,
             volume_overlay: "bottom".to_string(),
             update_channel: "stable".to_string(),
+            calendar_feeds: Vec::new(),
         }
     }
 

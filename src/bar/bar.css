@@ -3131,3 +3131,60 @@ button.res-tile:hover {
   stroke-linecap: round;
   stroke-linejoin: round;
 }
+
+/* A feed's color on a calendar row, and a meeting that's already over. */
+.cal-mark {
+  flex: none;
+  width: 3px;
+  height: 22px;
+  border-radius: 2px;
+}
+
+.cal-time {
+  display: inline-block;
+  min-width: 4.6em;
+  margin-right: 8px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.item.is-calendar {
+  align-items: flex-start;
+}
+
+.item.is-calendar .cal-mark {
+  margin-top: 6px;
+}
+
+.item.is-dim .cal-mark,
+.item.is-dim .item-text {
+  opacity: 0.45;
+}
+
+.cal-chip {
+  display: flex;
+  flex: 0 1 140px;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  max-width: 180px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.cal-chip-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cal-chip-when {
+  flex: none;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}

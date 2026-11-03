@@ -15,7 +15,7 @@ A launcher bar for Windows and macOS. Summon it over any app and type to open an
 - Ctrl+S (⌘S) opens Settings. Esc steps back to the main bar.
 - The empty bar shows recent searches, recent apps, the utilities you use most, and your IP address.
 - Reopening the bar soon after closing it returns to the view you were in (Settings > General).
-- The footer shows CPU, GPU and memory, network trouble and the weather; click any of them for more.
+- The footer shows CPU, GPU and memory, network trouble, the weather and the next meeting; click any of them for more.
 
 ### Scopes
 
@@ -68,6 +68,7 @@ Type a utility's name to open it.
 - **Sound** (`vol`, `mixer`; Windows): every app's volume with live meters, mute and the output device. ↑↓ picks a row, ←→ moves it (Shift for 10%), M mutes, 1–9 and 0 jump to 10–100%, Tab switches device. Settings > Sound can take over the volume keys: Zephyr's own overlay replaces Windows' flyout, Alt with a volume key picks an app for the keys to change, and with the bar open the levels show in the bar.
 - **Speed test**: download, upload and lag under load, from Cloudflare.
 - **Weather**: `weather`, `weather raleigh nc` or `stockholm sweden weather`, from Open-Meteo. Tab steps through the next 48 hours with each hour's chance of rain.
+- **Calendar**: `cal`, `calendar` or `agenda` lists today; `cal tomorrow` lists tomorrow. Enter joins the meeting, or copies the details when there is no link. A meeting starting within 10 minutes (or one that started less than 5 minutes ago) leads the empty bar, and the footer names the next one within 15 minutes. Settings > Calendar takes a secret iCal link: Google Calendar's Secret address in iCal format (calendar settings, Integrate calendar), Outlook's published ICS link, or iCloud's public calendar link (Share Calendar). The link stays in the system keychain.
 - **Now playing**: what's playing shows at the end of the search row, with play, pause and skip. Ctrl+Space plays or pauses, and scrolling over it changes the volume.
 - **Typing test**: `!type` runs a Monkeytype-style test (15/30/60 seconds or 10/25/50 words) with WPM, accuracy, consistency and personal bests.
 

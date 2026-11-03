@@ -34,6 +34,8 @@ const SECTION_TITLES: Record<string, string> = {
   shell: 'Shell',
   power: 'Power',
   timer: 'Timer',
+  today: 'Today',
+  tomorrow: 'Tomorrow',
   bookmarks: 'Bookmarks',
   windows: 'Windows',
   ports: 'Ports',
@@ -44,6 +46,7 @@ export function rowKey(row: SuggestionRow): string {
   if (row.kind === 'netCard') return `netCard-${row.target}`;
   // A running timer by its id, since its label ticks.
   if (row.timer?.id) return `timer-${row.timer.id}`;
+  if (row.calendar) return `cal-${row.calendar.id}`;
   if (row.portUse) {
     const use = row.portUse;
     return `${row.kind}-${use.protocol}-${use.port}-${use.pid}-${use.state}`;

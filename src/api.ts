@@ -15,6 +15,7 @@ import type {
   FilePreview,
   MediaControl,
   NowPlaying,
+  Agenda,
   Forecast,
   Place,
   Quote,
@@ -792,4 +793,27 @@ export function saveVolumeOverlay(position: string): Promise<Snapshot> {
 /** A volume key pressed with the bar in front, handed to Zephyr's volume keys. */
 export function volumeKey(key: 'up' | 'down' | 'mute', alt: boolean): Promise<void> {
   return invoke('volume_key', { key, alt });
+}
+
+/** Today's and tomorrow's events, and each feed's last update or error. */
+export function calendarAgenda(): Promise<Agenda> {
+  return invoke<Agenda>('calendar_agenda');
+}
+
+/** Adds an iCal feed. The link is stored in the keychain. */
+export function calendarAddFeed(name: string, url: string): Promise<Snapshot> {
+  return invoke<Snapshot>('calendar_add_feed', { name, url });
+}
+
+export function calendarRenameFeed(id: string, name: string): Promise<Snapshot> {
+  return invoke<Snapshot>('calendar_rename_feed', { id, name });
+}
+
+export function calendarRemoveFeed(id: string): Promise<Snapshot> {
+  return invoke<Snapshot>('calendar_remove_feed', { id });
+}
+
+/** Moves a feed up or down. */
+export function calendarMoveFeed(id: string, up: boolean): Promise<Snapshot> {
+  return invoke<Snapshot>('calendar_move_feed', { id, up });
 }

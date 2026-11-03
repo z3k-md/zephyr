@@ -4,6 +4,7 @@ mod audio;
 mod bindings;
 mod bookmarks;
 mod browser;
+mod calendar;
 mod capture;
 mod clipboard;
 mod commands;
@@ -279,6 +280,11 @@ pub fn run() {
             commands::net::speed_test,
             commands::net::speed_test_cancel,
             commands::net::network_addresses,
+            commands::calendar::calendar_agenda,
+            commands::calendar::calendar_add_feed,
+            commands::calendar::calendar_rename_feed,
+            commands::calendar::calendar_remove_feed,
+            commands::calendar::calendar_move_feed,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Zephyr")
@@ -401,6 +407,7 @@ fn open_stores(
     icons::init(app.path().app_cache_dir()?.join("icons"));
     capture::init(app.path().app_data_dir()?.join("captures"));
     weather::start(app.handle(), app.path().app_data_dir()?);
+    calendar::start(app.handle());
     // Dev builds keep their key in a file instead of the keychain (secrets.rs), so
     // they keep their own history too; sharing one wiped it at every switch.
     let clipboard_dir = if cfg!(debug_assertions) {

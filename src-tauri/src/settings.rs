@@ -568,6 +568,12 @@ const ZEPHYR: &[Setting] = &[
         ],
     ),
     zephyr(
+        "zephyr.calendar",
+        "Zephyr Calendar",
+        "calendar",
+        &["agenda", "ical", "meetings", "calendar feed"],
+    ),
+    zephyr(
         "zephyr.sound",
         "Zephyr Sound",
         "sound",

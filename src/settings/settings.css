@@ -1634,3 +1634,32 @@
   padding: 6px 9px;
   border-radius: 14px;
 }
+
+.cal-feeds li {
+  align-items: center;
+}
+
+.cal-feeds .swatch {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+
+.cal-feed {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.cal-feed b {
+  font-weight: 600;
+}
+
+.cal-feed-actions {
+  display: flex;
+  flex: none;
+  gap: 4px;
+}
