@@ -1,6 +1,7 @@
 import { Channel, invoke as call, type InvokeArgs } from '@tauri-apps/api/core';
 import { logCommandFailure } from './log';
 import type {
+  Countdown,
   ClipDetail,
   Sound,
   SoundLevel,
@@ -441,6 +442,15 @@ export function powerRun(action: PowerAction, at: number | null): Promise<void> 
 
 export function powerCancel(): Promise<void> {
   return invoke('power_cancel');
+}
+
+/** Starts a countdown timer for `seconds`, named `label` (may be empty). */
+export function timerStart(seconds: number, label: string): Promise<Countdown> {
+  return invoke<Countdown>('timer_start', { seconds, label });
+}
+
+export function timerCancel(id: number): Promise<void> {
+  return invoke('timer_cancel', { id });
 }
 
 /** Opens a web address in the default browser and closes the bar. */

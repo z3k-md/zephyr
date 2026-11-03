@@ -33,6 +33,7 @@ const SECTION_TITLES: Record<string, string> = {
   commands: 'Commands',
   shell: 'Shell',
   power: 'Power',
+  timer: 'Timer',
   bookmarks: 'Bookmarks',
   windows: 'Windows',
   ports: 'Ports',
@@ -41,6 +42,8 @@ const SECTION_TITLES: Record<string, string> = {
 export function rowKey(row: SuggestionRow): string {
   if (row.kind === 'query') return 'query';
   if (row.kind === 'netCard') return `netCard-${row.target}`;
+  // A running timer by its id, since its label ticks.
+  if (row.timer?.id) return `timer-${row.timer.id}`;
   if (row.portUse) {
     const use = row.portUse;
     return `${row.kind}-${use.protocol}-${use.port}-${use.pid}-${use.state}`;

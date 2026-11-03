@@ -237,6 +237,8 @@ export interface Suggestion {
     | 'power'
     | 'bookmark'
     | 'powerPending'
+    | 'timer'
+    | 'timerPending'
     | 'netCard'
     | 'portCard'
     | 'port'
@@ -276,6 +278,8 @@ export interface SuggestionRow extends Suggestion {
   keyHints?: { keys: string; label: string }[];
   /** For power rows: what Enter runs. */
   power?: PowerPreview;
+  /** For timer rows: the length to start, or the running timer (with its id) to cancel. */
+  timer?: { id?: number; seconds: number; label: string };
 }
 
 export interface NoteSummary {
@@ -357,6 +361,14 @@ export interface SyncPending {
 }
 
 export type PowerAction = 'shutdown' | 'restart' | 'sleep' | 'lock' | 'sign_out' | 'firmware';
+
+export interface Countdown {
+  id: number;
+  /** When it runs out, in unix seconds. */
+  at: number;
+  seconds: number;
+  label: string;
+}
 
 export interface PowerSchedule {
   action: PowerAction;

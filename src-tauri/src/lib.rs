@@ -7,6 +7,7 @@ mod browser;
 mod capture;
 mod clipboard;
 mod commands;
+mod countdown;
 mod cputemp;
 mod deeplink;
 mod files;
@@ -241,6 +242,8 @@ pub fn run() {
             commands::power::power_preview,
             commands::power::power_run,
             commands::power::power_cancel,
+            commands::countdown::timer_start,
+            commands::countdown::timer_cancel,
             commands::media::now_playing,
             commands::media::now_playing_control,
             commands::media::now_playing_volume,
@@ -320,6 +323,7 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
     handoff::start();
     power::resume(app.handle());
+    countdown::resume(app.handle());
     browser::start();
     nowplaying::start(app.handle());
     volume_keys::set_position(&snapshot.volume_overlay);

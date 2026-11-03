@@ -78,6 +78,8 @@ pub struct Persisted {
     pub onboarding_every_launch: bool,
     /// A shutdown, restart, sleep, lock or sign-out set for later from the bar.
     pub power: Option<crate::power::Schedule>,
+    /// Countdown timers started from the bar.
+    pub timers: Vec<crate::countdown::Countdown>,
     /// Notes open in their own windows, reopened where they were at the next start.
     pub note_windows: Vec<NoteWindow>,
     /// Whether Ctrl+R and Ctrl+Shift+S record and snapshot Zephyr's window for bug reports.

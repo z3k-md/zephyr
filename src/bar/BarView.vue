@@ -76,6 +76,7 @@
   import { googleUrl } from './google';
   import { useDevices } from './useDevices';
   import { usePower } from './usePower';
+  import { useTimers } from './useTimers';
   import { useRunKey } from './useRunKey';
   import { useSuggest } from './useSuggest';
   import { useTypeAhead } from './useTypeAhead';
@@ -243,6 +244,14 @@
     notice,
   });
 
+  // Countdown timers ("timer 5m"): starting one, and running ones ticking down.
+  const { timerRows, startTimer, cancelTimer } = useTimers({
+    snapshot,
+    typed: () => (scope.value ? '' : lastQuery.value),
+    query,
+    notice,
+  });
+
   const { scheduleSuggest } = useSuggest({
     text: typedText,
     shown: () => lastResponse.value?.items ?? [],
@@ -262,6 +271,16 @@
       const named = power.findIndex((row) => row.kind === 'power' && row.power?.exact);
       result.preselect =
         named >= 0 ? named : result.preselect === null ? null : result.preselect + power.length;
+    }
+    // Timer rows lead too; "timer 5m" takes Enter.
+    const timers = timerRows();
+    if (timers.rows.length) {
+      result.rows.unshift(...timers.rows);
+      result.preselect = timers.preselect
+        ? 0
+        : result.preselect === null
+          ? null
+          : result.preselect + timers.rows.length;
     }
     if (looksLikeCommand(lastQuery.value)) {
       result.rows.push({
@@ -1400,6 +1419,14 @@
       if (item.kind === 'netCard') {
         if (item.target === 'ip') await copyText(item.label);
         else openView('network');
+        return;
+      }
+      if (item.kind === 'timer' && item.timer) {
+        await startTimer(item.timer.seconds, item.timer.label);
+        return;
+      }
+      if (item.kind === 'timerPending' && item.timer?.id) {
+        await cancelTimer(item.timer.id);
         return;
       }
       if (item.kind === 'powerPending' || (item.kind === 'power' && item.power?.cancel)) {
