@@ -28,6 +28,8 @@
   /** Arrow keys own the pixel until the pointer moves again. */
   let nudged = false;
   let unlisten: UnlistenFn | null = null;
+  /** The frame is served once per capture, so a second fetch while this one runs gets nothing. */
+  let loading = false;
 
   function frameUrl(): string {
     const base = isMac ? 'picker://localhost/frame' : 'http://picker.localhost/frame';
@@ -35,22 +37,30 @@
   }
 
   async function load() {
-    const response = await fetch(frameUrl());
-    if (!response.ok) return;
-    const nextWidth = Number(response.headers.get('X-Width'));
-    const nextHeight = Number(response.headers.get('X-Height'));
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    if (!nextWidth || !nextHeight || bytes.length < nextWidth * nextHeight * 4) return;
-    width = nextWidth;
-    height = nextHeight;
-    pixels = new Uint8ClampedArray(bytes.buffer, bytes.byteOffset, nextWidth * nextHeight * 4);
-    const canvas = screenEl.value;
-    const context = canvas?.getContext('2d');
-    if (!canvas || !context) return;
-    canvas.width = width;
-    canvas.height = height;
-    context.putImageData(new ImageData(pixels, width, height), 0, 0);
-    place(Math.floor(width / 2), Math.floor(height / 2));
+    if (loading) return;
+    loading = true;
+    try {
+      const response = await fetch(frameUrl());
+      if (!response.ok) return;
+      const nextWidth = Number(response.headers.get('X-Width'));
+      const nextHeight = Number(response.headers.get('X-Height'));
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      if (!nextWidth || !nextHeight || bytes.length < nextWidth * nextHeight * 4) return;
+      width = nextWidth;
+      height = nextHeight;
+      pixels = new Uint8ClampedArray(bytes.buffer, bytes.byteOffset, nextWidth * nextHeight * 4);
+      const canvas = screenEl.value;
+      const context = canvas?.getContext('2d');
+      if (!canvas || !context) return;
+      canvas.width = width;
+      canvas.height = height;
+      context.putImageData(new ImageData(pixels, width, height), 0, 0);
+      place(Math.floor(width / 2), Math.floor(height / 2));
+    } catch {
+      // The picker may have closed, or this capture's frame was already taken.
+    } finally {
+      loading = false;
+    }
   }
 
   /** The window is reused, so the old frame goes before it hides: the next pick starts
@@ -63,11 +73,15 @@
     if (screenEl.value) screenEl.value.width = 0;
   }
 
-  function choose() {
+  async function choose() {
     const picked = hex.value;
     if (!picked) return;
     clear();
-    void pickerChoose(picked);
+    try {
+      await pickerChoose(picked);
+    } catch {
+      // A failed copy closes the picker and reports on the bar.
+    }
   }
 
   function cancel() {

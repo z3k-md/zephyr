@@ -75,7 +75,9 @@ pub fn init_logging() {
 
 pub fn run() {
     let builder = tauri::Builder::default()
-        .register_uri_scheme_protocol("picker", |_ctx, request| picker::serve(request));
+        .register_uri_scheme_protocol("picker", |ctx, request| {
+            picker::serve(ctx.webview_label(), request)
+        });
     // We use window keyboard/mouse events, not raw device events. On Windows,
     // leave physical input on the normal hook path used by PowerToys and our OSD.
     #[cfg(windows)]

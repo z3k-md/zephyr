@@ -3,7 +3,7 @@
 //! frame with a loupe. The window is made the first time and reused. Picking copies the
 //! hex as an ordinary clipboard write, so history records it as a color.
 
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use tauri::{
@@ -23,42 +23,166 @@ struct Frame {
     y: i32,
 }
 
-fn shot() -> &'static Mutex<Option<Arc<Frame>>> {
-    static SHOT: OnceLock<Mutex<Option<Arc<Frame>>>> = OnceLock::new();
-    SHOT.get_or_init(|| Mutex::new(None))
+/// `Idle` is no picker. `Starting` is the capture, before the window is up. `Open` is the
+/// window on screen. Start, choose and cancel hold [`ops`] for the whole call, so a second
+/// hotkey can't capture the picker or race the first one.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Session {
+    Idle,
+    Starting,
+    Open,
 }
 
-/// `picker://` (and `http://picker.localhost` on Windows): the current frame as raw RGBA,
-/// with its size in headers. Nothing is served once the picker closes.
-pub fn serve(request: tauri::http::Request<Vec<u8>>) -> tauri::http::Response<Vec<u8>> {
-    let _ = request;
-    let frame = shot().lock().ok().and_then(|guard| guard.clone());
-    let Some(frame) = frame else {
-        return tauri::http::Response::builder()
-            .status(404)
-            .body(Vec::new())
-            .unwrap_or_else(|_| tauri::http::Response::new(Vec::new()));
+struct Gate {
+    session: Session,
+    frame: Option<Frame>,
+}
+
+/// One start, choose or cancel at a time.
+fn ops() -> &'static Mutex<()> {
+    static OPS: OnceLock<Mutex<()>> = OnceLock::new();
+    OPS.get_or_init(|| Mutex::new(()))
+}
+
+fn gate() -> &'static Mutex<Gate> {
+    static GATE: OnceLock<Mutex<Gate>> = OnceLock::new();
+    GATE.get_or_init(|| {
+        Mutex::new(Gate {
+            session: Session::Idle,
+            frame: None,
+        })
+    })
+}
+
+fn lock_ops() -> std::sync::MutexGuard<'static, ()> {
+    ops().lock().unwrap_or_else(|poison| poison.into_inner())
+}
+
+fn lock_gate() -> std::sync::MutexGuard<'static, Gate> {
+    gate().lock().unwrap_or_else(|poison| poison.into_inner())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum ServeDecision {
+    /// The picker window's `GET /frame`.
+    Allow,
+    /// Some other Zephyr window. The screenshot stays put.
+    Deny,
+    /// The picker asked for something that isn't the frame.
+    Missing,
+}
+
+/// The captured screen is only for the picker window's `GET /frame`.
+fn serve_decision(webview_label: &str, method: &str, path: &str) -> ServeDecision {
+    if webview_label != "picker" {
+        return ServeDecision::Deny;
+    }
+    if method != "GET" || path != "/frame" {
+        return ServeDecision::Missing;
+    }
+    ServeDecision::Allow
+}
+
+/// Origins the picker page is actually loaded from. The frame names one of these in
+/// `Access-Control-Allow-Origin`, so the page can read `X-Width` and `X-Height` on Windows,
+/// where `http://picker.localhost` is a different origin from the app. Anything else is
+/// left unnamed: `*` would let any page that reached the response read the screenshot.
+fn frame_cors_origin(origin: Option<&str>) -> Option<&'static str> {
+    match origin? {
+        "http://tauri.localhost" => Some("http://tauri.localhost"),
+        "https://tauri.localhost" => Some("https://tauri.localhost"),
+        "tauri://localhost" => Some("tauri://localhost"),
+        "http://localhost:1420" => Some("http://localhost:1420"),
+        _ => None,
+    }
+}
+
+fn apply_cors(
+    builder: tauri::http::response::Builder,
+    request: &tauri::http::Request<Vec<u8>>,
+) -> tauri::http::response::Builder {
+    let origin = request
+        .headers()
+        .get(tauri::http::header::ORIGIN)
+        .and_then(|value| value.to_str().ok());
+    let Some(allowed) = frame_cors_origin(origin) else {
+        return builder;
     };
-    tauri::http::Response::builder()
-        .header(
-            tauri::http::header::CONTENT_TYPE,
-            "application/octet-stream",
-        )
-        .header(tauri::http::header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+    builder
+        .header(tauri::http::header::ACCESS_CONTROL_ALLOW_ORIGIN, allowed)
         .header(
             tauri::http::header::ACCESS_CONTROL_EXPOSE_HEADERS,
             "X-Width, X-Height",
         )
-        .header(tauri::http::header::CACHE_CONTROL, "no-store")
-        .header("X-Width", frame.width.to_string())
-        .header("X-Height", frame.height.to_string())
-        .body(frame.rgba.clone())
+        .header(tauri::http::header::VARY, "Origin")
+}
+
+fn response(
+    status: u16,
+    request: Option<&tauri::http::Request<Vec<u8>>>,
+) -> tauri::http::Response<Vec<u8>> {
+    let mut builder = tauri::http::Response::builder().status(status);
+    if let Some(request) = request {
+        builder = apply_cors(builder, request);
+    }
+    builder
+        .body(Vec::new())
+        .unwrap_or_else(|_| tauri::http::Response::new(Vec::new()))
+}
+
+/// `picker://` (and `http://picker.localhost` on Windows): the current frame as raw RGBA,
+/// with its size in headers. Only the picker window's `GET /frame` is served, and the bytes
+/// are handed off once — the page loads the frame once per show. Nothing is served once the
+/// picker closes.
+pub fn serve(
+    webview_label: &str,
+    request: tauri::http::Request<Vec<u8>>,
+) -> tauri::http::Response<Vec<u8>> {
+    match serve_decision(
+        webview_label,
+        request.method().as_str(),
+        request.uri().path(),
+    ) {
+        ServeDecision::Deny => return response(403, None),
+        ServeDecision::Missing => return response(404, Some(&request)),
+        ServeDecision::Allow => {}
+    }
+    let Some(frame) = lock_gate().frame.take() else {
+        return response(404, Some(&request));
+    };
+    let builder = apply_cors(
+        tauri::http::Response::builder()
+            .header(
+                tauri::http::header::CONTENT_TYPE,
+                "application/octet-stream",
+            )
+            .header(tauri::http::header::CACHE_CONTROL, "no-store")
+            .header("X-Width", frame.width.to_string())
+            .header("X-Height", frame.height.to_string()),
+        &request,
+    );
+    builder
+        .body(frame.rgba)
         .unwrap_or_else(|_| tauri::http::Response::new(Vec::new()))
 }
 
 /// Hide the bar, capture, and show the picker. A missing Screen Recording permission on
-/// macOS is reported on the bar instead.
+/// macOS is reported on the bar instead. A session that is already starting or open is
+/// focused and left as it is.
 pub fn start(app: &AppHandle) -> Result<(), String> {
+    let _ops = lock_ops();
+    {
+        let mut gate = lock_gate();
+        if gate.session != Session::Idle {
+            drop(gate);
+            focus_picker(app);
+            return Ok(());
+        }
+        gate.session = Session::Starting;
+    }
+    // Any return before the window is up, including a panic, drops the session.
+    let mut opening = Opening { app, open: false };
+
     if let Err(err) = ensure_screen_recording(app) {
         tell(app, &err);
         return Err(err);
@@ -73,38 +197,79 @@ pub fn start(app: &AppHandle) -> Result<(), String> {
             return Err(err);
         }
     };
-    if let Err(err) = show(app, frame) {
-        close(app);
+    let (x, y, width, height) = (frame.x, frame.y, frame.width, frame.height);
+    lock_gate().frame = Some(frame);
+    if let Err(err) = present(app, x, y, width, height) {
         tell(app, &err);
         return Err(err);
     }
+    lock_gate().session = Session::Open;
+    opening.open = true;
     Ok(())
 }
 
-/// Copy `hex` and reopen the bar with it typed in, so the color card shows.
+/// Copy `hex` and reopen the bar with it typed in, so the color card shows. A failed copy
+/// still closes the picker — the page has already dropped its frame — and the error is
+/// shown on the bar.
 pub fn choose(app: &AppHandle, hex: &str) -> Result<(), String> {
-    let hex = normalize_hex(hex).ok_or("That isn't a color")?;
-    crate::clipboard::write_text(&hex)?;
-    close(app);
-    crate::window::show_bar(app);
-    let _ = app.emit_to(
-        "main",
-        "bar-input",
-        serde_json::json!({ "query": hex, "notice": serde_json::Value::Null }),
-    );
-    Ok(())
+    let _ops = lock_ops();
+    let copied: Result<String, String> = (|| {
+        let hex = normalize_hex(hex).ok_or_else(|| "That isn't a color".to_string())?;
+        crate::clipboard::write_text(&hex)?;
+        Ok(hex)
+    })();
+    end_session(app);
+    match copied {
+        Ok(hex) => {
+            crate::window::show_bar(app);
+            let _ = app.emit_to(
+                "main",
+                "bar-input",
+                serde_json::json!({ "query": hex, "notice": serde_json::Value::Null }),
+            );
+            Ok(())
+        }
+        Err(err) => {
+            tell(app, &err);
+            Err(err)
+        }
+    }
 }
 
 pub fn cancel(app: &AppHandle) {
-    close(app);
+    let _ops = lock_ops();
+    end_session(app);
 }
 
-fn close(app: &AppHandle) {
-    if let Ok(mut guard) = shot().lock() {
-        *guard = None;
+/// Clears a capture that never reached [`Session::Open`].
+struct Opening<'a> {
+    app: &'a AppHandle,
+    open: bool,
+}
+
+impl Drop for Opening<'_> {
+    fn drop(&mut self) {
+        if !self.open {
+            end_session(self.app);
+        }
+    }
+}
+
+fn end_session(app: &AppHandle) {
+    {
+        let mut gate = lock_gate();
+        gate.session = Session::Idle;
+        gate.frame = None;
     }
     if let Some(window) = app.get_webview_window("picker") {
         let _ = window.hide();
+    }
+}
+
+fn focus_picker(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("picker") {
+        let _ = window.show();
+        let _ = window.set_focus();
     }
 }
 
@@ -147,12 +312,7 @@ fn ensure_screen_recording(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-fn show(app: &AppHandle, frame: Frame) -> Result<(), String> {
-    let (x, y, width, height) = (frame.x, frame.y, frame.width, frame.height);
-    shot()
-        .lock()
-        .map_err(|_| "The color picker is busy")?
-        .replace(Arc::new(frame));
+fn present(app: &AppHandle, x: i32, y: i32, width: u32, height: u32) -> Result<(), String> {
     let window = match app.get_webview_window("picker") {
         Some(window) => window,
         None => make_window(app)?,
@@ -210,6 +370,14 @@ fn cover_menu_bar(window: &tauri::WebviewWindow) {
     });
 }
 
+/// Per-monitor copies count only when every one of them succeeded. Otherwise the caller
+/// copies the whole virtual screen, and that has to succeed on its own. The capture is
+/// Windows-only; tests on every platform check the rule.
+#[cfg(any(windows, test))]
+fn monitors_copied(any: bool, failed: bool) -> bool {
+    any && !failed
+}
+
 fn capture_screen() -> Result<Frame, String> {
     #[cfg(windows)]
     {
@@ -259,7 +427,10 @@ fn capture_virtual() -> Result<Frame, String> {
         screen: HDC,
         origin_x: i32,
         origin_y: i32,
+        /// At least one monitor copied.
         any: bool,
+        /// One monitor's BitBlt failed. The partial bitmap is not the screen.
+        failed: bool,
     }
 
     unsafe extern "system" fn blit_monitor(
@@ -276,7 +447,7 @@ fn capture_virtual() -> Result<Frame, String> {
         let rect = unsafe { &*rect };
         let (w, h) = (rect.right - rect.left, rect.bottom - rect.top);
         if w > 0 && h > 0 {
-            let _ = unsafe {
+            let copied = unsafe {
                 BitBlt(
                     blit.memory,
                     rect.left - blit.origin_x,
@@ -289,7 +460,11 @@ fn capture_virtual() -> Result<Frame, String> {
                     SRCCOPY,
                 )
             };
-            blit.any = true;
+            if copied.is_ok() {
+                blit.any = true;
+            } else {
+                blit.failed = true;
+            }
         }
         windows_core::BOOL(1)
     }
@@ -320,12 +495,19 @@ fn capture_virtual() -> Result<Frame, String> {
             return Err("Couldn't read the screen".into());
         }
         let previous = SelectObject(memory, bitmap.into());
+        if previous.is_invalid() {
+            let _ = DeleteObject(bitmap.into());
+            let _ = DeleteDC(memory);
+            ReleaseDC(None, screen);
+            return Err("Couldn't read the screen".into());
+        }
         let mut blit = Blit {
             memory,
             screen,
             origin_x: x,
             origin_y: y,
             any: false,
+            failed: false,
         };
         let _ = EnumDisplayMonitors(
             None,
@@ -333,8 +515,16 @@ fn capture_virtual() -> Result<Frame, String> {
             Some(blit_monitor),
             LPARAM(&mut blit as *mut Blit as isize),
         );
-        if !blit.any {
-            let _ = BitBlt(memory, 0, 0, w, h, Some(screen), x, y, SRCCOPY);
+        // One failed monitor spoils the set. Copy the whole virtual screen instead, and
+        // if that fails too there is no frame.
+        if !monitors_copied(blit.any, blit.failed)
+            && BitBlt(memory, 0, 0, w, h, Some(screen), x, y, SRCCOPY).is_err()
+        {
+            SelectObject(memory, previous);
+            let _ = DeleteObject(bitmap.into());
+            let _ = DeleteDC(memory);
+            ReleaseDC(None, screen);
+            return Err("Couldn't read the screen".into());
         }
         SelectObject(memory, previous);
         let (width, height) = (w as u32, h as u32);
@@ -489,12 +679,110 @@ mod tests {
     }
 
     #[test]
-    fn no_frame_serves_nothing() {
-        if let Ok(mut guard) = shot().lock() {
-            *guard = None;
+    fn only_the_picker_window_may_read_the_frame() {
+        assert_eq!(serve_decision("main", "GET", "/frame"), ServeDecision::Deny);
+        assert_eq!(
+            serve_decision("picker", "POST", "/frame"),
+            ServeDecision::Missing
+        );
+        assert_eq!(
+            serve_decision("picker", "GET", "/shot"),
+            ServeDecision::Missing
+        );
+        assert_eq!(
+            serve_decision("picker", "GET", "/frame"),
+            ServeDecision::Allow
+        );
+        assert_eq!(
+            frame_cors_origin(Some("http://tauri.localhost")),
+            Some("http://tauri.localhost")
+        );
+        assert_eq!(
+            frame_cors_origin(Some("http://localhost:1420")),
+            Some("http://localhost:1420")
+        );
+        assert_eq!(frame_cors_origin(Some("https://evil.example")), None);
+        assert_eq!(frame_cors_origin(Some("*")), None);
+        assert_eq!(frame_cors_origin(None), None);
+    }
+
+    fn frame_request(origin: Option<&str>) -> tauri::http::Request<Vec<u8>> {
+        let mut builder = tauri::http::Request::builder()
+            .method("GET")
+            .uri("http://picker.localhost/frame?t=1");
+        if let Some(origin) = origin {
+            builder = builder.header("Origin", origin);
         }
-        let response = serve(tauri::http::Request::builder().body(Vec::new()).unwrap());
-        assert_eq!(response.status(), 404);
+        builder.body(Vec::new()).unwrap()
+    }
+
+    #[test]
+    fn the_frame_is_handed_off_once_and_only_to_the_picker() {
+        {
+            let mut gate = lock_gate();
+            gate.session = Session::Idle;
+            gate.frame = None;
+        }
+        let missing = serve("picker", frame_request(Some("http://tauri.localhost")));
+        assert_eq!(missing.status(), 404);
+
+        {
+            let mut gate = lock_gate();
+            gate.frame = Some(Frame {
+                rgba: vec![1, 2, 3, 4],
+                width: 1,
+                height: 1,
+                x: 0,
+                y: 0,
+            });
+        }
+        let denied = serve("main", frame_request(Some("http://tauri.localhost")));
+        assert_eq!(denied.status(), 403);
+        assert!(
+            denied
+                .headers()
+                .get("access-control-allow-origin")
+                .is_none()
+        );
+
+        let response = serve("picker", frame_request(Some("http://tauri.localhost")));
+        assert_eq!(response.status(), 200);
+        assert_eq!(response.body(), &vec![1, 2, 3, 4]);
+        assert_eq!(
+            response
+                .headers()
+                .get("access-control-allow-origin")
+                .and_then(|value| value.to_str().ok()),
+            Some("http://tauri.localhost")
+        );
+        assert_ne!(
+            response
+                .headers()
+                .get("access-control-allow-origin")
+                .and_then(|value| value.to_str().ok()),
+            Some("*")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-width")
+                .and_then(|value| value.to_str().ok()),
+            Some("1")
+        );
+
+        let again = serve("picker", frame_request(Some("http://tauri.localhost")));
+        assert_eq!(again.status(), 404);
+        let mut gate = lock_gate();
+        gate.session = Session::Idle;
+        gate.frame = None;
+    }
+
+    #[test]
+    fn a_failed_monitor_is_not_a_successful_capture() {
+        assert!(monitors_copied(true, false));
+        assert!(!monitors_copied(true, true));
+        assert!(!monitors_copied(false, false));
+        assert!(!monitors_copied(false, true));
     }
 
     #[test]
