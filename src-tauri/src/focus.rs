@@ -2,6 +2,8 @@
 //! whose windows leave the screen, and sites the browser extension blocks. The session
 //! itself is a countdown timer (countdown.rs). Nothing here quits an app.
 
+use std::sync::{Mutex, OnceLock};
+
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
@@ -138,24 +140,41 @@ pub fn begin(app: &AppHandle) {
     publish(app);
 }
 
-/// Sends the extension the sites of the focus session that's running, or none when there
-/// isn't one. A session that ended and one that replaced it both land here, so a newer
-/// session isn't cleared by the one it replaced.
-pub fn publish(app: &AppHandle) {
-    let now = chrono::Local::now().timestamp();
-    let Some(snapshot) = app.state::<crate::state::AppState>().snapshot().ok() else {
-        crate::browser::set_focus_sites(Vec::new(), 0);
-        return;
-    };
-    if let Some(timer) = snapshot
-        .timers
-        .iter()
-        .find(|timer| timer.focus && timer.at > now)
-    {
-        crate::browser::set_focus_sites(snapshot.focus.sites.clone(), timer.at);
+/// One publish at a time, from the snapshot read through the broadcast. A cancel that saw
+/// no session can't then clear a session that started and published in between.
+fn publish_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+/// Sites to block, and the unix second the block ends. Nothing when no focus session is
+/// still running at `now`.
+fn block_of(
+    timers: &[crate::countdown::Countdown],
+    sites: &[String],
+    now: i64,
+) -> (Vec<String>, i64) {
+    if let Some(timer) = timers.iter().find(|timer| timer.focus && timer.at > now) {
+        (sites.to_vec(), timer.at)
     } else {
-        crate::browser::set_focus_sites(Vec::new(), 0);
+        (Vec::new(), 0)
     }
+}
+
+/// Sends the extension the sites of the focus session that's running, or none when there
+/// isn't one. A session that ended and one that replaced it both land here. The lock is
+/// held from the snapshot through the broadcast, so an older read can't clear a newer session.
+pub fn publish(app: &AppHandle) {
+    let _publishing = publish_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let now = chrono::Local::now().timestamp();
+    let (sites, until) = app
+        .state::<crate::state::AppState>()
+        .snapshot()
+        .map(|snapshot| block_of(&snapshot.timers, &snapshot.focus.sites, now))
+        .unwrap_or_default();
+    crate::browser::set_focus_sites(sites, until);
 }
 
 #[cfg(test)]
@@ -207,5 +226,42 @@ mod tests {
             ..FocusSettings::default()
         };
         assert!(no_break.normalized().is_ok());
+    }
+
+    fn countdown(at: i64, focus: bool) -> crate::countdown::Countdown {
+        crate::countdown::Countdown {
+            id: 1,
+            at,
+            seconds: 1_500,
+            label: "Deep work".into(),
+            focus,
+        }
+    }
+
+    #[test]
+    fn the_block_is_whatever_the_latest_snapshot_says() {
+        let sites = vec!["youtube.com".to_string(), "x.com".to_string()];
+        let now = 1_000;
+        let running = countdown(5_000, true);
+        let plain = countdown(5_000, false);
+        let expired = countdown(now, true);
+        assert_eq!(block_of(&[], &sites, now), (Vec::new(), 0));
+        assert_eq!(
+            block_of(std::slice::from_ref(&plain), &sites, now),
+            (Vec::new(), 0)
+        );
+        assert_eq!(block_of(&[expired], &sites, now), (Vec::new(), 0));
+        assert_eq!(
+            block_of(&[plain, running.clone()], &sites, now),
+            (sites.clone(), 5_000)
+        );
+        // Applied one at a time under the publish lock. The snapshot read second is what
+        // clients hear, so a cancel's empty read can't land after the session that followed it.
+        let steps = [
+            block_of(&[], &sites, now),
+            block_of(std::slice::from_ref(&running), &sites, now),
+        ];
+        assert_eq!(steps[0], (Vec::new(), 0));
+        assert_eq!(steps[1], (sites, 5_000));
     }
 }

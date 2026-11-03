@@ -103,7 +103,7 @@ pub fn tuck(app: &App) {
     {
         let exe = program_of(&app.id);
         for window in platform::list() {
-            if belongs(app, exe.as_deref(), &window) {
+            if tucked(app, exe.as_deref(), &window) {
                 platform::minimize(window.handle);
             }
         }
@@ -149,6 +149,18 @@ pub fn of_app<'a>(app: &App, windows: &'a [OpenWindow]) -> Vec<&'a OpenWindow> {
         .iter()
         .filter(|window| belongs(app, exe.as_deref(), window))
         .collect()
+}
+
+/// Whether a focus session puts this window away. A program matches only its own executable
+/// (case-insensitive, either slash), so other programs in its folder stay up. A packaged app
+/// has no executable and is matched the same way as switching to it.
+#[cfg(any(windows, test))]
+fn tucked(app: &App, app_exe: Option<&str>, window: &OpenWindow) -> bool {
+    let Some(app_exe) = app_exe else {
+        return belongs(app, None, window);
+    };
+    !window.exe.is_empty()
+        && window.exe.to_lowercase().replace('/', "\\") == app_exe.to_lowercase().replace('/', "\\")
 }
 
 /// Whether a window is one of `app`'s: by the AppUserModelID it declares, by the program the
@@ -767,6 +779,47 @@ mod tests {
             &app(r"C:\Windows\regedit.exe", "Registry Editor"),
             Some(r"C:\Windows\regedit.exe"),
             &notepad
+        ));
+    }
+
+    #[test]
+    fn tucking_matches_a_programs_own_exe_not_its_neighbors() {
+        let app = |id: &str, name: &str| App {
+            id: id.into(),
+            name: name.into(),
+        };
+        let portable = app(r"C:\Users\Zach\Tools\foo.exe", "Foo");
+        let exe = Some(r"C:\Users\Zach\Tools\foo.exe");
+        assert!(tucked(
+            &portable,
+            exe,
+            &window("Foo", r"C:\Users\Zach\Tools\foo.exe", "")
+        ));
+        assert!(tucked(
+            &portable,
+            exe,
+            &window("Foo", r"c:/users/zach/tools/FOO.EXE", "")
+        ));
+        assert!(!tucked(&portable, exe, &window("Foo", "", "")));
+        let neighbor = window("Bar", r"C:\Users\Zach\Tools\bar.exe", "");
+        assert!(!tucked(&portable, exe, &neighbor));
+        // belongs() still counts that neighbor; tucking must not.
+        assert!(belongs(&portable, exe, &neighbor));
+
+        let terminal = app("Microsoft.WindowsTerminal_8wekyb3d8bbwe!App", "Terminal");
+        assert!(tucked(
+            &terminal,
+            None,
+            &window(
+                "pwsh",
+                r"C:\Program Files\WindowsApps\Microsoft.WindowsTerminal\WindowsTerminal.exe",
+                "Microsoft.WindowsTerminal_8wekyb3d8bbwe!App"
+            )
+        ));
+        assert!(!tucked(
+            &terminal,
+            None,
+            &window("notes", r"C:\Windows\System32\notepad.exe", "")
         ));
     }
 

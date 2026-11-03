@@ -3,12 +3,22 @@
 // switches to it and closes the hand-off tab; otherwise the link redirects to the page as
 // it would without the extension.
 
-import { hostBlocked } from './focus.js';
+import { hostBlocked, tabsToBlock } from './focus.js';
 
 const HANDOFF = /^http:\/\/127\.0\.0\.1:\d+\/zephyr\/open\?/;
 
-/** Sites blocked until this unix time; 0 means no focus session is running. */
+/** Sites blocked until this unix time; 0 means no focus session is running.
+ *  Copied into session storage so a restarted worker still blocks. */
 let focusBlock = { sites: [], until: 0 };
+/** A message from Zephyr has replaced whatever session storage held. */
+let focusFromApp = false;
+
+function blockFrom(message) {
+  const sites = Array.isArray(message?.sites)
+    ? message.sites.filter((site) => typeof site === 'string')
+    : [];
+  return { sites, until: Number(message?.until) || 0 };
+}
 
 function focusActive() {
   return focusBlock.until * 1000 > Date.now() && focusBlock.sites.length > 0;
@@ -23,6 +33,51 @@ function blockedHost(url) {
   } catch {
     return null;
   }
+}
+
+/** Opens the blocked page in this tab. */
+function redirectToBlocked(tabId, host) {
+  const page = new URL(chrome.runtime.getURL('blocked.html'));
+  page.searchParams.set('host', host);
+  page.searchParams.set('until', String(focusBlock.until));
+  return chrome.tabs.update(tabId, { url: page.href }).catch(() => undefined);
+}
+
+/** Tabs already open on a blocked host, when a block is applied, restored, or its sites change. */
+async function redirectBlockedTabs() {
+  try {
+    const tabs = await chrome.tabs.query({});
+    const chosen = tabsToBlock(tabs, focusBlock, Date.now());
+    await Promise.all(chosen.map((tab) => redirectToBlocked(tab.id, tab.host)));
+  } catch {
+    // A tab can close while we're sending it to the blocked page.
+  }
+}
+
+/** Restores the block before any navigation is judged. A message that arrived first wins. */
+async function restoreFocusBlock() {
+  try {
+    const stored = await chrome.storage.session.get('focusBlock');
+    if (!focusFromApp && stored.focusBlock) {
+      focusBlock = blockFrom(stored.focusBlock);
+    }
+  } catch {
+    // Session storage can be missing; the next message from Zephyr fills the block in.
+  }
+  if (!focusFromApp) await redirectBlockedTabs();
+}
+
+const focusReady = restoreFocusBlock();
+
+async function applyFocusBlock(block) {
+  focusFromApp = true;
+  focusBlock = block;
+  try {
+    await chrome.storage.session.set({ focusBlock: block });
+  } catch {
+    // The in-memory block still applies until this worker stops.
+  }
+  await redirectBlockedTabs();
 }
 
 /** The page a hand-off link is for. */
@@ -101,8 +156,7 @@ async function answer(data) {
   if (message.type === 'ping') {
     socket?.send(JSON.stringify({ type: 'pong' }));
   } else if (message.type === 'focusBlock') {
-    const sites = Array.isArray(message.sites) ? message.sites : [];
-    focusBlock = { sites, until: Number(message.until) || 0 };
+    await applyFocusBlock(blockFrom(message));
   } else if (message.type === 'focus') {
     const found = await focusTab(message.url).catch(() => false);
     socket?.send(JSON.stringify({ type: 'focused', id: message.id, found }));
@@ -137,14 +191,13 @@ connect();
 
 // While a focus session runs, a top-frame navigation to a listed site (or a subdomain of
 // it) opens the blocked page instead. The extension page itself isn't one of those hosts.
-chrome.webNavigation.onBeforeNavigate.addListener((details) => {
+// The saved block is restored before this decides, so a restarted worker still blocks.
+chrome.webNavigation.onBeforeNavigate.addListener(async (details) => {
+  await focusReady;
   if (details.frameId !== 0) return;
   const host = blockedHost(details.url);
   if (!host) return;
-  const page = new URL(chrome.runtime.getURL('blocked.html'));
-  page.searchParams.set('host', host);
-  page.searchParams.set('until', String(focusBlock.until));
-  chrome.tabs.update(details.tabId, { url: page.href }).catch(() => undefined);
+  await redirectToBlocked(details.tabId, host);
 });
 
 // The fallback, when the link wasn't up: the app opened its hand-off link in a new tab.
