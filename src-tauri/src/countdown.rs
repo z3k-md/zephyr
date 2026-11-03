@@ -104,6 +104,15 @@ fn pending(app: &AppHandle) -> Vec<Countdown> {
         .unwrap_or_default()
 }
 
+/// The timer to arm. The save closure records it before the file is written, so a write
+/// that failed must not arm it or start a focus session.
+fn ready_to_arm(saved: bool, timer: Option<Countdown>) -> Result<Countdown, String> {
+    if !saved {
+        return Err("couldn't save the timer".into());
+    }
+    timer.ok_or_else(|| "couldn't save the timer".into())
+}
+
 /// Starts a timer for `seconds`. A focus session replaces the one already running.
 pub fn start(
     app: &AppHandle,
@@ -116,7 +125,7 @@ pub fn start(
     }
     let label: String = label.trim().chars().take(80).collect();
     let mut timer = None;
-    save(app, |timers| {
+    let saved = save(app, |timers| {
         let id = timers.iter().map(|timer| timer.id).max().unwrap_or(0) + 1;
         let countdown = Countdown {
             id,
@@ -130,7 +139,7 @@ pub fn start(
         }
         timer = Some(countdown);
     });
-    let timer = timer.ok_or("couldn't save the timer")?;
+    let timer = ready_to_arm(saved, timer)?;
     log::info!(
         "{}: {} started",
         if focus { "focus" } else { "timer" },
@@ -349,5 +358,16 @@ mod tests {
         let mut timers = vec![restarted.clone()];
         assert!(!take(&mut timers, &cancelled));
         assert_eq!(timers, vec![restarted]);
+    }
+
+    #[test]
+    fn a_timer_is_armed_only_when_the_save_lands() {
+        let timer = countdown(1, true, "Deep work");
+        assert_eq!(
+            ready_to_arm(false, Some(timer.clone())).unwrap_err(),
+            "couldn't save the timer"
+        );
+        assert!(ready_to_arm(true, None).is_err());
+        assert_eq!(ready_to_arm(true, Some(timer.clone())).unwrap(), timer);
     }
 }

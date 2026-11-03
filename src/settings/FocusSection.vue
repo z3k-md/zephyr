@@ -1,5 +1,5 @@
 <script setup lang="ts">
-  import { computed, ref } from 'vue';
+  import { computed, ref, shallowRef } from 'vue';
   import { errorMessage, saveFocus } from '../api';
   import RowIcon from '../bar/RowIcon.vue';
   import InfoTip from '../components/InfoTip.vue';
@@ -23,21 +23,23 @@
   const error = ref<string | null>(null);
   const busy = ref(false);
   const siteText = ref('');
-  let draft: FocusSettings | null = null;
+  const draft = shallowRef<FocusSettings | null>(null);
   let saving: Promise<void> = Promise.resolve();
 
   const settings = computed(() => props.snapshot.focus ?? FALLBACK);
-  const lengthMinutes = computed(() => Math.round((draft ?? settings.value).seconds / 60));
-  const breakMinutes = computed(() => Math.round((draft ?? settings.value).breakSeconds / 60));
-  const apps = computed(() => (draft ?? settings.value).apps);
-  const sites = computed(() => (draft ?? settings.value).sites);
+  const lengthMinutes = computed(() => Math.round((draft.value ?? settings.value).seconds / 60));
+  const breakMinutes = computed(() =>
+    Math.round((draft.value ?? settings.value).breakSeconds / 60)
+  );
+  const apps = computed(() => (draft.value ?? settings.value).apps);
+  const sites = computed(() => (draft.value ?? settings.value).sites);
 
   function current(): FocusSettings {
-    return draft ?? settings.value;
+    return draft.value ?? settings.value;
   }
 
   function save(next: FocusSettings) {
-    draft = next;
+    draft.value = next;
     busy.value = true;
     error.value = null;
     saving = saving
@@ -46,8 +48,8 @@
         error.value = errorMessage(err);
       })
       .finally(() => {
-        if (draft === next) {
-          draft = null;
+        if (draft.value === next) {
+          draft.value = null;
           busy.value = false;
         }
       });

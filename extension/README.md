@@ -29,10 +29,12 @@ When the link isn't up yet (just after the browser starts), Zephyr opens the pag
 link to itself, `http://127.0.0.1:<port>/zephyr/open?u=<page>`, which redirects to the page.
 The extension catches that too, switches to the open tab and closes the new one.
 
-It needs the `tabs`, `webNavigation` and `alarms` permissions, and talks only to Zephyr on this
-computer.
+It needs the `tabs`, `webNavigation`, `alarms` and `storage` permissions, and talks only to Zephyr
+on this computer.
 
 During a focus session Zephyr also sends the sites to block and when the session ends
 (`{type:"focusBlock", sites, until}`). Until then, a top-frame navigation to one of those sites, or
 any subdomain of it, opens a page that says the site is blocked for focus and how long is left.
-Without the extension the session still runs; those sites just stay open.
+Tabs already open on those sites are sent there too. The block is kept in the browser's session
+storage, so it still applies if the extension's worker restarts before the session ends. Without
+the extension the session still runs; those sites just stay open.

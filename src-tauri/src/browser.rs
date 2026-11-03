@@ -58,13 +58,21 @@ fn focus_message(sites: &[String], until: i64) -> String {
     json!({ "type": "focusBlock", "sites": sites, "until": until }).to_string()
 }
 
+/// Remembers the block and the message clients should hear for it. Send that message
+/// before releasing the cache lock, so a later update can't reach a client first.
+fn remember(block: &mut FocusBlock, sites: Vec<String>, until: i64) -> String {
+    *block = FocusBlock { sites, until };
+    focus_message(&block.sites, block.until)
+}
+
 /// Tells every connected extension which sites to block until `until` (unix seconds; 0
-/// means no focus session is running). One that connects later is told the same.
+/// means no focus session is running). Sent while the cache lock is held, so the order
+/// clients hear matches the cache. One that connects later is told the same.
 pub fn set_focus_sites(sites: Vec<String>, until: i64) {
-    let message = focus_message(&sites, until);
-    if let Ok(mut block) = focus_block().lock() {
-        *block = FocusBlock { sites, until };
-    }
+    let Ok(mut block) = focus_block().lock() else {
+        return;
+    };
+    let message = remember(&mut block, sites, until);
     let Ok(clients) = clients().lock() else {
         return;
     };
@@ -300,5 +308,21 @@ mod tests {
         assert!(!from_extension(Some("https://evil.example")));
         assert!(!from_extension(Some("null")));
         assert!(!from_extension(None));
+    }
+
+    #[test]
+    fn clients_hear_updates_in_the_order_the_cache_takes_them() {
+        let mut block = FocusBlock {
+            sites: Vec::new(),
+            until: 0,
+        };
+        let session = remember(&mut block, vec!["youtube.com".into()], 5_000);
+        assert_eq!(session, focus_message(&["youtube.com".into()], 5_000));
+        assert_eq!(block.sites, vec!["youtube.com".to_string()]);
+        assert_eq!(block.until, 5_000);
+        let cleared = remember(&mut block, Vec::new(), 0);
+        assert_eq!(cleared, focus_message(&[], 0));
+        assert!(block.sites.is_empty());
+        assert_eq!(block.until, 0);
     }
 }
