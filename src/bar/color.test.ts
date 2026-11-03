@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { colorFor, contrastAgainst, formatsFor } from './color';
+import { colorFor, contrastAgainst, formatsFor, type Rgba } from './color';
 
 const red = { r: 255, g: 0, b: 0, a: 1 };
 
@@ -33,6 +33,15 @@ describe('colorFor', () => {
     expect(colorFor('rgb(255 0 0 / 0.5)')?.rgba.a).toBe(0.5);
     expect(colorFor('rgb(255, 0, 0, 50%)')?.rgba.a).toBe(0.5);
     expect(colorFor('hsl(120 100% 50% / 25%)')?.rgba).toMatchObject({ r: 0, g: 255, b: 0 });
+  });
+
+  it('reads a slash without spaces, and mixed units only in modern syntax', () => {
+    expect(colorFor('rgb(255 0 0/50%)')?.rgba).toEqual({ r: 255, g: 0, b: 0, a: 0.5 });
+    expect(colorFor('hsl(120 100% 50%/.5)')?.rgba).toMatchObject({ r: 0, g: 255, b: 0, a: 0.5 });
+    expect(colorFor('oklch(0.7 0.1 30/.5)')?.rgba.a).toBe(0.5);
+    expect(colorFor('rgb(100% 0 0)')?.rgba).toEqual(red);
+    expect(colorFor('rgb(100%, 0, 0)')).toBeNull();
+    expect(colorFor('rgb(100%, 0%, 0%)')?.rgba).toEqual(red);
   });
 
   it('reads oklch and oklab that land on red', () => {
@@ -80,6 +89,40 @@ describe('colorFor', () => {
     expect(white.contrastWhite).toBe(1);
     expect(contrastAgainst(red, 'white')).toBeGreaterThan(3);
     expect(contrastAgainst(red, 'white')).toBeLessThan(5);
+  });
+
+  it('keeps fractional channels through contrast', () => {
+    const ratio = contrastAgainst({ r: 254, g: 254, b: 254, a: 0.75 }, 'black');
+    expect(ratio).toBeCloseTo(11.36, 2);
+  });
+
+  it('round-trips every copied format to the same 8-bit color', () => {
+    const check = (rgba: Rgba) => {
+      for (const format of Object.values(formatsFor(rgba))) {
+        const parsed = colorFor(format);
+        expect(parsed, format).not.toBeNull();
+        expect(Math.abs(parsed!.rgba.r - rgba.r), format).toBeLessThanOrEqual(1);
+        expect(Math.abs(parsed!.rgba.g - rgba.g), format).toBeLessThanOrEqual(1);
+        expect(Math.abs(parsed!.rgba.b - rgba.b), format).toBeLessThanOrEqual(1);
+      }
+    };
+    check({ r: 0, g: 0, b: 0xfa, a: 1 });
+    check({ r: 1, g: 1, b: 1, a: 1 });
+    check({ r: 254, g: 254, b: 254, a: 1 });
+    for (let r = 0; r <= 255; r += 17) {
+      for (let g = 0; g <= 255; g += 17) {
+        for (let b = 0; b <= 255; b += 17) {
+          check({ r, g, b, a: 1 });
+        }
+      }
+    }
+  });
+
+  it('ignores object prototype keys', () => {
+    expect(colorFor('color constructor')).toBeNull();
+    expect(colorFor('color __proto__')).toBeNull();
+    expect(colorFor('constructor color')).toBeNull();
+    expect(colorFor('__proto__ color')).toBeNull();
   });
 
   it('makes seven shades and keeps the typed color as one of them', () => {

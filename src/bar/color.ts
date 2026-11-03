@@ -35,8 +35,9 @@ const BLACK: Rgba = { r: 0, g: 0, b: 0, a: 1 };
 /** Lightness steps for the shade strip, light to dark. One is replaced by the typed color. */
 const SHADE_LIGHTNESS = [0.97, 0.84, 0.71, 0.58, 0.45, 0.32, 0.18];
 
-/** CSS named colors. `transparent` is handled beside this, since it has no color of its own. */
-const NAMED: Record<string, number> = {
+/** CSS named colors, on an object with no prototype, so `constructor` is not a color.
+ *  `transparent` is handled beside this, since it has no color of its own. */
+const NAMED: Record<string, number> = Object.assign(Object.create(null), {
   aliceblue: 0xf0f8ff,
   antiquewhite: 0xfaebd7,
   aqua: 0x00ffff,
@@ -185,7 +186,7 @@ const NAMED: Record<string, number> = {
   whitesmoke: 0xf5f5f5,
   yellow: 0xffff00,
   yellowgreen: 0x9acd32,
-};
+});
 
 /** The color `input` names, or null when it isn't one. */
 export function colorFor(input: string): ColorAnswer | null {
@@ -260,7 +261,7 @@ function parseFunction(text: string): Rgba | null {
   switch (match[1].toLowerCase()) {
     case 'rgb':
     case 'rgba':
-      return parseRgb(split.parts, split.alpha);
+      return parseRgb(split.parts, split.alpha, split.legacy);
     case 'hsl':
     case 'hsla':
       return parseHsl(split.parts, split.alpha);
@@ -275,15 +276,38 @@ function parseFunction(text: string): Rgba | null {
   }
 }
 
-/** Comma or space syntax, with `/ alpha` pulled out. A second slash is not a color. */
-function splitArgs(body: string): { parts: string[]; alpha: string | null } | null {
-  const tokens = body.trim().replace(/,/g, ' ').split(/\s+/).filter(Boolean);
-  const slash = tokens.indexOf('/');
-  if (slash < 0) return { parts: tokens, alpha: null };
-  if (tokens.includes('/', slash + 1)) return null;
-  const alpha = tokens[slash + 1];
-  if (!alpha || tokens.length !== slash + 2) return null;
-  return { parts: tokens.slice(0, slash), alpha };
+/** Comma or space syntax, with `/ alpha` pulled out. `/` is its own token, so `0/50%`
+ *  splits without spaces around the slash. A second slash is not a color. Commas are
+ *  the legacy form: the three channels must share a unit. Modern space syntax allows
+ *  a number and a percent in the same color. */
+function splitArgs(
+  body: string
+): { parts: string[]; alpha: string | null; legacy: boolean } | null {
+  const tokens = body.match(/[^\s,/]+|\/|,/g);
+  if (!tokens || tokens.length === 0) return null;
+  const legacy = tokens.includes(',');
+  const values = legacy ? commaValues(tokens) : tokens;
+  if (!values) return null;
+  const slash = values.indexOf('/');
+  if (slash < 0) return { parts: values, alpha: null, legacy };
+  // A slash belongs to modern syntax. Legacy colors put alpha in a fourth component.
+  if (legacy || values.includes('/', slash + 1)) return null;
+  const alpha = values[slash + 1];
+  if (!alpha || values.length !== slash + 2) return null;
+  return { parts: values.slice(0, slash), alpha, legacy: false };
+}
+
+/** `255, 0, 0` with the commas still in place. A leading, trailing, or doubled comma is not a color. */
+function commaValues(tokens: string[]): string[] | null {
+  if (tokens.length % 2 === 0) return null;
+  const values: string[] = [];
+  for (let i = 0; i < tokens.length; i++) {
+    if (i % 2 === 0) {
+      if (tokens[i] === ',' || tokens[i] === '/') return null;
+      values.push(tokens[i]);
+    } else if (tokens[i] !== ',') return null;
+  }
+  return values;
 }
 
 interface Num {
@@ -318,7 +342,7 @@ function percentUnit(token: string): number | null {
   return clamp(parsed.n / 100, 0, 1);
 }
 
-function parseRgb(parts: string[], alphaToken: string | null): Rgba | null {
+function parseRgb(parts: string[], alphaToken: string | null, legacy: boolean): Rgba | null {
   let channels = parts;
   if (parts.length === 4) {
     if (alphaToken !== null) return null;
@@ -330,11 +354,12 @@ function parseRgb(parts: string[], alphaToken: string | null): Rgba | null {
   if (nums.some((num) => num === null)) return null;
   const values = nums as Num[];
   const specified = values.filter((num) => !num.none);
-  const percent = specified.some((num) => num.percent);
-  if (specified.some((num) => num.percent !== percent)) return null;
+  if (legacy && specified.some((num) => num.percent) && specified.some((num) => !num.percent)) {
+    return null;
+  }
   const a = alphaOf(alphaToken);
   if (a === null) return null;
-  const [r, g, b] = values.map((num) => byte(percent ? (num.n / 100) * 255 : num.n));
+  const [r, g, b] = values.map((num) => byte(num.percent ? (num.n / 100) * 255 : num.n));
   return { r, g, b, a };
 }
 
@@ -568,12 +593,39 @@ function formatRgb(rgba: Rgba): string {
 
 function formatHsl(rgba: Rgba): string {
   const [h, s, l] = rgbToHsl(rgba.r, rgba.g, rgba.b);
-  return `hsl(${trim(h, 1)} ${Math.round(s * 100)}% ${Math.round(l * 100)}%${alphaSuffix(rgba.a)})`;
+  return precise(
+    rgba,
+    (digits) =>
+      `hsl(${trim(h, digits)} ${trim(s * 100, digits)}% ${trim(l * 100, digits)}%${alphaSuffix(rgba.a)})`
+  );
 }
 
 function formatOklch(rgba: Rgba): string {
   const { l, c, h } = rgbToOklch(rgba);
-  return `oklch(${trim(l, 3)} ${trim(c, 3)} ${trim(h, 2)}${alphaSuffix(rgba.a)})`;
+  return precise(
+    rgba,
+    (digits) =>
+      `oklch(${trim(l, digits)} ${trim(c, digits)} ${trim(h, digits)}${alphaSuffix(rgba.a)})`
+  );
+}
+
+/** Digits rise until the text parses back to the same 8-bit channels. A short form
+ *  (`#010101` as `hsl(0 0% 0%)`, `#0000fa` as a coarse oklch) is a different color. */
+function precise(rgba: Rgba, render: (digits: number) => string): string {
+  let text = render(1);
+  for (let digits = 1; digits <= 10; digits++) {
+    text = render(digits);
+    const parsed = parseFunction(text);
+    if (
+      parsed &&
+      Math.abs(parsed.r - rgba.r) <= 1 &&
+      Math.abs(parsed.g - rgba.g) <= 1 &&
+      Math.abs(parsed.b - rgba.b) <= 1
+    ) {
+      return text;
+    }
+  }
+  return text;
 }
 
 function alphaSuffix(a: number): string {
@@ -582,22 +634,29 @@ function alphaSuffix(a: number): string {
 }
 
 function contrast(fg: Rgba, bg: Rgba): number {
-  const over = composite(fg, bg);
-  const lighter = Math.max(luminance(over), luminance(bg));
-  const darker = Math.min(luminance(over), luminance(bg));
+  const over = compositeChannels(fg, bg);
+  const lighter = Math.max(luminanceChannels(over), luminance(bg));
+  const darker = Math.min(luminanceChannels(over), luminance(bg));
   return (lighter + 0.05) / (darker + 0.05);
 }
 
-function composite(fg: Rgba, bg: Rgba): Rgba {
+/** Foreground drawn over background. Channels stay fractional: rounding to a byte
+ *  here shifts the contrast of a translucent color. Display rounding happens later. */
+function compositeChannels(fg: Rgba, bg: Rgba): [number, number, number] {
   const a = fg.a + bg.a * (1 - fg.a);
-  if (a === 0) return { r: 0, g: 0, b: 0, a: 0 };
-  const channel = (front: number, back: number) =>
-    Math.round((front * fg.a + back * bg.a * (1 - fg.a)) / a);
-  return { r: channel(fg.r, bg.r), g: channel(fg.g, bg.g), b: channel(fg.b, bg.b), a: 1 };
+  if (a === 0) return [0, 0, 0];
+  const channel = (front: number, back: number) => (front * fg.a + back * bg.a * (1 - fg.a)) / a;
+  return [channel(fg.r, bg.r), channel(fg.g, bg.g), channel(fg.b, bg.b)];
 }
 
 function luminance(rgba: Rgba): number {
-  return 0.2126 * linearOf(rgba.r) + 0.7152 * linearOf(rgba.g) + 0.0722 * linearOf(rgba.b);
+  return luminanceChannels([rgba.r, rgba.g, rgba.b]);
+}
+
+function luminanceChannels(channels: [number, number, number]): number {
+  return (
+    0.2126 * linearOf(channels[0]) + 0.7152 * linearOf(channels[1]) + 0.0722 * linearOf(channels[2])
+  );
 }
 
 function linearOf(channel: number): number {
