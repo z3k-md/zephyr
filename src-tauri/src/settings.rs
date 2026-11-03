@@ -486,7 +486,16 @@ const ZEPHYR: &[Setting] = &[
         "zephyr.theme",
         "Zephyr Theme",
         "theme",
-        &["appearance", "color", "tint"],
+        &[
+            "appearance",
+            "color",
+            "tint",
+            "dark mode",
+            "light mode",
+            "style",
+            "windows",
+            "mac",
+        ],
     ),
     zephyr(
         "zephyr.about",

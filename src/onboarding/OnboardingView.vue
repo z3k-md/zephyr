@@ -1,6 +1,6 @@
 <script setup lang="ts">
   import '../settings/settings.css';
-  import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+  import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import {
     errorMessage,
@@ -8,11 +8,13 @@
     getSnapshot,
     pageReady,
     pauseShortcuts,
+    saveMode,
     saveSettings,
+    saveStyle,
     saveTheme,
   } from '../api';
   import { GLYPHS } from '../bar/glyphs';
-  import { THEMES } from '../themes';
+  import { LIGHT_SCHEME, MODES, STYLES, THEMES, resolveMode } from '../themes';
   import BootChoice from '../settings/BootChoice.vue';
   import Keys from '../components/Keys.vue';
   import { captureShortcut, heldModifiers, isModifierKey, SHORTCUT_HELP } from '../keys';
@@ -104,6 +106,23 @@
     document.documentElement.dataset.theme = id;
     void run(() => saveTheme(id));
   }
+
+  function chooseStyle(id: string) {
+    document.documentElement.dataset.style = id;
+    void run(() => saveStyle(id));
+  }
+
+  function chooseMode(id: string) {
+    document.documentElement.dataset.mode = resolveMode(id, osLight.value);
+    void run(() => saveMode(id));
+  }
+
+  const lightQuery = window.matchMedia(LIGHT_SCHEME);
+  const osLight = ref(lightQuery.matches);
+  lightQuery.addEventListener('change', (event) => (osLight.value = event.matches));
+  const lightSwatches = computed(
+    () => resolveMode(snapshot.value?.mode, osLight.value) === 'light'
+  );
 
   function recordShortcut(event: KeyboardEvent) {
     const current = snapshot.value;
@@ -204,7 +223,42 @@
 
           <template v-else-if="step === 1">
             <h1>Choose a theme</h1>
-            <div class="themes compact" role="radiogroup" aria-label="Theme">
+            <div class="styles compact" role="radiogroup" aria-label="Style">
+              <button
+                v-for="style in STYLES"
+                :key="style.id"
+                type="button"
+                class="style-card"
+                role="radio"
+                :aria-checked="snapshot.style === style.id"
+                :class="{ chosen: snapshot.style === style.id }"
+                :disabled="busy"
+                @click="chooseStyle(style.id)"
+              >
+                <span class="style-sketch" :class="`style-sketch-${style.id}`" aria-hidden="true">
+                  <span class="style-sketch-row" />
+                  <span class="style-sketch-row selected" />
+                  <span class="style-sketch-row" />
+                </span>
+                {{ style.name }}
+              </button>
+            </div>
+            <div class="segments" role="radiogroup" aria-label="Appearance">
+              <button
+                v-for="mode in MODES"
+                :key="mode.id"
+                type="button"
+                class="segment"
+                role="radio"
+                :aria-checked="snapshot.mode === mode.id"
+                :class="{ chosen: snapshot.mode === mode.id }"
+                :disabled="busy"
+                @click="chooseMode(mode.id)"
+              >
+                {{ mode.name }}
+              </button>
+            </div>
+            <div class="themes compact" role="radiogroup" aria-label="Palette">
               <button
                 v-for="theme in THEMES"
                 :key="theme.id"
@@ -216,7 +270,11 @@
                 :disabled="busy"
                 @click="chooseTheme(theme.id)"
               >
-                <span class="theme-swatch" :style="{ background: theme.tint }" aria-hidden="true">
+                <span
+                  class="theme-swatch"
+                  :style="{ background: lightSwatches ? theme.lightTint : theme.tint }"
+                  aria-hidden="true"
+                >
                   <span class="theme-row" />
                   <span class="theme-row selected" :style="{ background: theme.accent }" />
                   <span class="theme-row" />

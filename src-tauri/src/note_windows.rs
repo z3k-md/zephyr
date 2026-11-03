@@ -136,6 +136,7 @@ pub fn open(app: &AppHandle, id: &str, focus: bool) -> Result<(), String> {
         builder
     };
     let window = builder.build().map_err(|err| err.to_string())?;
+    crate::window::dress(&window);
 
     match (&saved, cascade_from) {
         (Some(saved), _) if on_a_screen(&window, saved) => {

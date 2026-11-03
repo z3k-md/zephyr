@@ -575,14 +575,14 @@ pub fn set_bar_height(app: &AppHandle, height: f64, width: Option<f64>) -> Resul
 pub(crate) const WINDOW_BACKGROUND: tauri::window::Color = tauri::window::Color(0, 0, 0, 0);
 
 pub(crate) fn glass() -> tauri::utils::config::WindowEffectsConfig {
-    glass_for(None)
+    glass_for(None, false)
 }
 
 /// The glass for a frameless window with rounded corners (the update card; Windows gives
 /// it Acrylic through `make_bar_glass`).
 #[cfg(target_os = "macos")]
 pub(crate) fn rounded_glass(radius: f64) -> tauri::utils::config::WindowEffectsConfig {
-    glass_for(Some(radius))
+    glass_for(Some(radius), false)
 }
 
 /// macOS: Settings and setup open on whichever Space is current (a second desktop, a
@@ -630,24 +630,115 @@ pub fn regular_while_open(app: &AppHandle) {
 }
 
 /// The native glass under a window, the same for every theme: macOS's sidebar material (the
-/// System Settings sidebar) and a graphite-tinted Acrylic on Windows. Themes only tint it in
-/// the page.
-fn glass_for(radius: Option<f64>) -> tauri::utils::config::WindowEffectsConfig {
-    use tauri::window::{Effect, EffectState, EffectsBuilder};
+/// System Settings sidebar, which follows the window's appearance) and Acrylic on Windows,
+/// graphite-tinted, or pale in light mode. Themes only tint it in the page.
+fn glass_for(radius: Option<f64>, light: bool) -> tauri::utils::config::WindowEffectsConfig {
+    use tauri::window::{Color, Effect, EffectState, EffectsBuilder};
     let mut effects = EffectsBuilder::new()
         .effect(Effect::Sidebar)
         .effect(Effect::Acrylic)
         .state(EffectState::Active)
-        .color(tauri::window::Color(43, 43, 48, 150));
+        .color(if light {
+            Color(243, 243, 243, 150)
+        } else {
+            Color(43, 43, 48, 150)
+        });
     if let Some(radius) = radius {
         effects = effects.radius(radius);
     }
     effects.build()
 }
 
+/// Windows with no glass to dress: the snap grid and the volume overlay.
+const PLAIN_WINDOWS: &[&str] = &["grid", "osd"];
+
+/// The saved style and mode; the defaults until the state is loaded.
+fn appearance(app: &AppHandle) -> (String, String) {
+    app.try_state::<crate::state::AppState>()
+        .and_then(|state| state.snapshot().ok())
+        .map(|snapshot| (snapshot.style.clone(), snapshot.mode.clone()))
+        .unwrap_or_else(|| {
+            (
+                crate::state::STYLES[0].into(),
+                crate::state::MODES[0].into(),
+            )
+        })
+}
+
+/// The bar's vibrancy corner, matching the page's for each style.
+#[cfg(target_os = "macos")]
+fn bar_radius(style: &str) -> f64 {
+    match style {
+        "windows" => 8.0,
+        "mac" => 22.0,
+        _ => 16.0,
+    }
+}
+
+/// Puts every window in the saved mode (dark, light or the system's), and the bar's glass in
+/// the saved style.
+pub fn apply_appearance(app: &AppHandle) {
+    let (style, mode) = appearance(app);
+    for (label, window) in app.webview_windows() {
+        if !PLAIN_WINDOWS.contains(&label.as_str()) {
+            dress_as(&window, &style, &mode);
+        }
+    }
+}
+
+/// Puts a window that was just built in the saved mode. On Windows it also keeps the Acrylic
+/// tinted like the system while the mode follows it.
+pub(crate) fn dress(window: &tauri::WebviewWindow) {
+    let (style, mode) = appearance(window.app_handle());
+    dress_as(window, &style, &mode);
+    #[cfg(windows)]
+    {
+        let watched = window.clone();
+        window.on_window_event(move |event| {
+            if let tauri::WindowEvent::ThemeChanged(theme) = event
+                && appearance(watched.app_handle()).1 == "system"
+            {
+                let light = *theme == tauri::Theme::Light;
+                let _ = watched.set_effects(glass_for(None, light));
+            }
+        });
+    }
+}
+
+fn dress_as(window: &tauri::WebviewWindow, style: &str, mode: &str) {
+    let theme = match mode {
+        "light" => Some(tauri::Theme::Light),
+        "system" => None,
+        _ => Some(tauri::Theme::Dark),
+    };
+    #[cfg(target_os = "macos")]
+    let radius = (window.label() == "main").then(|| bar_radius(style));
+    #[cfg(not(target_os = "macos"))]
+    let _ = style;
+    let target = window.clone();
+    // On the main thread `set_theme` takes effect at once, so `theme()` then reads the system's.
+    let result = window.run_on_main_thread(move || {
+        if let Err(err) = target.set_theme(theme) {
+            log::debug!("couldn't set {}'s appearance: {err}", target.label());
+        }
+        #[cfg(windows)]
+        {
+            let light = theme.or_else(|| target.theme().ok()) == Some(tauri::Theme::Light);
+            let _ = target.set_effects(glass_for(None, light));
+        }
+        #[cfg(target_os = "macos")]
+        if let Some(radius) = radius {
+            let _ = target.set_effects(glass_for(Some(radius), false));
+        }
+    });
+    if let Err(err) = result {
+        log::debug!("couldn't set a window's appearance: {err}");
+    }
+}
+
 /// The bar's effect in tauri.conf.json is macOS's sidebar material, which Windows ignores,
-/// leaving the tint over the bare desktop. Windows gets Acrylic instead, kept dark to match the
-/// theme, with the system's rounded corners clipping it (Windows rounds at 8px, so the page
+/// leaving the tint over the bare desktop. Windows gets Acrylic instead, tinted for the mode,
+/// with the system's rounded corners clipping it (Windows rounds at 8px, so the page
 /// matches that radius there).
 #[cfg(windows)]
 pub fn make_bar_glass(window: &tauri::WebviewWindow) -> Result<(), String> {
@@ -655,10 +746,7 @@ pub fn make_bar_glass(window: &tauri::WebviewWindow) -> Result<(), String> {
         DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND, DwmSetWindowAttribute,
     };
 
-    window
-        .set_theme(Some(tauri::Theme::Dark))
-        .map_err(|err| err.to_string())?;
-    window.set_effects(glass()).map_err(|err| err.to_string())?;
+    dress(window);
     let hwnd = window.hwnd().map_err(|err| err.to_string())?;
     unsafe {
         DwmSetWindowAttribute(
@@ -839,6 +927,7 @@ fn build_settings(app: &AppHandle, section: Option<&str>) -> Result<(), String> 
         .title_bar_style(tauri::TitleBarStyle::Overlay)
         .hidden_title(true);
     let window = window.build().map_err(|err| err.to_string())?;
+    dress(&window);
     #[cfg(windows)]
     no_window_menu(app, &window);
     #[cfg(windows)]
@@ -886,6 +975,7 @@ pub fn open_onboarding(app: &AppHandle) -> Result<(), String> {
     .focused(true)
     .build()
     .map_err(|err| err.to_string())?;
+    dress(&window);
     #[cfg(windows)]
     no_window_menu(app, &window);
     // Closed with its close button rather than finished: the Dock icon goes with it.

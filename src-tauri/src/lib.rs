@@ -193,6 +193,8 @@ pub fn run() {
             commands::settings::save_instant_startup,
             commands::settings::save_resume_seconds,
             commands::settings::save_theme,
+            commands::settings::save_style,
+            commands::settings::save_mode,
             commands::settings::save_open_behavior,
             commands::stocks::quote,
             commands::weather::weather,
@@ -434,6 +436,8 @@ fn set_up_bar(app: &tauri::AppHandle) {
     if let Err(err) = window::make_bar_glass(&main_window) {
         log::error!("couldn't blur behind the bar: {err}");
     }
+    #[cfg(not(windows))]
+    window::dress(&main_window);
     #[cfg(windows)]
     window::install_snapping(&main_window);
     #[cfg(windows)]

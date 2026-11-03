@@ -305,6 +305,14 @@ export function saveTheme(theme: string): Promise<Snapshot> {
   return invoke<Snapshot>('save_theme', { theme });
 }
 
+export function saveStyle(style: string): Promise<Snapshot> {
+  return invoke<Snapshot>('save_style', { style });
+}
+
+export function saveMode(mode: string): Promise<Snapshot> {
+  return invoke<Snapshot>('save_mode', { mode });
+}
+
 /** Runs a shell command in `dir` (home when null); the run's id arrives in its `started` event. */
 export function shellRun(
   command: string,

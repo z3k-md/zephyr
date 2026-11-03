@@ -39,8 +39,10 @@
   /** Idle reads as the panel, busy as the accent, pegged as hot. */
   function fill(load: number): string {
     if (load >= 90) return `rgba(255, 120, 90, ${0.55 + (load - 90) / 40})`;
-    return `rgba(91, 156, 255, ${0.06 + (load / 100) * 0.8})`;
+    return `color-mix(in srgb, var(--info) ${(0.06 + (load / 100) * 0.8) * 100}%, transparent)`;
   }
+
+  const ink = (percent: number) => `color-mix(in srgb, var(--ink) ${percent}%, transparent)`;
 
   const parts = computed(() => {
     const memory = props.memory;
@@ -49,17 +51,17 @@
     const list =
       memory.wired !== undefined
         ? [
-            { label: 'App memory', value: memory.inUse, color: 'rgba(255, 255, 255, 0.78)' },
+            { label: 'App memory', value: memory.inUse, color: ink(78) },
             { label: 'Wired', value: memory.wired, color: 'var(--warn)' },
             { label: 'Compressed', value: memory.compressed ?? 0, color: '#d98a5f' },
-            { label: 'Cached files', value: memory.standby, color: 'rgba(255, 255, 255, 0.32)' },
-            { label: 'Free', value: memory.free, color: 'rgba(255, 255, 255, 0.1)' },
+            { label: 'Cached files', value: memory.standby, color: ink(32) },
+            { label: 'Free', value: memory.free, color: 'var(--track)' },
           ]
         : [
-            { label: 'In use', value: memory.inUse, color: 'rgba(255, 255, 255, 0.78)' },
+            { label: 'In use', value: memory.inUse, color: ink(78) },
             { label: 'Modified', value: memory.modified, color: 'var(--warn)' },
-            { label: 'Standby', value: memory.standby, color: 'rgba(255, 255, 255, 0.32)' },
-            { label: 'Free', value: memory.free, color: 'rgba(255, 255, 255, 0.1)' },
+            { label: 'Standby', value: memory.standby, color: ink(32) },
+            { label: 'Free', value: memory.free, color: 'var(--track)' },
           ];
     return list.map((part) => ({ ...part, share: (part.value / memory.total) * 100 }));
   });
@@ -95,7 +97,7 @@
             :y="cell.y + 0.5"
             :width="grid.columnWidth + 0.3"
             :height="grid.rowHeight - 1"
-            :fill="fill(cell.load)"
+            :style="{ fill: fill(cell.load) }"
           />
         </svg>
       </div>

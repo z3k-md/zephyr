@@ -564,6 +564,8 @@ fn build_card(app: &AppHandle) -> Result<tauri::WebviewWindow, String> {
     if let Err(err) = crate::window::make_bar_glass(&window) {
         log::debug!("the update card has no blur: {err}");
     }
+    #[cfg(not(windows))]
+    crate::window::dress(&window);
     Ok(window)
 }
 

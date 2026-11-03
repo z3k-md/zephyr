@@ -64,6 +64,12 @@ pub struct Persisted {
     /// Whether the theme was picked in Settings, rather than left at a default; an old
     /// default moves to a new one, a pick never does.
     pub theme_chosen: bool,
+    /// How the windows are drawn, on either platform; one of [`STYLES`].
+    #[serde(default = "default_style")]
+    pub style: String,
+    /// Dark, light, or following the system; one of [`MODES`].
+    #[serde(default = "default_mode")]
+    pub mode: String,
     /// Whether first-run setup was finished or skipped. Files from before setup existed
     /// read as done, so upgrading never shows it.
     #[serde(default = "yes")]
@@ -116,6 +122,20 @@ pub const THEMES: &[&str] = &["sidebar", "violet", "graphite", "ocean", "forest"
 
 fn default_theme() -> String {
     THEMES[0].into()
+}
+
+/// Zephyr's own glass, Windows 11's look, macOS's look; the first is the default.
+pub const STYLES: &[&str] = &["glass", "windows", "mac"];
+
+fn default_style() -> String {
+    STYLES[0].into()
+}
+
+/// The first is the default.
+pub const MODES: &[&str] = &["dark", "light", "system"];
+
+fn default_mode() -> String {
+    MODES[0].into()
 }
 
 /// A named set of things opened in one go from the bar or a hotkey.
@@ -240,9 +260,12 @@ impl Persisted {
             bar_position: None,
             theme: default_theme(),
             theme_chosen: false,
+            style: default_style(),
+            mode: default_mode(),
             onboarding_done: false,
             onboarding_every_launch: false,
             power: None,
+            timers: Vec::new(),
             note_windows: Vec::new(),
             bug_capture: true,
             protected_folders: false,
@@ -744,6 +767,23 @@ mod tests {
         current.theme = "violet".into();
         assert!(!current.migrate());
         assert_eq!(current.theme, "violet");
+    }
+
+    #[test]
+    fn a_file_from_before_styles_and_modes_is_glass_and_dark() {
+        let state = Persisted::parse(br#"{"version": 4, "theme": "ocean"}"#).unwrap();
+        assert_eq!(state.theme, "ocean");
+        assert_eq!(state.style, STYLES[0]);
+        assert_eq!(state.mode, MODES[0]);
+        assert_eq!(STYLES[0], "glass");
+        assert_eq!(MODES[0], "dark");
+
+        let picked = Persisted::parse(br#"{"style": "mac", "mode": "system"}"#).unwrap();
+        assert_eq!(picked.style, "mac");
+        assert_eq!(picked.mode, "system");
+        let json = serde_json::to_value(&picked).unwrap();
+        assert_eq!(json["style"], "mac");
+        assert_eq!(json["mode"], "system");
     }
 
     #[test]

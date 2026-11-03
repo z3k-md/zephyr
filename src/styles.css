@@ -98,9 +98,10 @@ table {
   display: none !important;
 }
 
-/* One dark glass theme everywhere, in the spirit of Raycast: every window sits over a native
-   blur of what is behind it, tinted deep purple, with hairline borders, a soft top highlight,
-   translucent fills, and color reserved for focus and warnings. */
+/* One glass theme everywhere, in the spirit of Raycast: every window sits over a native blur
+   of what is behind it, tinted deep purple (dark mode, below) or near white (light mode),
+   with hairline borders, a soft top highlight, translucent fills, and color reserved for
+   focus and warnings. */
 :root {
   color-scheme: dark;
   /* The tint over the native blur; it carries the purple and keeps text readable. */
@@ -129,6 +130,31 @@ table {
   --warn: #f0b443;
   --bad: #ff6159;
   --info: #5b9cff;
+  /* Text a step below --fg, and reds that read as text on the glass. */
+  --fg-soft: #c9c9ce;
+  --bad-soft: #fca5a5;
+  --bad-text: #ff8a83;
+  --typo: #ff6b6b;
+  --hot: #ff7a5a;
+  --on-warn: #1a1406;
+  /* Translucent fills and lines are --ink mixed with transparent, and dark bands and shadows
+     are --shade; light mode swaps the inks rather than each fill. */
+  --ink: #fff;
+  --shade: #000;
+  --fill-faint: color-mix(in srgb, var(--ink) 4%, transparent);
+  --fill: color-mix(in srgb, var(--ink) 7%, transparent);
+  --fill-strong: color-mix(in srgb, var(--ink) 8%, transparent);
+  --stroke-faint: color-mix(in srgb, var(--ink) 7%, transparent);
+  --track: color-mix(in srgb, var(--ink) 10%, transparent);
+  --scrollbar: color-mix(in srgb, var(--ink) 16%, transparent);
+  --scrollbar-hover: color-mix(in srgb, var(--ink) 28%, transparent);
+  --band: color-mix(in srgb, var(--shade) 18%, transparent);
+  --shadow: color-mix(in srgb, var(--shade) 35%, transparent);
+  --knob: #f4f2fa;
+  --menu-option-bg: #231c35;
+  --checker-a: #2a2a2e;
+  --checker-b: #1f1f22;
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23b9b3cc' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m7 10 5 5 5-5'/%3E%3C/svg%3E");
   /* Where a row's text starts, past its icon; notices and footers line up with it. */
   --gutter: 48px;
   font-family:
@@ -136,6 +162,42 @@ table {
   font-size: 14px;
   line-height: 1.4;
   -webkit-font-smoothing: antialiased;
+}
+
+/* Light mode: the same glass over a light native blur, with black inks in place of white.
+   It comes before the palettes so the sidebar palette's blue primary button still applies. */
+:root[data-mode='light'] {
+  color-scheme: light;
+  --panel: rgba(255, 255, 255, 0.55);
+  --fg: #1d1d1f;
+  --muted: #6e6e73;
+  --faint: #a1a1a6;
+  --stroke: rgba(0, 0, 0, 0.08);
+  --stroke-strong: rgba(0, 0, 0, 0.14);
+  --highlight: rgba(255, 255, 255, 0.7);
+  --chip: rgba(0, 0, 0, 0.045);
+  --chip-hover: rgba(0, 0, 0, 0.075);
+  --active: #1d1d1f;
+  --active-fg: #fff;
+  --active-hover: #3a3a3c;
+  --notice: #c2410c;
+  --ok: #059669;
+  --warn: #b45309;
+  --bad: #dc2626;
+  --info: #2563eb;
+  --fg-soft: #3a3a3c;
+  --bad-soft: #b91c1c;
+  --bad-text: #b91c1c;
+  --typo: #dc2626;
+  --hot: #c2410c;
+  --on-warn: #fff;
+  --ink: rgba(0, 0, 0, 0.75);
+  --shade: rgba(0, 0, 0, 0.25);
+  --knob: #fff;
+  --menu-option-bg: #f5f5f7;
+  --checker-a: #e5e5ea;
+  --checker-b: #f5f5f7;
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238e8e93' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m7 10 5 5 5-5'/%3E%3C/svg%3E");
 }
 
 /* Settings > Appearance palettes. Each swaps the glass tint, the selection fill and the
@@ -213,6 +275,95 @@ table {
   --focus: #fb923c;
 }
 
+/* The palettes in light mode: near-white glass leaning toward each hue, and accents dark
+   enough to hold up on it. */
+:root[data-mode='light'][data-theme='violet'] {
+  --glass: linear-gradient(180deg, rgba(249, 247, 254, 0.78) 0%, rgba(242, 238, 251, 0.84) 100%);
+  --glass-strong: linear-gradient(
+    180deg,
+    rgba(250, 248, 255, 0.92) 0%,
+    rgba(244, 240, 252, 0.95) 100%
+  );
+  --side: rgba(236, 231, 250, 0.55);
+  --select: rgba(124, 58, 237, 0.12);
+  --focus: #7c3aed;
+}
+
+:root[data-mode='light'][data-theme='sidebar'] {
+  --glass: linear-gradient(180deg, rgba(250, 250, 252, 0.55) 0%, rgba(242, 242, 245, 0.65) 100%);
+  --glass-strong: linear-gradient(
+    180deg,
+    rgba(250, 250, 252, 0.82) 0%,
+    rgba(243, 243, 246, 0.88) 100%
+  );
+  --side: rgba(232, 232, 236, 0.5);
+  --select: #007aff;
+  --focus: #007aff;
+  --active: #007aff;
+  --active-hover: #1a88ff;
+}
+
+@supports (color: AccentColor) {
+  :root[data-mode='light'][data-theme='sidebar'] {
+    --select: AccentColor;
+    --focus: AccentColor;
+    --active: AccentColor;
+    --active-hover: color-mix(in srgb, AccentColor 88%, white);
+  }
+}
+
+:root[data-mode='light'][data-platform='windows'][data-theme='sidebar'] {
+  --side: rgba(238, 238, 238, 0.6);
+}
+
+:root[data-mode='light'][data-theme='graphite'] {
+  --glass: linear-gradient(180deg, rgba(248, 248, 249, 0.8) 0%, rgba(240, 240, 242, 0.86) 100%);
+  --glass-strong: linear-gradient(
+    180deg,
+    rgba(250, 250, 251, 0.93) 0%,
+    rgba(243, 243, 245, 0.96) 100%
+  );
+  --side: rgba(232, 232, 235, 0.55);
+  --select: rgba(82, 82, 91, 0.13);
+  --focus: #52525b;
+}
+
+:root[data-mode='light'][data-theme='ocean'] {
+  --glass: linear-gradient(180deg, rgba(245, 249, 255, 0.78) 0%, rgba(236, 243, 253, 0.84) 100%);
+  --glass-strong: linear-gradient(
+    180deg,
+    rgba(247, 250, 255, 0.92) 0%,
+    rgba(239, 245, 254, 0.95) 100%
+  );
+  --side: rgba(226, 236, 251, 0.55);
+  --select: rgba(37, 99, 235, 0.12);
+  --focus: #2563eb;
+}
+
+:root[data-mode='light'][data-theme='forest'] {
+  --glass: linear-gradient(180deg, rgba(244, 251, 250, 0.78) 0%, rgba(234, 246, 244, 0.84) 100%);
+  --glass-strong: linear-gradient(
+    180deg,
+    rgba(246, 252, 251, 0.92) 0%,
+    rgba(237, 248, 246, 0.95) 100%
+  );
+  --side: rgba(222, 242, 239, 0.55);
+  --select: rgba(15, 148, 136, 0.13);
+  --focus: #0f9488;
+}
+
+:root[data-mode='light'][data-theme='ember'] {
+  --glass: linear-gradient(180deg, rgba(254, 249, 245, 0.78) 0%, rgba(251, 241, 234, 0.84) 100%);
+  --glass-strong: linear-gradient(
+    180deg,
+    rgba(255, 250, 246, 0.92) 0%,
+    rgba(252, 243, 236, 0.95) 100%
+  );
+  --side: rgba(250, 233, 221, 0.55);
+  --select: rgba(234, 88, 12, 0.12);
+  --focus: #ea580c;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -233,9 +384,9 @@ select {
   color: inherit;
 }
 
-/* Native dropdown lists (where no glass menu stands in) stay dark. */
+/* Native dropdown lists (where no glass menu stands in) take the mode's solid color. */
 select option {
-  background: #231c35;
+  background: var(--menu-option-bg);
   color: var(--fg);
 }
 
@@ -265,11 +416,11 @@ input[type='number']::-webkit-outer-spin-button {
 :root[data-platform='windows'] ::-webkit-scrollbar-thumb {
   border: 3px solid transparent;
   border-radius: 5px;
-  background: rgba(255, 255, 255, 0.16) padding-box;
+  background: var(--scrollbar) padding-box;
 }
 
 :root[data-platform='windows'] ::-webkit-scrollbar-thumb:hover {
-  background-color: rgba(255, 255, 255, 0.28);
+  background-color: var(--scrollbar-hover);
 }
 
 :focus-visible {
@@ -454,7 +605,7 @@ section > button {
   border-radius: 8px;
   box-shadow:
     inset 0 1px 0 var(--highlight),
-    0 8px 24px rgba(0, 0, 0, 0.35);
+    0 8px 24px var(--shadow);
   backdrop-filter: blur(18px) saturate(1.4);
   opacity: 0;
   pointer-events: none;
@@ -529,8 +680,8 @@ section > button {
   backdrop-filter: blur(24px) saturate(1.4);
   box-shadow:
     inset 0 1px 0 var(--highlight),
-    0 12px 32px rgba(0, 0, 0, 0.45),
-    0 2px 6px rgba(0, 0, 0, 0.3);
+    0 12px 32px color-mix(in srgb, var(--shade) 45%, transparent),
+    0 2px 6px color-mix(in srgb, var(--shade) 30%, transparent);
   font-size: 13px;
   animation: select-in 0.09s ease-out;
 }

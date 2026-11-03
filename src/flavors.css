@@ -1,0 +1,596 @@
+/* Settings > Appearance styles, over the palette and the light or dark mode: Windows (Fluent)
+   and Mac (Spotlight and System Settings). Glass is the plain rules elsewhere. bar.css and
+   settings.css load after this file, so every rule here starts from :root to outrank them. */
+
+/* ---- Windows ---- */
+
+:root[data-style='windows'] {
+  /* Text on an accent fill: Fluent puts dark text on the light dark-mode accents. */
+  --win-on-accent: rgba(0, 0, 0, 0.9);
+  font-family:
+    'Segoe UI Variable Text',
+    'Segoe UI',
+    system-ui,
+    -apple-system,
+    sans-serif;
+}
+
+:root[data-style='windows'][data-theme='sidebar'],
+:root[data-style='windows'][data-mode='light'] {
+  --win-on-accent: #fff;
+}
+
+/* DWM clips the bar to 8px on Windows; the style keeps that corner on a Mac too. */
+:root[data-style='windows'] .bar {
+  border-radius: 8px;
+  box-shadow: none;
+}
+
+/* The search field is a Fluent text box inset in the bar, its accent line along the bottom. */
+:root[data-style='windows'] .input-row {
+  gap: 10px;
+  margin: 8px 8px 4px;
+  padding: 4px 6px 4px 12px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+  box-shadow: inset 0 0 0 1px var(--stroke);
+}
+
+:root[data-style='windows'] .input-row:focus-within {
+  box-shadow:
+    inset 0 0 0 1px var(--stroke),
+    inset 0 -2px 0 var(--focus);
+}
+
+:root[data-style='windows'] .mark {
+  width: 16px;
+  height: 16px;
+}
+
+:root[data-style='windows'] .query:not(.shell-input) {
+  font-size: 16px;
+  letter-spacing: 0;
+}
+
+:root[data-style='windows'] .bar-body > .results {
+  border-top-color: transparent;
+}
+
+:root[data-style='windows'] .results.sectioned {
+  padding: 2px 8px 8px;
+}
+
+:root[data-style='windows'] :is(.section-head, .clip-group) {
+  padding: 10px 12px 4px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+:root[data-style='windows'] .settings .settings-group {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* Restrained corners: rows and controls 4px, cards and menus 8px. */
+:root[data-style='windows']
+  :is(
+    .item,
+    .clip-item,
+    .select-option,
+    .settings-row,
+    .results-list button,
+    .res-row,
+    .sound-row,
+    .launch-item,
+    .chip,
+    .bar-settings,
+    .text-button,
+    .primary,
+    section > button,
+    .field > button,
+    .speed-field > button,
+    .folders button,
+    .onboarding-foot button,
+    .launch-button,
+    .res-detail-actions button,
+    .approval-actions button,
+    .theme-swatch
+  ) {
+  border-radius: 4px;
+}
+
+:root[data-style='windows']
+  :is(
+    .weather-card,
+    .ticker-card,
+    .approval,
+    .sound-drawer,
+    .res-tile,
+    .launch-group,
+    .binding,
+    .theme
+  ) {
+  border-radius: 8px;
+}
+
+/* Selection: a neutral fill with a short accent pill at the left edge. */
+:root[data-style='windows']
+  :is(.clip-item, .select-option, .settings-row, .results-list button, .res-row, .sound-row) {
+  position: relative;
+}
+
+:root[data-style='windows']
+  :is(
+    .results .item.selected,
+    .clip-item.selected,
+    .select-option.active,
+    .settings-row.chosen,
+    .results-list button.selected,
+    .res-row.selected:not(.confirming),
+    .sound-row.selected
+  ) {
+  background: color-mix(in srgb, var(--fg) 7%, transparent);
+  color: var(--fg);
+}
+
+:root[data-style='windows']
+  :is(
+    .results .item.selected,
+    .clip-item.selected,
+    .select-option.active,
+    .settings-row.chosen,
+    .results-list button.selected,
+    .res-row.selected:not(.confirming),
+    .sound-row.selected
+  )::before {
+  content: '';
+  position: absolute;
+  top: 25%;
+  bottom: 25%;
+  left: 0;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--focus);
+}
+
+:root[data-style='windows'] .results .item.selected :is(.item-sub, .item-acc) {
+  color: var(--muted);
+}
+
+:root[data-style='windows'] .results .item.selected .item-icon {
+  color: var(--fg);
+}
+
+:root[data-style='windows'] .settings-row:hover:not(.chosen) {
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+}
+
+:root[data-style='windows'] .kbd {
+  border: 1px solid var(--stroke-strong);
+  border-bottom-color: color-mix(in srgb, var(--fg) 24%, transparent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+  box-shadow: none;
+}
+
+:root[data-style='windows'] :is(.footer, .stats) {
+  background: transparent;
+}
+
+/* Buttons: accent primary, and a subtle fill with a hairline edge for the rest. */
+:root[data-style='windows'] .primary:not(.approval-actions .primary) {
+  border-color: transparent;
+  background: var(--focus);
+  color: var(--win-on-accent);
+}
+
+:root[data-style='windows'] .primary:not(.approval-actions .primary):hover {
+  background: color-mix(in srgb, var(--focus) 90%, transparent);
+}
+
+:root[data-style='windows']
+  :is(
+    section > button,
+    .field > button:not(.recorder),
+    .speed-field > button,
+    .folders button,
+    .onboarding-foot button:not(.link-button),
+    .res-detail-actions button
+  ):not(.primary) {
+  border: 1px solid var(--stroke-strong);
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+}
+
+:root[data-style='windows']
+  :is(
+    section > button,
+    .field > button:not(.recorder),
+    .speed-field > button,
+    .folders button,
+    .onboarding-foot button:not(.link-button),
+    .res-detail-actions button
+  ):not(.primary):hover {
+  background: color-mix(in srgb, var(--fg) 9%, transparent);
+}
+
+/* Fields: 4px corners, and the focus shows as the accent line along the bottom. */
+:root[data-style='windows']
+  :is(
+    .field input:not([type='checkbox']),
+    .field select,
+    .recorder,
+    .settings-search,
+    .launch-group-name,
+    .launch-link input,
+    .app-picker-field,
+    .clip-filter
+  ) {
+  border-radius: 4px;
+}
+
+:root[data-style='windows']
+  :is(
+    .field input:not([type='checkbox']),
+    .field select,
+    .settings-search,
+    .launch-group-name,
+    .launch-link input
+  ):focus,
+:root[data-style='windows'] .app-picker-field:focus-within {
+  border-color: var(--stroke-strong);
+  box-shadow: inset 0 -2px 0 var(--focus);
+}
+
+:root[data-style='windows'] .segments {
+  border-radius: 5px;
+}
+
+:root[data-style='windows'] .segment {
+  border-radius: 4px;
+}
+
+:root[data-style='windows'] .segment.chosen {
+  background: color-mix(in srgb, var(--fg) 9%, transparent);
+}
+
+/* Toggle switches: an outlined track with a small muted knob, accent-filled when on. */
+:root[data-style='windows'] .settings input[type='checkbox'] {
+  width: 40px;
+  height: 20px;
+  border-radius: 10px;
+  background: transparent;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fg) 60%, transparent);
+}
+
+:root[data-style='windows'] .settings input[type='checkbox']::before {
+  top: 4px;
+  left: 4px;
+  width: 12px;
+  height: 12px;
+  background: color-mix(in srgb, var(--fg) 75%, transparent);
+  box-shadow: none;
+}
+
+:root[data-style='windows'] .settings input[type='checkbox']:hover:not(:disabled)::before {
+  top: 3px;
+  left: 3px;
+  width: 14px;
+  height: 14px;
+}
+
+:root[data-style='windows'] .settings input[type='checkbox']:checked {
+  background: var(--focus);
+  box-shadow: none;
+}
+
+:root[data-style='windows'] .settings input[type='checkbox']:checked::before {
+  transform: translateX(20px);
+  background: #fff;
+}
+
+/* Menus and tooltips: solid fills with Fluent's soft two-part shadow. */
+:root[data-style='windows'] .select-menu {
+  padding: 4px;
+  border-color: var(--stroke);
+  border-radius: 8px;
+  box-shadow:
+    0 8px 16px rgba(0, 0, 0, 0.26),
+    0 0 2px rgba(0, 0, 0, 0.2);
+}
+
+:root[data-style='windows'] .select-option {
+  min-height: 32px;
+}
+
+:root[data-style='windows'] .app-tip {
+  padding: 5px 8px;
+  border-color: var(--stroke);
+  border-radius: 4px;
+  box-shadow:
+    0 4px 8px rgba(0, 0, 0, 0.26),
+    0 0 2px rgba(0, 0, 0, 0.2);
+}
+
+:root[data-style='windows'][data-mode='light'] .select-menu {
+  box-shadow:
+    0 8px 16px rgba(0, 0, 0, 0.14),
+    0 0 2px rgba(0, 0, 0, 0.12);
+}
+
+:root[data-style='windows'][data-mode='light'] .app-tip {
+  box-shadow:
+    0 4px 8px rgba(0, 0, 0, 0.14),
+    0 0 2px rgba(0, 0, 0, 0.12);
+}
+
+/* ---- Mac ---- */
+
+:root[data-style='mac'] {
+  /* The selection and control fill; white text sits on it. */
+  --mac-accent: var(--focus);
+  /* A frosted base under the palette's tint, so the sheerer palettes don't let what's behind
+     the window bleed into the text. */
+  --mac-base: rgba(30, 30, 34, 0.62);
+  --bg: var(--glass), var(--mac-base);
+  --bg-solid: var(--glass-strong), var(--mac-base);
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI',
+    sans-serif;
+}
+
+/* Graphite's focus is a light grey that can't carry white text; macOS's graphite accent can. */
+:root[data-style='mac'][data-theme='graphite'] {
+  --mac-accent: #8c8c8c;
+}
+
+:root[data-style='mac'][data-mode='light'] {
+  --mac-base: rgba(246, 246, 248, 0.68);
+}
+
+:root[data-style='mac'] :is(.app-tip, .select-menu) {
+  background: var(--bg-solid);
+}
+
+:root[data-style='mac'][data-theme='graphite'][data-mode='light'] {
+  --mac-accent: #7a7a7f;
+}
+
+/* The dark palettes' accents are pale for text on the glass; as a fill under white text they
+   need macOS's deeper accent shades. */
+:root[data-style='mac']:not([data-mode='light'])[data-theme='violet'] {
+  --mac-accent: #7c5ce6;
+}
+
+:root[data-style='mac']:not([data-mode='light'])[data-theme='ocean'] {
+  --mac-accent: #2f7cf6;
+}
+
+:root[data-style='mac']:not([data-mode='light'])[data-theme='forest'] {
+  --mac-accent: #0f9488;
+}
+
+:root[data-style='mac']:not([data-mode='light'])[data-theme='ember'] {
+  --mac-accent: #e2641a;
+}
+
+/* Windows clips every bar to 8px; on macOS the native vibrancy is rounded to 22px. */
+:root[data-style='mac'] .bar {
+  border-radius: 8px;
+}
+
+:root[data-style='mac'][data-platform='macos'] .bar {
+  border-radius: 22px;
+}
+
+:root[data-style='mac'] .input-row {
+  gap: 12px;
+  padding: 14px 14px 14px 20px;
+}
+
+:root[data-style='mac'] .mark {
+  width: 21px;
+  height: 21px;
+}
+
+:root[data-style='mac'] .query:not(.shell-input) {
+  font-size: 22px;
+  font-weight: 400;
+  letter-spacing: -0.015em;
+}
+
+:root[data-style='mac'] .results.sectioned {
+  --row-h: 42px;
+  padding: 4px 8px 8px;
+}
+
+:root[data-style='mac'] .results.sectioned .item {
+  padding: 7px 12px;
+}
+
+:root[data-style='mac'] :is(.item, .res-row) {
+  border-radius: 9px;
+}
+
+:root[data-style='mac'] :is(.section-head, .clip-group) {
+  padding: 8px 12px 3px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+/* Selection: solid accent, white text, and everything quieter on the row in white. */
+:root[data-style='mac']
+  :is(
+    .results .item.selected,
+    .clip-item.selected,
+    .select-option.active,
+    .settings-row.chosen,
+    .results-list button.selected,
+    .res-row.selected:not(.confirming)
+  ) {
+  background: var(--mac-accent);
+  color: #fff;
+}
+
+:root[data-style='mac']
+  :is(.results .item.selected, .clip-item.selected, .res-row.selected:not(.confirming))
+  :is(
+    .item-sub,
+    .item-acc,
+    .item-icon,
+    .hint,
+    .clip-icon,
+    .action-why,
+    .label.off,
+    .net-card-head,
+    .net-card-sub,
+    .port-card-command,
+    .res-sub,
+    .res-cpu,
+    .res-memory,
+    .res-disk,
+    .res-pid,
+    .res-count
+  ) {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+:root[data-style='mac'] .results .item.selected .net-card-spark path {
+  stroke: rgba(255, 255, 255, 0.9);
+}
+
+:root[data-style='mac'] .settings-row {
+  border-radius: 8px;
+}
+
+:root[data-style='mac'] .settings-row:hover:not(.chosen) {
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+}
+
+/* Keycaps: soft fills without an edge; on rows the keys are plain glyphs, except the
+   numbered badges shown while the run-a-row modifier is held. */
+:root[data-style='mac'] .kbd {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--fg) 10%, transparent);
+  box-shadow: none;
+}
+
+:root[data-style='mac'] .results .item .keys:not(.row-number) {
+  gap: 2px;
+}
+
+:root[data-style='mac'] .results .item .keys:not(.row-number) .kbd {
+  min-width: 0;
+  height: auto;
+  padding: 0;
+  border-color: transparent;
+  background: none;
+  box-shadow: none;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 400;
+}
+
+:root[data-style='mac'] .results .item.selected .keys:not(.row-number) .kbd {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+:root[data-style='mac'] .results .item.selected .row-number .kbd {
+  border-color: rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.2);
+  box-shadow: none;
+  color: #fff;
+}
+
+:root[data-style='mac'] :is(.footer, .stats) {
+  border-top-color: transparent;
+  background: linear-gradient(var(--stroke), var(--stroke)) top center / calc(100% - 32px) 1px
+    no-repeat;
+}
+
+/* Buttons and fields: 7px corners, accent primary, and macOS's soft focus ring. */
+:root[data-style='mac']
+  :is(
+    .text-button,
+    .primary,
+    section > button,
+    .field > button,
+    .speed-field > button,
+    .folders button,
+    .onboarding-foot button,
+    .launch-button,
+    .res-detail-actions button,
+    .chip
+  ) {
+  border-radius: 7px;
+}
+
+:root[data-style='mac'] .primary:not(.approval-actions .primary) {
+  border-color: transparent;
+  background: var(--mac-accent);
+  color: #fff;
+}
+
+:root[data-style='mac'] .primary:not(.approval-actions .primary):hover {
+  background: color-mix(in srgb, var(--mac-accent) 88%, white);
+}
+
+:root[data-style='mac']
+  :is(
+    .field input:not([type='checkbox']),
+    .field select,
+    .settings-search,
+    .launch-group-name,
+    .launch-link input
+  ):focus,
+:root[data-style='mac'] .app-picker-field:focus-within {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 40%, transparent);
+}
+
+:root[data-style='mac'] .segments {
+  border-radius: 8px;
+}
+
+:root[data-style='mac'] .segment.chosen {
+  background: color-mix(in srgb, var(--fg) 16%, transparent);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+:root[data-style='mac'][data-mode='light'] .segment.chosen {
+  background: #fff;
+}
+
+/* Toggle switches: a grey pill, accent when on, with a white knob. */
+:root[data-style='mac'] .settings input[type='checkbox'] {
+  background: color-mix(in srgb, var(--fg) 18%, transparent);
+  box-shadow: inset 0 0 0 0.5px var(--stroke-strong);
+}
+
+:root[data-style='mac'] .settings input[type='checkbox']::before {
+  background: #fff;
+  box-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.3),
+    0 0 0 0.5px rgba(0, 0, 0, 0.06);
+}
+
+:root[data-style='mac'] .settings input[type='checkbox']:checked {
+  background: var(--mac-accent);
+  box-shadow: none;
+}
+
+:root[data-style='mac'] .select-menu {
+  border-radius: 10px;
+}
+
+:root[data-style='mac'] .select-option {
+  border-radius: 6px;
+}
+
+:root[data-style='mac'] .app-tip {
+  border-radius: 8px;
+}

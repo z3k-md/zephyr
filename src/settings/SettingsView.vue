@@ -19,6 +19,8 @@
     saveOpenBehavior,
     saveResumeSeconds,
     saveTheme,
+    saveStyle,
+    saveMode,
     saveBugCapture,
     saveShowStats,
     saveVolumeKeys,
@@ -47,7 +49,7 @@
   import SyncSection from './SyncSection.vue';
   import PermissionsSection from './PermissionsSection.vue';
   import LaunchGroupsSection from './LaunchGroupsSection.vue';
-  import { THEMES } from '../themes';
+  import { LIGHT_SCHEME, MODES, STYLES, THEMES, resolveMode } from '../themes';
   import { isMac } from '../keys';
   import { usePoll } from '../poll';
   import { useWindowListener } from '../windowEvents';
@@ -532,6 +534,22 @@
     await save(saveTheme(id));
   }
 
+  async function chooseStyle(id: string) {
+    await save(saveStyle(id));
+  }
+
+  async function chooseMode(id: string) {
+    await save(saveMode(id));
+  }
+
+  // The palette swatches show the light tints while the windows are light.
+  const lightQuery = window.matchMedia(LIGHT_SCHEME);
+  const osLight = ref(lightQuery.matches);
+  lightQuery.addEventListener('change', (event) => (osLight.value = event.matches));
+  const lightSwatches = computed(
+    () => resolveMode(snapshot.value?.mode, osLight.value) === 'light'
+  );
+
   async function toggleOnboardingEveryLaunch() {
     if (!snapshot.value) return;
     try {
@@ -899,8 +917,50 @@
 
       <section v-if="snapshot" v-show="!search && active === 'theme'" id="section-theme">
         <h2>Theme</h2>
+        <div class="field" data-focus="style">
+          <span>Style</span>
+          <div class="styles" role="radiogroup" aria-label="Style">
+            <button
+              v-for="style in STYLES"
+              :key="style.id"
+              type="button"
+              class="style-card"
+              role="radio"
+              :aria-checked="snapshot.style === style.id"
+              :class="{ chosen: snapshot.style === style.id }"
+              :disabled="busy"
+              @click="chooseStyle(style.id)"
+            >
+              <span class="style-sketch" :class="`style-sketch-${style.id}`" aria-hidden="true">
+                <span class="style-sketch-row" />
+                <span class="style-sketch-row selected" />
+                <span class="style-sketch-row" />
+              </span>
+              {{ style.name }}
+            </button>
+          </div>
+        </div>
+        <div class="field" data-focus="mode">
+          <span>Appearance</span>
+          <div class="segments" role="radiogroup" aria-label="Appearance">
+            <button
+              v-for="mode in MODES"
+              :key="mode.id"
+              type="button"
+              class="segment"
+              role="radio"
+              :aria-checked="snapshot.mode === mode.id"
+              :class="{ chosen: snapshot.mode === mode.id }"
+              :disabled="busy"
+              @click="chooseMode(mode.id)"
+            >
+              {{ mode.name }}
+            </button>
+          </div>
+        </div>
         <div class="field" data-focus="theme">
-          <div class="themes compact" role="radiogroup" aria-label="Theme">
+          <span>Palette</span>
+          <div class="themes compact" role="radiogroup" aria-label="Palette">
             <button
               v-for="theme in THEMES"
               :key="theme.id"
@@ -912,7 +972,11 @@
               :disabled="busy"
               @click="chooseTheme(theme.id)"
             >
-              <span class="theme-swatch" :style="{ background: theme.tint }" aria-hidden="true">
+              <span
+                class="theme-swatch"
+                :style="{ background: lightSwatches ? theme.lightTint : theme.tint }"
+                aria-hidden="true"
+              >
                 <span class="theme-row" />
                 <span class="theme-row selected" :style="{ background: `${theme.accent}26` }" />
                 <span class="theme-row" />

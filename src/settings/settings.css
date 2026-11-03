@@ -102,8 +102,8 @@
   grid-column: 1;
   background: var(--side);
   box-shadow:
-    inset -1px 0 0 rgba(0, 0, 0, 0.35),
-    inset -2px 0 0 rgba(255, 255, 255, 0.05);
+    inset -1px 0 0 var(--shadow),
+    inset -2px 0 0 var(--panel);
 }
 
 /* The toolbar: a drag strip (double-click maximizes) whose title spans the sidebar, so the
@@ -164,7 +164,7 @@
   padding: 0 52px 0 28px;
   border: 1px solid var(--stroke-strong);
   border-radius: 7px;
-  background: rgba(0, 0, 0, 0.18);
+  background: var(--band);
   outline: none;
   font-size: 13px;
 }
@@ -225,7 +225,7 @@
 }
 
 .window-buttons button:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--fill-strong);
   color: var(--fg);
 }
 
@@ -272,7 +272,7 @@
 }
 
 .settings-row:hover {
-  background: rgba(255, 255, 255, 0.07);
+  background: var(--fill);
 }
 
 .settings-row.chosen {
@@ -548,7 +548,7 @@
   border-radius: 7px;
   border: 1px solid var(--stroke-strong);
   background: var(--panel);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  box-shadow: inset 0 1px 0 var(--fill-faint);
   font-size: 13.5px;
   text-align: left;
   transition:
@@ -671,7 +671,7 @@
   padding: 3px;
   border: 1px solid var(--stroke-strong);
   border-radius: 9px;
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--fill-faint);
 }
 
 .segment {
@@ -698,7 +698,7 @@
   appearance: none;
   -webkit-appearance: none;
   padding-right: 34px;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23b9b3cc' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m7 10 5 5 5-5'/%3E%3C/svg%3E");
+  background-image: var(--chevron);
   background-repeat: no-repeat;
   background-position: right 10px center;
   background-size: 16px;
@@ -708,8 +708,8 @@
 .field input:hover,
 .settings select:hover,
 .recorder:hover {
-  border-color: rgba(255, 255, 255, 0.2);
-  background-color: rgba(255, 255, 255, 0.08);
+  border-color: color-mix(in srgb, var(--ink) 20%, transparent);
+  background-color: var(--fill-strong);
 }
 
 .settings select:disabled {
@@ -873,7 +873,7 @@
   gap: 8px;
   padding: 12px 22px;
   border-top: 1px solid var(--stroke);
-  background: rgba(0, 0, 0, 0.12);
+  background: color-mix(in srgb, var(--shade) 12%, transparent);
 }
 
 .onboarding-foot .spacer {
@@ -1066,7 +1066,7 @@
   height: 24px;
   margin: 0;
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.14);
+  background: color-mix(in srgb, var(--ink) 14%, transparent);
   box-shadow: inset 0 0 0 1px var(--stroke);
   cursor: pointer;
   transition: background-color 0.16s;
@@ -1080,8 +1080,8 @@
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  background: #f4f2fa;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  background: var(--knob);
+  box-shadow: 0 1px 3px var(--shadow);
   transition: transform 0.16s ease;
 }
 
@@ -1130,7 +1130,7 @@
   gap: 10px;
   margin: 0 0 14px;
   padding: 14px;
-  background: rgba(255, 255, 255, 0.035);
+  background: color-mix(in srgb, var(--ink) 3.5%, transparent);
   border: 1px solid var(--stroke);
   border-radius: 12px;
 }
@@ -1236,7 +1236,7 @@
 
 .launch-item-remove:hover {
   color: var(--fg);
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--fill-strong);
 }
 
 .launch-item-remove svg {
@@ -1395,7 +1395,7 @@
 .theme-row {
   height: 8px;
   border-radius: 3px;
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--fill-strong);
 }
 
 .theme-dot {
@@ -1482,7 +1482,7 @@
 }
 
 .launch-button:hover {
-  background: rgba(255, 255, 255, 0.09);
+  background: color-mix(in srgb, var(--ink) 9%, transparent);
 }
 
 .launch-button:disabled {
@@ -1491,9 +1491,9 @@
 }
 
 .launch-button.danger:hover {
-  border-color: rgba(255, 97, 89, 0.5);
-  background: rgba(255, 97, 89, 0.12);
-  color: #ff8a83;
+  border-color: color-mix(in srgb, var(--bad) 50%, transparent);
+  background: color-mix(in srgb, var(--bad) 12%, transparent);
+  color: var(--bad-text);
 }
 
 /* Delete group: a square X, the same height as the group's other controls. */
@@ -1516,4 +1516,121 @@
 .launch-more {
   gap: 6px;
   margin-left: 0;
+}
+
+/* Settings > Theme: a sketch of the bar in each style, the chosen one outlined. */
+.styles {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  width: min(100%, 420px);
+}
+
+.style-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--stroke);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.style-card:hover {
+  border-color: var(--stroke-strong);
+  color: var(--fg);
+}
+
+.style-card.chosen {
+  border-color: var(--focus);
+  color: var(--fg);
+}
+
+.style-sketch {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  box-sizing: border-box;
+  height: 52px;
+  padding: 8px;
+  border: 1px solid var(--stroke);
+  border-radius: 12px;
+  background: var(--panel);
+}
+
+.style-sketch-row {
+  position: relative;
+  height: 8px;
+  border-radius: 3px;
+  background: var(--chip);
+}
+
+.style-sketch-glass .style-sketch-row.selected {
+  background: var(--select);
+}
+
+.style-sketch-windows {
+  border-radius: 4px;
+}
+
+.style-sketch-windows .style-sketch-row {
+  border-radius: 2px;
+}
+
+.style-sketch-windows .style-sketch-row.selected {
+  background: var(--chip-hover);
+}
+
+.style-sketch-windows .style-sketch-row.selected::before {
+  content: '';
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: 0;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--focus);
+}
+
+.style-sketch-mac {
+  padding: 8px 10px;
+  border-radius: 18px;
+}
+
+.style-sketch-mac .style-sketch-row {
+  border-radius: 4px;
+}
+
+.style-sketch-mac .style-sketch-row.selected {
+  background: var(--focus);
+}
+
+/* Setup: shorter sketches, so the styles, modes and palettes fit in one step. */
+.styles.compact {
+  gap: 10px;
+  width: 100%;
+}
+
+.styles.compact .style-card {
+  gap: 6px;
+  padding: 6px;
+}
+
+.styles.compact .style-sketch {
+  gap: 3px;
+  height: 38px;
+  padding: 6px;
+}
+
+.styles.compact .style-sketch-row {
+  height: 6px;
+}
+
+.styles.compact .style-sketch-mac {
+  padding: 6px 9px;
+  border-radius: 14px;
 }

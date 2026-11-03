@@ -5,7 +5,9 @@ import { captureSnapshot, captureToggle, getSnapshot } from './api';
 import { isSnapshot, type Snapshot } from './types';
 import { pickedUnit } from './bar/weather';
 import { captureConsole } from './log';
+import { LIGHT_SCHEME, resolveMode } from './themes';
 import './styles.css';
+import './flavors.css';
 
 captureConsole();
 
@@ -66,10 +68,20 @@ void listen<{ ctrl: boolean; shift: boolean; meta: boolean }>('alt-space', (even
   );
 });
 
-// The palette from Settings > Appearance and the weather's unit, in every window, switching
-// live when they change.
+// The palette, style and mode from Settings > Theme and the weather's unit, in every window,
+// switching live when they change. `data-mode` is always dark or light.
+let mode = 'dark';
+function applyMode() {
+  document.documentElement.dataset.mode = resolveMode(mode);
+}
+window.matchMedia(LIGHT_SCHEME).addEventListener('change', () => {
+  if (mode === 'system') applyMode();
+});
 function apply(snapshot: Snapshot) {
   document.documentElement.dataset.theme = snapshot.theme || 'sidebar';
+  document.documentElement.dataset.style = snapshot.style || 'glass';
+  mode = snapshot.mode || 'dark';
+  applyMode();
   bugCapture = snapshot.bugCapture;
   pickedUnit.value = snapshot.weatherUnit;
 }

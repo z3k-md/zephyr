@@ -29,8 +29,14 @@ export interface Snapshot {
   shell: ShellSettings;
   /** The color palette, e.g. violet or ocean. */
   theme: string;
+  /** How the windows are drawn: glass, windows or mac. */
+  style: string;
+  /** Dark, light, or system to follow the OS. */
+  mode: string;
   /** A power action set for later from the bar. */
   power: PowerSchedule | null;
+  /** Countdown timers started from the bar. */
+  timers: Countdown[];
   showStats: boolean;
   onboardingDone: boolean;
   onboardingEveryLaunch: boolean;

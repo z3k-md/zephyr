@@ -232,6 +232,36 @@ pub async fn save_theme(app: AppHandle, theme: String) -> Result<Persisted, Stri
     .await
 }
 
+/// Switches how the windows are drawn: Zephyr's glass, Windows' look or macOS's.
+#[tauri::command]
+pub async fn save_style(app: AppHandle, style: String) -> Result<Persisted, String> {
+    if !crate::state::STYLES.contains(&style.as_str()) {
+        return Err(format!("Unknown style {style}"));
+    }
+    let snapshot = save(app.clone(), |persisted| {
+        persisted.style = style;
+        Ok(())
+    })
+    .await?;
+    window::apply_appearance(&app);
+    Ok(snapshot)
+}
+
+/// Switches between dark, light and following the system.
+#[tauri::command]
+pub async fn save_mode(app: AppHandle, mode: String) -> Result<Persisted, String> {
+    if !crate::state::MODES.contains(&mode.as_str()) {
+        return Err(format!("Unknown mode {mode}"));
+    }
+    let snapshot = save(app.clone(), |persisted| {
+        persisted.mode = mode;
+        Ok(())
+    })
+    .await?;
+    window::apply_appearance(&app);
+    Ok(snapshot)
+}
+
 #[tauri::command]
 pub async fn save_open_behavior(app: AppHandle, return_to_mode: bool) -> Result<Persisted, String> {
     save(app, move |persisted| {
