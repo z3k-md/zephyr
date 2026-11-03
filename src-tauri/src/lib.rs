@@ -208,6 +208,7 @@ pub fn run() {
             commands::updates::update_install_now,
             commands::updates::update_later,
             commands::updates::rehearse_update,
+            commands::updates::save_update_channel,
             commands::clipboard::clip_list,
             commands::clipboard::clip_detail,
             commands::clipboard::clip_paste,
@@ -344,6 +345,7 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         snapshot.file_config(),
         commands::files::file_cache_path(app.handle()),
     );
+    updater::set_channel(&snapshot.update_channel);
     updater::spawn_background_checks(app.handle().clone());
     Ok(())
 }

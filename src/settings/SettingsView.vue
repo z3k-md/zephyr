@@ -5,6 +5,7 @@
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import {
     checkForUpdates,
+    saveUpdateChannel,
     rehearseUpdate,
     clipCanPaste,
     clipClear,
@@ -549,6 +550,10 @@
     { id: 'top', label: 'Top center' },
     { id: 'bottom-right', label: 'Bottom right' },
   ];
+  async function changeUpdateChannel(event: Event) {
+    await save(saveUpdateChannel((event.target as HTMLSelectElement).value));
+  }
+
   async function changeOverlayPlace(event: Event) {
     await save(saveVolumeOverlay((event.target as HTMLSelectElement).value));
   }
@@ -929,6 +934,17 @@
           <button type="button" @click="updates">Check for updates</button>
           <span v-if="updateMessage" class="hint-text">{{ updateMessage }}</span>
         </div>
+        <label class="field">
+          <span
+            >Update channel
+            <InfoTip
+              text="Nightly installs a build of everything on develop, cut at midnight Mountain Time on days it changed. Switching back to Stable keeps the nightly until the next stable release passes it."
+          /></span>
+          <select :value="snapshot.updateChannel" :disabled="busy" @change="changeUpdateChannel">
+            <option value="stable">Stable</option>
+            <option value="nightly">Nightly</option>
+          </select>
+        </label>
       </section>
 
       <section v-if="snapshot" v-show="!search && active === 'dev'" id="section-dev">

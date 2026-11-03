@@ -4,6 +4,11 @@
 //! Install now skips the wait, and Later puts it off, with a button in the bar to install it
 //! whenever suits. The installer isn't held in memory meanwhile: installing a put-off update
 //! downloads it again, and checks its signature again.
+//!
+//! The nightly channel checks the nightly manifest and the stable one, and takes whichever is
+//! newer: a nightly is versioned just above the stable it was built after, so the next stable
+//! release moves nightly users on too. Leaving nightly keeps the nightly until a stable
+//! release passes it.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -12,6 +17,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_updater::{Update, UpdaterExt};
+use url::Url;
 
 use crate::timer::Debounce;
 use crate::util::now_ms;
@@ -26,6 +32,15 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 /// How long the card counts down before installing on its own.
 const COUNTDOWN: Duration = Duration::from_secs(5);
 
+pub const CHANNELS: &[&str] = &["stable", "nightly"];
+/// Written by the publish job of release.yml.
+const STABLE_MANIFEST: &str =
+    "https://github.com/z3k-md/zephyr/releases/latest/download/latest.json";
+/// Written by nightly.yml to its fixed `nightly` release.
+const NIGHTLY_MANIFEST: &str =
+    "https://github.com/z3k-md/zephyr/releases/download/nightly/nightly.json";
+
+static NIGHTLY: AtomicBool = AtomicBool::new(false);
 static CHECKING: AtomicBool = AtomicBool::new(false);
 /// When the last check started.
 static LAST_CHECK: Mutex<Option<Instant>> = Mutex::new(None);
@@ -96,6 +111,31 @@ fn downloaded_slot() -> &'static Mutex<Option<Downloaded>> {
     DOWNLOADED.get_or_init(Default::default)
 }
 
+/// Which manifests checks read, from the saved setting. True when the channel changed.
+pub fn set_channel(channel: &str) -> bool {
+    let nightly = channel == "nightly";
+    NIGHTLY.swap(nightly, Ordering::SeqCst) != nightly
+}
+
+/// Settings switched channels: an update put off from the old channel is let go, and the new
+/// channel is checked now.
+pub fn switch_channel(app: &AppHandle, channel: &str) {
+    if !set_channel(channel) {
+        return;
+    }
+    if current().is_none() {
+        if let Ok(mut saved) = downloaded_slot().lock() {
+            *saved = None;
+        }
+        announce_waiting(app);
+    }
+    if cfg!(debug_assertions) {
+        return;
+    }
+    let app = app.clone();
+    std::thread::spawn(move || background_check(&app));
+}
+
 /// The check at launch, a few seconds in.
 pub fn spawn_background_checks(app: AppHandle) {
     if cfg!(debug_assertions) {
@@ -151,17 +191,53 @@ async fn check(app: &AppHandle, by_hand: bool) -> Result<String, String> {
     result
 }
 
-async fn download_latest(app: &AppHandle, by_hand: bool) -> Result<String, String> {
-    let updater = app
-        .updater_builder()
-        .timeout(REQUEST_TIMEOUT)
-        .build()
-        .map_err(|err| err.to_string())?;
-    let Some(update) = updater
+/// The update the channel offers, if any. On nightly either manifest failing alone still
+/// leaves the other's answer.
+async fn find_update(app: &AppHandle) -> Result<Option<Update>, String> {
+    let stable = check_manifest(app, STABLE_MANIFEST).await;
+    if !NIGHTLY.load(Ordering::SeqCst) {
+        return stable;
+    }
+    match (check_manifest(app, NIGHTLY_MANIFEST).await, stable) {
+        (Err(err), Err(_)) => Err(err),
+        (nightly, stable) => Ok(newer(nightly.ok().flatten(), stable.ok().flatten())),
+    }
+}
+
+async fn check_manifest(app: &AppHandle, manifest: &str) -> Result<Option<Update>, String> {
+    let url = Url::parse(manifest).map_err(|err| err.to_string())?;
+    app.updater_builder()
+        .endpoints(vec![url])
+        .and_then(|builder| builder.timeout(REQUEST_TIMEOUT).build())
+        .map_err(|err| err.to_string())?
         .check()
         .await
-        .map_err(|err| format!("Update check failed: {err}"))?
-    else {
+        .map_err(|err| format!("Update check failed: {err}"))
+}
+
+fn newer(a: Option<Update>, b: Option<Update>) -> Option<Update> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(if is_newer(&b.version, &a.version) {
+            b
+        } else {
+            a
+        }),
+        (a, b) => a.or(b),
+    }
+}
+
+fn is_newer(version: &str, than: &str) -> bool {
+    match (
+        semver::Version::parse(version),
+        semver::Version::parse(than),
+    ) {
+        (Ok(version), Ok(than)) => version > than,
+        _ => false,
+    }
+}
+
+async fn download_latest(app: &AppHandle, by_hand: bool) -> Result<String, String> {
+    let Some(update) = find_update(app).await? else {
         return Ok("You're on the latest version.".into());
     };
     let version = update.version.clone();
@@ -546,5 +622,15 @@ mod tests {
         saved.put_off();
         assert_eq!(saved.version, "2.11.0");
         assert!(saved.bytes.is_none());
+    }
+
+    #[test]
+    fn a_nightly_sits_between_the_stable_before_it_and_the_next() {
+        let nightly = "2.12.1-nightly.20261103.42";
+        assert!(is_newer(nightly, "2.12.0"));
+        assert!(is_newer("2.12.1", nightly));
+        assert!(is_newer("2.13.0", nightly));
+        assert!(is_newer("2.12.1-nightly.20261104.43", nightly));
+        assert!(!is_newer("not a version", nightly));
     }
 }

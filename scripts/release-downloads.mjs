@@ -10,7 +10,8 @@
 import { installerFor, updaterLabel, withDownloads } from './release-assets.mjs';
 
 const API = 'https://api.github.com';
-const { GITHUB_TOKEN, GITHUB_REPOSITORY, RELEASE_ID, DRY_RUN } = process.env;
+// VERSION: for nightlies, whose tags aren't versions.
+const { GITHUB_TOKEN, GITHUB_REPOSITORY, RELEASE_ID, VERSION, DRY_RUN } = process.env;
 
 for (const [name, value] of Object.entries({ GITHUB_REPOSITORY, RELEASE_ID })) {
   if (!value) throw new Error(`${name} is required`);
@@ -37,7 +38,7 @@ async function github(path, init = {}) {
 
 const repo = `/repos/${GITHUB_REPOSITORY}`;
 const release = await (await github(`${repo}/releases/${RELEASE_ID}`)).json();
-const version = release.tag_name.replace(/^v/, '');
+const version = VERSION || release.tag_name.replace(/^v/, '');
 const assets = await (await github(`${repo}/releases/${RELEASE_ID}/assets?per_page=100`)).json();
 
 const links = [];

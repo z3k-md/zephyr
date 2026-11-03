@@ -1,6 +1,24 @@
 use tauri::AppHandle;
 
+use super::save;
+use crate::state::Persisted;
 use crate::updater;
+
+/// Settings › About: `stable` or `nightly`. Switching checks the new channel right away.
+#[tauri::command]
+pub async fn save_update_channel(app: AppHandle, channel: String) -> Result<Persisted, String> {
+    if !updater::CHANNELS.contains(&channel.as_str()) {
+        return Err(format!("Unknown update channel {channel}"));
+    }
+    let saved = channel.clone();
+    let snapshot = save(app.clone(), move |persisted| {
+        persisted.update_channel = saved;
+        Ok(())
+    })
+    .await?;
+    updater::switch_channel(&app, &channel);
+    Ok(snapshot)
+}
 
 #[tauri::command]
 pub async fn check_for_updates(app: AppHandle) -> Result<String, String> {

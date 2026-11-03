@@ -44,7 +44,8 @@ export function installerFor(name, version) {
 
 /** The label for a file only the updater reads. */
 export function updaterLabel(name) {
-  if (name === 'latest.json') return 'Update manifest (used by Zephyr to update itself)';
+  if (name === 'latest.json' || name === 'nightly.json')
+    return 'Update manifest (used by Zephyr to update itself)';
   if (name.endsWith('.sig')) return 'Update signature (used by Zephyr to update itself)';
   if (name.endsWith('.app.tar.gz')) return 'Mac update package (used by Zephyr to update itself)';
   return null;

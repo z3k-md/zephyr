@@ -1,0 +1,271 @@
+name: Nightly
+# A build of develop at midnight Mountain Time, for the nightly update channel. Each nightly is
+# a pre-release of its own (tag nightly-<date>.<run>), so stable's releases/latest never sees it;
+# the fixed `nightly` release holds only nightly.json, which the app's nightly channel reads,
+# and its tag marks the commit the newest nightly was built from.
+#
+# Versions sit just above the last stable, 2.12.1-nightly.20261103.42 after v2.12.0, so the
+# next stable release (2.12.1 or higher) passes every nightly built before it.
+on:
+  # Cron is UTC: 06:00 is midnight in summer (MDT), 07:00 in winter (MST). The run whose
+  # Mountain hour isn't midnight stops at the first step.
+  schedule:
+    - cron: '0 6 * * *'
+    - cron: '0 7 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Build even if develop hasn't changed since the last nightly
+        type: boolean
+        default: false
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      # To find the last develop commit whose checks passed.
+      actions: read
+    outputs:
+      build: ${{ steps.plan.outputs.build }}
+      sha: ${{ steps.plan.outputs.sha }}
+      version: ${{ steps.plan.outputs.version }}
+      tag: ${{ steps.plan.outputs.tag }}
+      release_id: ${{ steps.draft.outputs.release_id }}
+    steps:
+      - name: Midnight in Mountain Time
+        id: clock
+        if: github.event_name == 'schedule'
+        run: |
+          hour=$(TZ=America/Denver date +%H)
+          echo "Mountain Time hour: $hour"
+          if [ "$hour" != 00 ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.clock.outputs.skip != 'true'
+        with:
+          ref: develop
+          fetch-depth: 0 # tags, and the log since the last nightly
+
+      # Only a commit whose checks passed on develop is built, as main only takes those. A
+      # commit already tagged as a stable release is skipped: the nightly channel offers the
+      # stable release itself.
+      - name: Plan
+        id: plan
+        if: steps.clock.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCE: ${{ inputs.force }}
+          RUN: ${{ github.run_number }}
+        run: |
+          sha=$(gh run list --workflow checks.yml --branch develop --status success --limit 1 \
+            --json headSha --jq '.[0].headSha // ""')
+          if [ -z "$sha" ] || ! git merge-base --is-ancestor "$sha" HEAD; then
+            echo "::error::No develop commit with passing checks."
+            exit 1
+          fi
+          last=$(git rev-parse -q --verify 'refs/tags/nightly^{commit}' || true)
+          if [ "$sha" = "$last" ] && [ "$FORCE" != true ]; then
+            echo "Nothing new: the last nightly was built from $sha." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if git tag --points-at "$sha" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "$sha is a stable release; nightly users get that." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          stable=$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*-*' "$sha")
+          IFS=. read -r major minor patch <<< "${stable#v}"
+          date=$(TZ=America/Denver date +%Y%m%d)
+          version="$major.$minor.$((patch + 1))-nightly.$date.$RUN"
+          tag="nightly-$date.$RUN"
+
+          since=${last:-$stable}
+          if ! git merge-base --is-ancestor "$since" "$sha" 2> /dev/null; then since=$stable; fi
+          {
+            echo "Nightly build of develop at ${sha:0:7}, for the nightly update channel."
+            echo
+            echo "## Since the last nightly"
+            echo
+            git log --no-merges --format='- %s (%h)' "$since..$sha"
+          } > "$RUNNER_TEMP/notes.md"
+
+          {
+            echo "build=true"
+            echo "sha=$sha"
+            echo "version=$version"
+            echo "tag=$tag"
+          } >> "$GITHUB_OUTPUT"
+          echo "Building $version from $sha." | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # A draft until every platform is uploaded; its tag is made at the commit on publish.
+      - name: Create draft release
+        id: draft
+        if: steps.plan.outputs.build == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.plan.outputs.sha }}
+          TAG: ${{ steps.plan.outputs.tag }}
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          id=$(gh api --method POST "repos/$GITHUB_REPOSITORY/releases" \
+            -f tag_name="$TAG" -f target_commitish="$SHA" -f name="Zephyr $VERSION" \
+            -f body="$(cat "$RUNNER_TEMP/notes.md")" -F draft=true -F prerelease=true \
+            -f make_latest=false --jq .id)
+          test -n "$id"
+          echo "release_id=$id" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
+    name: Build (${{ matrix.name }})
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows
+            platform: windows-latest
+            args: ''
+          - name: macos
+            platform: macos-latest
+            args: --target aarch64-apple-darwin
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+
+      - name: Set version
+        shell: bash
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          npm pkg set version="$VERSION"
+          node scripts/set-version.mjs "$VERSION"
+
+      - uses: ./.github/actions/setup
+
+      - uses: ./.github/actions/macos-signing
+        if: runner.os == 'macOS'
+        with:
+          certificate: ${{ secrets.APPLE_CERTIFICATE }}
+          certificate-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          identity: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+
+      - name: Build and upload
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+        with:
+          releaseId: ${{ needs.plan.outputs.release_id }}
+          args: ${{ matrix.args }}
+          uploadUpdaterJson: false
+          retryAttempts: 1
+
+  publish:
+    needs: [plan, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      RELEASE_ID: ${{ needs.plan.outputs.release_id }}
+      SHA: ${{ needs.plan.outputs.sha }}
+      TAG: ${{ needs.plan.outputs.tag }}
+      VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Label downloads
+        run: node scripts/release-downloads.mjs
+
+      # Published before nightly.json points at it, so the updater never gets a link that 404s.
+      - name: Publish nightly
+        run: |
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
+            -f tag_name="$TAG" -F draft=false -F prerelease=true -f make_latest=false > /dev/null
+
+      # The fixed release the app's nightly channel reads; its tag moves to the commit just
+      # built, which is how the next run tells whether develop changed.
+      - name: Point the nightly channel here
+        id: channel
+        run: |
+          url="https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG"
+          body="The nightly update channel's manifest. Newest nightly: [Zephyr $VERSION]($url)."
+          id=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --jq '.[] | select(.tag_name == "nightly") | .id')
+          if [ -z "$id" ]; then
+            id=$(gh api --method POST "repos/$GITHUB_REPOSITORY/releases" \
+              -f tag_name=nightly -f target_commitish="$SHA" -f name="Zephyr nightly channel" \
+              -f body="$body" -F prerelease=true -f make_latest=false --jq .id)
+          else
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/nightly" \
+              -f sha="$SHA" -F force=true > /dev/null
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$id" \
+              -f body="$body" -F prerelease=true -f make_latest=false > /dev/null
+          fi
+          echo "release_id=$id" >> "$GITHUB_OUTPUT"
+
+      - name: Upload nightly.json
+        run: node scripts/updater-manifest.mjs
+        env:
+          REQUIRED_PLATFORMS: windows-x86_64,darwin-aarch64
+          MANIFEST_NAME: nightly.json
+          MANIFEST_RELEASE_ID: ${{ steps.channel.outputs.release_id }}
+
+      # The newest week of nightlies stays; nightly.json only ever points at the newest.
+      - name: Prune old nightlies
+        run: |
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --jq '.[] | select(.prerelease and (.tag_name | startswith("nightly-"))) | [.created_at, .tag_name] | @tsv' \
+            | sort -r | tail -n +8 | cut -f2 \
+            | while read -r old; do
+                echo "deleting $old"
+                gh release delete "$old" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes
+              done
+
+  # A build or publish that failed or was cancelled leaves its draft behind; it goes. One that
+  # got published stays for the prune, as nightly.json may already point at it.
+  discard:
+    needs: [plan, build, publish]
+    if: >-
+      always() && needs.plan.outputs.release_id != '' &&
+      (needs.build.result != 'success' || needs.publish.result != 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_ID: ${{ needs.plan.outputs.release_id }}
+    steps:
+      - name: Delete the draft
+        run: |
+          draft=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" --jq .draft || echo gone)
+          if [ "$draft" = true ]; then
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID"
+            echo "Deleted the draft nightly." | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Nothing to delete (draft: $draft)."
+          fi

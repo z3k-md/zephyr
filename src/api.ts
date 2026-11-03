@@ -196,6 +196,11 @@ export function checkForUpdates(): Promise<string> {
   return invoke<string>('check_for_updates');
 }
 
+/** `stable` or `nightly`. */
+export function saveUpdateChannel(channel: string): Promise<Snapshot> {
+  return invoke<Snapshot>('save_update_channel', { channel });
+}
+
 export function clipList(query: string, filter: string): Promise<ClipList> {
   return invoke<ClipList>('clip_list', { query, filter });
 }

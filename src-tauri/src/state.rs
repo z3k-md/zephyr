@@ -107,6 +107,8 @@ pub struct Persisted {
     pub volume_keys: bool,
     /// Where the volume overlay shows: `bottom` or `top`, centered, or `bottom-right`.
     pub volume_overlay: String,
+    /// Where updates come from: `stable` releases from main, or `nightly` builds of develop.
+    pub update_channel: String,
 }
 
 /// The palettes Settings > Appearance offers; the first is the default.
@@ -255,6 +257,7 @@ impl Persisted {
             cpu_temp: false,
             volume_keys: false,
             volume_overlay: "bottom".to_string(),
+            update_channel: "stable".to_string(),
         }
     }
 

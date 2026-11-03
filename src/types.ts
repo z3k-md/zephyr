@@ -54,6 +54,8 @@ export interface Snapshot {
   volumeKeys: boolean;
   /** Where the volume overlay shows: `bottom` or `top`, centered, or `bottom-right`. */
   volumeOverlay: string;
+  /** Where updates come from: `stable` releases, or `nightly` builds of develop. */
+  updateChannel: string;
 }
 
 export type WeatherUnit = 'c' | 'f';

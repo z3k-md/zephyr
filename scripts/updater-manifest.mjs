@@ -4,7 +4,9 @@
 // can drop a platform when two jobs finish together. This runs once, after every build.
 //
 // Env: GITHUB_TOKEN, GITHUB_REPOSITORY, RELEASE_ID, REQUIRED_PLATFORMS (comma separated),
-// DRY_RUN=1 to print the manifest without uploading.
+// DRY_RUN=1 to print the manifest without uploading. Nightlies also set VERSION (their tags
+// aren't versions), MANIFEST_NAME (nightly.json) and MANIFEST_RELEASE_ID, the fixed release
+// the manifest goes on.
 import { platformsFor } from './release-assets.mjs';
 
 const API = 'https://api.github.com';
@@ -13,6 +15,9 @@ const {
   GITHUB_REPOSITORY,
   RELEASE_ID,
   REQUIRED_PLATFORMS = '',
+  VERSION,
+  MANIFEST_NAME = 'latest.json',
+  MANIFEST_RELEASE_ID = RELEASE_ID,
   DRY_RUN,
 } = process.env;
 
@@ -76,7 +81,7 @@ if (missing.length > 0) {
 }
 
 const manifest = {
-  version: release.tag_name.replace(/^v/, ''),
+  version: VERSION || release.tag_name.replace(/^v/, ''),
   notes: release.body ?? '',
   pub_date: new Date().toISOString(),
   platforms,
@@ -86,14 +91,22 @@ console.log(body);
 
 if (DRY_RUN) process.exit(0);
 
-const existing = byName.get('latest.json');
+const target =
+  MANIFEST_RELEASE_ID === RELEASE_ID
+    ? release
+    : await (await github(`${repo}/releases/${MANIFEST_RELEASE_ID}`)).json();
+const targetAssets =
+  target === release
+    ? assets
+    : await (await github(`${repo}/releases/${MANIFEST_RELEASE_ID}/assets?per_page=100`)).json();
+const existing = targetAssets.find((asset) => asset.name === MANIFEST_NAME);
 if (existing) {
   await github(`${repo}/releases/assets/${existing.id}`, { method: 'DELETE' });
 }
-const uploadUrl = release.upload_url.replace(/\{.*\}$/, '');
-await github(`${uploadUrl}?name=latest.json`, {
+const uploadUrl = target.upload_url.replace(/\{.*\}$/, '');
+await github(`${uploadUrl}?name=${encodeURIComponent(MANIFEST_NAME)}`, {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body,
 });
-console.log(`uploaded latest.json to ${release.tag_name}`);
+console.log(`uploaded ${MANIFEST_NAME} to ${target.tag_name}`);
