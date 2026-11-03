@@ -793,3 +793,18 @@ export function saveVolumeOverlay(position: string): Promise<Snapshot> {
 export function volumeKey(key: 'up' | 'down' | 'mute', alt: boolean): Promise<void> {
   return invoke('volume_key', { key, alt });
 }
+
+/** Hide the bar and open the screen color picker. */
+export function pickColor(): Promise<void> {
+  return invoke('pick_color');
+}
+
+/** The loupe's pixel: copy its hex and show the bar with that color typed in. */
+export function pickerChoose(hex: string): Promise<void> {
+  return invoke('picker_choose', { hex });
+}
+
+/** Close the color picker and drop the screenshot. */
+export function pickerCancel(): Promise<void> {
+  return invoke('picker_cancel');
+}

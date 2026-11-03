@@ -25,6 +25,11 @@
       why: 'Find files in these folders from the bar. Nothing leaves your Mac.',
       settings: false,
     },
+    screen: {
+      name: 'Screen Recording',
+      why: 'Pick a color from the screen. Only the pixel you choose is copied.',
+      settings: true,
+    },
   };
 
   const permissions = ref<Permission[]>([]);

@@ -124,7 +124,9 @@ impl fend_core::Interrupt for Deadline {
 }
 
 fn calculate(input: &str) -> Option<Answer> {
-    if !looks_like_math(input) {
+    // A CSS color is the color card's. fend would otherwise turn `hsl(0 100% 50%)` into
+    // a junk number.
+    if looks_like_css_color(input) || !looks_like_math(input) {
         return None;
     }
     let context = fend_core::Context::new();
@@ -203,6 +205,20 @@ fn looks_like_math(input: &str) -> bool {
         .iter()
         .any(|name| lower.contains(name));
     operator || function
+}
+
+/// `#rgb` and the CSS color functions. Named colors are only recognized with the word
+/// "color" around them, which has no digits, so they never reach here.
+fn looks_like_css_color(input: &str) -> bool {
+    let lower = input.trim().to_ascii_lowercase();
+    if let Some(hex) = lower.strip_prefix('#')
+        && matches!(hex.len(), 3 | 4 | 6 | 8)
+        && hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return true;
+    }
+    const FUNCS: &[&str] = &["rgb(", "rgba(", "hsl(", "hsla(", "hwb(", "oklch(", "oklab("];
+    FUNCS.iter().any(|func| lower.starts_with(func)) && lower.ends_with(')')
 }
 
 fn is_conversion(lower: &str) -> bool {
@@ -372,6 +388,21 @@ mod tests {
     fn converts_units() {
         assert_eq!(value("5 km to miles").as_deref(), Some("3.1069 miles"));
         assert_eq!(value("1 / 3").as_deref(), Some("0.3333"));
+    }
+
+    #[test]
+    fn leaves_colors_for_the_color_card() {
+        for color in [
+            "#fff",
+            "#ff00aa80",
+            "hsl(120 100% 50%)",
+            "rgb(255 0 0 / 0.5)",
+            "hwb(200 10% 20%)",
+            "oklch(0.7 0.1 30)",
+            "oklab(0.7 0.1 -0.1)",
+        ] {
+            assert_eq!(value(color), None, "{color}");
+        }
     }
 
     #[test]

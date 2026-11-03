@@ -1026,6 +1026,12 @@ pub fn can_paste() -> bool {
     platform().can_paste(false)
 }
 
+/// Puts text on the clipboard the way another app would, so history records the copy.
+/// Unlike [`copy`], this does not mark the write as ours.
+pub fn write_text(text: &str) -> Result<(), String> {
+    platform().write(&Content::Text(text.to_string()), false)
+}
+
 /// Puts a PNG on the clipboard as an image, as a debug snapshot does. History records it like
 /// any other copy.
 pub fn copy_png(png: Vec<u8>) -> Result<(), String> {

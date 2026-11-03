@@ -337,7 +337,7 @@ interface SyncDevice {
   createdAt: string | null;
 }
 
-export type PermissionId = 'accessibility' | 'automation' | 'files';
+export type PermissionId = 'accessibility' | 'automation' | 'files' | 'screen';
 export interface Permission {
   id: PermissionId;
   status: 'granted' | 'denied' | 'notAsked' | 'unknown';

@@ -83,6 +83,9 @@ describe('buildRows', () => {
     ['typing', 'Typing test', 0],
     ['typ', 'Typing test', null],
     ['clipboard', 'Clipboard history', 0],
+    ['pick color', 'Pick a color from the screen', 0],
+    ['color picker', 'Pick a color from the screen', 0],
+    ['eyedropper', 'Pick a color from the screen', 0],
   ])('offers commands by name: %s', (typed, label, preselect) => {
     const { rows, preselect: chosen } = buildRows(response({ text: typed }), ctx(typed));
     expect(labels(rows)).toContain(label);

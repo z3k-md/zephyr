@@ -24,6 +24,7 @@ mod note_windows;
 mod notes;
 mod nowplaying;
 mod permissions;
+mod picker;
 mod power;
 mod query;
 mod resources;
@@ -71,7 +72,8 @@ pub fn init_logging() {
 }
 
 pub fn run() {
-    let builder = tauri::Builder::default();
+    let builder = tauri::Builder::default()
+        .register_uri_scheme_protocol("picker", |_ctx, request| picker::serve(request));
     // We use window keyboard/mouse events, not raw device events. On Windows,
     // leave physical input on the normal hook path used by PowerToys and our OSD.
     #[cfg(windows)]
@@ -279,6 +281,9 @@ pub fn run() {
             commands::net::speed_test,
             commands::net::speed_test_cancel,
             commands::net::network_addresses,
+            commands::picker::pick_color,
+            commands::picker::picker_choose,
+            commands::picker::picker_cancel,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Zephyr")

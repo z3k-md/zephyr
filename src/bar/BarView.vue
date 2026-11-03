@@ -48,6 +48,7 @@
     openUrl,
     resourcesQuit,
     volumeKey,
+    pickColor,
   } from '../api';
   import ResourcesView from './ResourcesView.vue';
   import NetworkView from './NetworkView.vue';
@@ -61,6 +62,7 @@
   import FooterWeather from './FooterWeather.vue';
   import TickerCard from './TickerCard.vue';
   import WeatherCard from './WeatherCard.vue';
+  import ColorCard from './ColorCard.vue';
   import ActionMenu from '../components/ActionMenu.vue';
   import { useActionMenu, type MenuAction } from '../components/actionMenu';
   import { vTip } from '../tip';
@@ -84,6 +86,7 @@
   import { pastAnswers, rememberAnswer } from './answerHistory';
   import { useTickerCard } from './useTickerCard';
   import { useWeatherCard } from './useWeatherCard';
+  import { useColorCard } from './useColorCard';
   import {
     isSnapshot,
     type Binding,
@@ -913,6 +916,8 @@
     } else if (id === 'ip') {
       query.value = 'ip';
       void focusInput();
+    } else if (id === 'pick-color') {
+      void pickColor().catch((error) => (notice.value = errorMessage(error)));
     } else if (id.startsWith('group:')) {
       void launchGroup(id.slice(6)).catch((error) => (notice.value = errorMessage(error)));
     } else if (id.startsWith('scope:')) {
@@ -1185,12 +1190,13 @@
       return;
     }
 
-    // Tab would only move focus out of the search box. On the ticker card it steps through the
-    // chart's spans, and on the weather card through the hours.
+    // Tab would only move focus out of the search box. On the color card it steps the shades,
+    // on the ticker card the chart's spans, and on the weather card the hours.
     if (event.key === 'Tab') {
       event.preventDefault();
       if (!modifier && !event.altKey) {
-        if (cardQuote.value) stepRange(event.shiftKey ? -1 : 1);
+        if (colorCard.value) stepShade(event.shiftKey ? -1 : 1);
+        else if (cardQuote.value) stepRange(event.shiftKey ? -1 : 1);
         else if (cardForecast.value) stepHour(event.shiftKey ? -1 : 1);
       }
       return;
@@ -1209,7 +1215,18 @@
 
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();
+      if (colorCard.value && !modifier && !event.altKey && !event.shiftKey) {
+        stepFormat(event.key === 'ArrowDown' ? 1 : -1);
+        return;
+      }
       moveSelection(event.key === 'ArrowDown' ? 1 : -1);
+      return;
+    }
+
+    // Enter on the color card copies the chosen format.
+    if (colorCard.value && !modifier && !event.altKey && !event.shiftKey && event.key === 'Enter') {
+      event.preventDefault();
+      if (!event.repeat) void copyColor();
       return;
     }
 
@@ -1278,6 +1295,21 @@
       void accept();
     }
   }
+
+  // The color card: a hex, a CSS color, or "color red".
+  const {
+    card: colorCard,
+    stepFormat,
+    stepShade,
+    pickFormat,
+    pickShade,
+    copyFormat: copyColor,
+  } = useColorCard({
+    query,
+    shown: () => !scope.value && view.value === 'root',
+    menuOpen: actionsOpen,
+    notice,
+  });
 
   // The weather card: "weather", "forecast", or either with a city ("weather in tokyo").
   const { forecast, cardForecast, cardHour, stepHour, pickHour, openForecast, showWeather } =
@@ -1773,6 +1805,7 @@
       </p>
 
       <div class="bar-body">
+        <ColorCard v-if="colorCard" :color="colorCard" @format="pickFormat" @shade="pickShade" />
         <WeatherCard
           v-if="cardForecast"
           :forecast="cardForecast"

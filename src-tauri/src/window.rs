@@ -650,7 +650,7 @@ fn glass_for(radius: Option<f64>, light: bool) -> tauri::utils::config::WindowEf
 }
 
 /// Windows with no glass to dress: the snap grid and the volume overlay.
-const PLAIN_WINDOWS: &[&str] = &["grid", "osd"];
+const PLAIN_WINDOWS: &[&str] = &["grid", "osd", "picker"];
 
 /// The saved style and mode; the defaults until the state is loaded.
 fn appearance(app: &AppHandle) -> (String, String) {
