@@ -36,6 +36,21 @@ describe('rankEmoji', () => {
     // An exact name still beats a recent prefix.
     expect(rankEmoji(items, 'fire', ['🚒']).map((entry) => entry.char)).toEqual(['🔥', '🚒']);
   });
+
+  it('matches every word of a query, and keeps a whole phrase ahead of that', () => {
+    const smiling = item('😊', 'smiling face', ['smile'], 'emoji');
+    const runner = item('🏃‍♀️', 'woman running', ['marathon'], 'emoji', 'People & Body');
+    const exact = item('🏃', 'running woman', [], 'emoji', 'People & Body');
+    expect(matchTier(smiling, 'smile face')).toBe(4);
+    expect(matchTier(runner, 'running woman')).toBe(4);
+    expect(matchTier(grin, 'smile zebra')).toBeNull();
+    expect(rankEmoji([runner, exact], 'running woman', []).map((entry) => entry.name)).toEqual([
+      'running woman',
+      'woman running',
+    ]);
+    expect(rankEmoji([exact, runner], 'woman run', [])[0]?.name).toBe('woman running');
+    expect(rankEmoji([smiling, grin], 'smile face', []).map((entry) => entry.char)).toEqual(['😊']);
+  });
 });
 
 describe('emojiSections', () => {
@@ -53,10 +68,13 @@ describe('emojiSections', () => {
     expect(later).not.toContain('→');
   });
 
-  it('searches into Recent, Emoji, and Symbols', () => {
-    const sections = emojiSections(items, 'arrow', ['→']);
-    expect(sections.map((section) => section.title)).toEqual(['Recent', 'Symbols']);
-    expect(sections[0].items.map((entry) => entry.char)).toEqual(['→']);
-    expect(sections[1].items.map((entry) => entry.char)).toEqual(['←']);
+  it('keeps tier order while searching, and lets recency break ties only', () => {
+    const found = emojiSections(items, 'fire', ['🚒']);
+    expect(found.map((section) => section.title)).toEqual(['Emoji']);
+    expect(found[0].items.map((entry) => entry.char)).toEqual(['🔥', '🚒']);
+
+    const arrows = emojiSections(items, 'arrow', ['→']);
+    expect(arrows.map((section) => section.kind)).toEqual(['symbol']);
+    expect(arrows[0].items.map((entry) => entry.char)).toEqual(['→', '←']);
   });
 });

@@ -1,8 +1,13 @@
 // Downloads Unicode's emoji list and the English CLDR names, and writes the compact
 // catalog the bar searches. Fully-qualified emoji only, through Unicode 15.1, which current
 // Windows 11 Segoe UI Emoji and macOS both draw. Skin-tone variants are not their own rows;
-// the base is flagged instead. Run with `node scripts/emoji.mjs` when the catalog should
-// move forward.
+// each base records the code-point indexes a tone is inserted after, taken from Unicode's
+// first single-tone form (the same tone on every person, so people holding hands is
+// 🧑🏻‍🤝‍🧑🏻 and not a mixed pair). Variation selectors are ignored while matching a toned
+// variant to its base, because a tone drops U+FE0F on the part it colors (270C 1F3FB
+// belongs with 270C FE0F) and leaves it on every other part. The subgroup is recorded so
+// country flags can be hidden where the font can't draw them. Run with `node scripts/emoji.mjs`
+// when the catalog should move forward.
 
 import { writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -12,6 +17,8 @@ const VERSION = [15, 1];
 const EMOJI_TEST = 'https://unicode.org/Public/emoji/15.1/emoji-test.txt';
 const CLDR = 'https://raw.githubusercontent.com/unicode-org/cldr/release-44/common';
 const SKIN = new Set([0x1f3fb, 0x1f3fc, 0x1f3fd, 0x1f3fe, 0x1f3ff]);
+const VS = 0xfe0f;
+const HANDSHAKE = 0x1f91d;
 const OUT = join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'bar', 'emoji', 'data.json');
 
 const line = /^([0-9A-Fa-f][0-9A-Fa-f ]*?)\s+;\s+fully-qualified\s+#\s+\S+\s+E(\d+)\.(\d+)\s+(.+)$/;
@@ -61,12 +68,56 @@ function codePoints(hexes) {
     .map((hex) => Number.parseInt(hex, 16));
 }
 
+function pointsOf(text) {
+  const points = [];
+  for (const char of text) {
+    const point = char.codePointAt(0);
+    if (point !== undefined) points.push(point);
+  }
+  return points;
+}
+
 function keyOf(points) {
   return points.map((point) => point.toString(16)).join(' ');
 }
 
+/** Skin modifiers and variation selectors removed, so a toned form finds its base. */
+function bareKey(points) {
+  return keyOf(points.filter((point) => point !== VS && !SKIN.has(point)));
+}
+
 function newer([major, minor], [capMajor, capMinor]) {
   return major > capMajor || (major === capMajor && minor > capMinor);
+}
+
+function singleTone(points) {
+  const mods = points.filter((point) => SKIN.has(point));
+  return mods.length > 0 && mods.every((mod) => mod === mods[0]);
+}
+
+/**
+ * Indexes in `base` that take a modifier. A variation selector is dropped only
+ * when it sits on a toned part; one on any other part stays in the base.
+ * Null when the two sequences aren't the same emoji.
+ */
+function tonePositions(base, toned) {
+  const positions = [];
+  let i = 0;
+  let j = 0;
+  while (i < base.length && j < toned.length) {
+    if (base[i] !== toned[j]) return null;
+    if (j + 1 < toned.length && SKIN.has(toned[j + 1])) {
+      positions.push(i);
+      j += 2;
+      i += 1;
+      if (i < base.length && base[i] === VS && (j >= toned.length || toned[j] !== VS)) i += 1;
+    } else {
+      i += 1;
+      j += 1;
+    }
+  }
+  if (i !== base.length || j !== toned.length || positions.length === 0) return null;
+  return positions;
 }
 
 const [test, annotationsXml, derivedXml] = await Promise.all([
@@ -84,17 +135,23 @@ const notes = {
 
 const groups = [];
 const groupIndex = new Map();
+const subgroups = [];
+const subgroupIndex = new Map();
 let group = '';
-/** Hex sequences of bases that have a fully-qualified skin-tone variant. */
-const toned = new Set();
-/** Code points a skin tone is inserted after. */
-const bases = new Set();
+let subgroup = '';
+/** First single-tone sequence for a base, keyed with variation selectors removed. */
+const toned = new Map();
 const emoji = [];
 
 for (const raw of test.split(/\r?\n/)) {
   const heading = /^# group: (.+)$/.exec(raw);
   if (heading) {
     group = heading[1].trim();
+    continue;
+  }
+  const sub = /^# subgroup: (.+)$/.exec(raw);
+  if (sub) {
+    subgroup = sub[1].trim();
     continue;
   }
   const parsed = line.exec(raw);
@@ -104,20 +161,19 @@ for (const raw of test.split(/\r?\n/)) {
   if (newer(version, VERSION)) continue;
   const points = codePoints(parsed[1]);
   if (points.some((point) => SKIN.has(point))) {
-    const base = points.filter((point) => !SKIN.has(point));
-    toned.add(keyOf(base));
-    for (let i = 0; i < points.length; i++) {
-      if (!SKIN.has(points[i]) || i === 0) continue;
-      let previous = i - 1;
-      while (previous > 0 && points[previous] === 0xfe0f) previous--;
-      bases.add(points[previous]);
-    }
+    if (!singleTone(points)) continue;
+    const key = bareKey(points);
+    if (!toned.has(key)) toned.set(key, points);
     continue;
   }
 
   if (!groupIndex.has(group)) {
     groupIndex.set(group, groups.length);
     groups.push(group);
+  }
+  if (!subgroupIndex.has(subgroup)) {
+    subgroupIndex.set(subgroup, subgroups.length);
+    subgroups.push(subgroup);
   }
   const chars = String.fromCodePoint(...points);
   const name = (notes.names.get(chars) ?? parsed[4]).trim().toLowerCase();
@@ -134,31 +190,71 @@ for (const raw of test.split(/\r?\n/)) {
     c: chars,
     n: name,
     g: groupIndex.get(group),
+    u: subgroupIndex.get(subgroup),
     s: 0,
     k: keywords,
   });
 }
 
+const bareSeen = new Map();
 for (const entry of emoji) {
-  const points = [...entry.c].map((char) => char.codePointAt(0));
-  if (toned.has(keyOf(points))) entry.s = 1;
+  const points = pointsOf(entry.c);
+  const key = bareKey(points);
+  const other = bareSeen.get(key);
+  if (other) throw new Error(`variation selectors don't tell ${other} from ${entry.n}`);
+  bareSeen.set(key, entry.n);
+  const sample = toned.get(key);
+  if (!sample) continue;
+  const positions = tonePositions(points, sample);
+  if (!positions) throw new Error(`couldn't read a skin tone for ${entry.n} (${keyOf(points)})`);
+  entry.s = 1;
+  entry.p = positions;
 }
 
 if (emoji.length < 1000) {
   throw new Error(`only ${emoji.length} emoji parsed; the catalog looks wrong`);
 }
+for (const name of ['country-flag', 'subdivision-flag', 'flag']) {
+  if (!subgroups.includes(name)) throw new Error(`missing the ${name} subgroup`);
+}
+for (const name of ['victory hand', 'writing hand', 'index pointing up']) {
+  const entry = emoji.find((item) => item.n === name);
+  if (!entry?.p?.length) throw new Error(`${name} should take a skin tone`);
+}
+const holding = emoji.find((item) => item.n === 'people holding hands');
+const holdingPoints = holding ? pointsOf(holding.c) : [];
+if (
+  !holding?.p ||
+  holding.p.length < 2 ||
+  holding.p.some((index) => holdingPoints[index] === HANDSHAKE)
+) {
+  throw new Error('people holding hands should tone both people and not the handshake');
+}
+
+const rows = emoji.map((entry) => {
+  const row = {
+    c: entry.c,
+    n: entry.n,
+    g: entry.g,
+    u: entry.u,
+    s: entry.s,
+  };
+  if (entry.p) row.p = entry.p;
+  row.k = entry.k;
+  return row;
+});
 
 const body = {
   version: VERSION.join('.'),
   groups,
-  bases: [...bases].sort((a, b) => a - b),
-  emoji,
+  subgroups,
+  emoji: rows,
 };
 const json =
   '{\n' +
   `  "version": ${JSON.stringify(body.version)},\n` +
   `  "groups": ${JSON.stringify(body.groups)},\n` +
-  `  "bases": ${JSON.stringify(body.bases)},\n` +
+  `  "subgroups": ${JSON.stringify(body.subgroups)},\n` +
   '  "emoji": [\n' +
   body.emoji.map((entry) => `    ${JSON.stringify(entry)}`).join(',\n') +
   '\n  ]\n}\n';

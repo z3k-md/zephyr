@@ -32,15 +32,17 @@
   const recent = ref<string[]>([]);
   const selected = ref(0);
   const scrollEl = ref<HTMLElement | null>(null);
-  // State can arrive after the grid opens. A Tab or a paste before that is kept and written
-  // once the saved recents are known, so an early pick doesn't replace them with nothing.
-  let touched = false;
+  // Saved skin and recents can arrive after the grid opens. A tone change and a pick are
+  // tracked apart, so a paste before the save loads doesn't throw the tone away, and a
+  // Tab doesn't throw the saved recents away.
+  let skinTouched = false;
+  let recentsTouched = false;
   let synced = false;
 
   watch(
     () => props.skin,
     (value) => {
-      if (!touched) skinTone.value = clampSkin(value);
+      if (!skinTouched) skinTone.value = clampSkin(value);
     }
   );
   watch(
@@ -49,26 +51,74 @@
       if (!value) return;
       if (!synced) {
         synced = true;
-        const picked = recent.value;
-        recent.value = [...picked, ...value.filter((char) => !picked.includes(char))].slice(
-          0,
-          RECENT_LIMIT
-        );
-        if (touched) void persist();
+        if (!skinTouched) skinTone.value = clampSkin(props.skin);
+        if (recentsTouched) {
+          const picked = recent.value;
+          recent.value = [...picked, ...value.filter((char) => !picked.includes(char))].slice(
+            0,
+            RECENT_LIMIT
+          );
+        } else {
+          recent.value = value.slice(0, RECENT_LIMIT);
+        }
+        if (skinTouched || recentsTouched) void persist();
         return;
       }
-      if (!touched) recent.value = value.slice(0, RECENT_LIMIT);
+      if (!recentsTouched) recent.value = value.slice(0, RECENT_LIMIT);
     },
     { immediate: true }
   );
 
+  interface GridCell {
+    item: EmojiItem;
+    index: number;
+    glyph: string;
+  }
+
+  interface GridBlock {
+    key: string;
+    title: string;
+    cells: GridCell[];
+  }
+
   const sections = computed(() =>
     catalog.value ? emojiSections(catalog.value.items, props.query, recent.value) : []
   );
-  const flat = computed(() => sections.value.flatMap((section) => section.items));
+
+  function glyphOf(item: EmojiItem, tone: number): string {
+    if (!item.skin || tone === 0) return item.char;
+    return withSkin(item.char, tone, item.tones ?? []);
+  }
+
+  // Glyphs and indexes stay put until the catalog, the skin tone, or the visible rows
+  // change. A button's memo is its glyph, its index, and whether it is the selection,
+  // so an arrow key redraws two cells instead of the whole grid.
+  const glyphs = computed(() => {
+    const loaded = catalog.value;
+    const tone = skinTone.value;
+    const map = new Map<string, string>();
+    if (!loaded) return map;
+    for (const item of loaded.items) map.set(item.char, glyphOf(item, tone));
+    return map;
+  });
+  const blocks = computed(() => {
+    const map = glyphs.value;
+    let index = 0;
+    const result: GridBlock[] = [];
+    for (const section of sections.value) {
+      const row: GridCell[] = [];
+      for (const item of section.items) {
+        row.push({ item, index, glyph: map.get(item.char) ?? item.char });
+        index += 1;
+      }
+      result.push({ key: section.kind + section.title, title: section.title, cells: row });
+    }
+    return result;
+  });
+  const flat = computed(() => blocks.value.flatMap((block) => block.cells));
   const cells = computed(() =>
     place(
-      sections.value.map((section) => section.items.length),
+      blocks.value.map((block) => block.cells.length),
       EMOJI_COLUMNS
     )
   );
@@ -93,19 +143,7 @@
   });
   watch(selected, () => void nextTick(() => reveal(selected.value)));
 
-  function offset(sectionIndex: number): number {
-    let total = 0;
-    for (let i = 0; i < sectionIndex; i++) total += sections.value[i]?.items.length ?? 0;
-    return total;
-  }
-
-  function shown(item: EmojiItem): string {
-    if (!item.skin || skinTone.value === 0 || !catalog.value) return item.char;
-    return withSkin(item.char, skinTone.value, catalog.value.bases);
-  }
-
-  function entityOf(item: EmojiItem): string {
-    const glyph = shown(item);
+  function entityOf(item: EmojiItem, glyph: string): string {
     if (item.entity && glyph === item.char) return item.entity;
     return numericEntity(glyph);
   }
@@ -140,7 +178,8 @@
     try {
       do {
         again = false;
-        await saveEmojiPrefs(skinTone.value, recent.value.slice(0, RECENT_LIMIT));
+        const skin = skinTouched ? skinTone.value : clampSkin(props.skin);
+        await saveEmojiPrefs(skin, recent.value.slice(0, RECENT_LIMIT));
       } while (again);
     } catch (error) {
       emit('notice', errorMessage(error));
@@ -150,23 +189,35 @@
   }
 
   function remember(char: string) {
-    touched = true;
+    recentsTouched = true;
     recent.value = [char, ...recent.value.filter((item) => item !== char)].slice(0, RECENT_LIMIT);
     void persist();
   }
 
   function cycleSkin(step: number) {
-    touched = true;
+    skinTouched = true;
     skinTone.value = (skinTone.value + step + 6) % 6;
     void persist();
   }
 
+  function pick(event: MouseEvent) {
+    const button = event.currentTarget;
+    if (!(button instanceof HTMLElement)) return;
+    const index = Number(button.dataset.index);
+    if (!Number.isInteger(index)) return;
+    selected.value = index;
+  }
+
+  function commitPick() {
+    void commit(false);
+  }
+
   async function commit(copyOnly: boolean) {
-    const item = current.value;
-    if (!item) return;
+    const cell = current.value;
+    if (!cell) return;
     try {
-      const outcome = await pasteText(shown(item), copyOnly);
-      remember(item.char);
+      const outcome = await pasteText(cell.glyph, copyOnly);
+      remember(cell.item.char);
       if (outcome === 'needsPermission') {
         emit(
           'notice',
@@ -214,32 +265,33 @@
       <p v-else-if="!catalog" class="empty">Loading emoji…</p>
       <p v-else-if="flat.length === 0" class="empty">Nothing matches.</p>
       <div v-else class="emoji-grid" :style="gridStyle" role="grid" aria-label="Emoji and symbols">
-        <template v-for="(section, sectionIndex) in sections" :key="section.kind + section.title">
-          <h3 class="emoji-heading">{{ section.title }}</h3>
+        <template v-for="block in blocks" :key="block.key">
+          <h3 class="emoji-heading">{{ block.title }}</h3>
           <button
-            v-for="(item, itemIndex) in section.items"
-            :key="item.char"
+            v-for="cell in block.cells"
+            :key="cell.item.char"
+            v-memo="[cell.glyph, cell.index, cell.index === selected]"
             type="button"
             class="emoji-cell"
-            :class="{ selected: offset(sectionIndex) + itemIndex === selected }"
-            :data-index="offset(sectionIndex) + itemIndex"
+            :class="{ selected: cell.index === selected }"
+            :data-index="cell.index"
             role="gridcell"
-            :aria-selected="offset(sectionIndex) + itemIndex === selected"
-            :aria-label="item.name"
+            :aria-selected="cell.index === selected"
+            :aria-label="cell.item.name"
             tabindex="-1"
-            @mousedown.prevent="selected = offset(sectionIndex) + itemIndex"
-            @dblclick="commit(false)"
+            @mousedown.prevent="pick"
+            @dblclick="commitPick"
           >
-            {{ shown(item) }}
+            {{ cell.glyph }}
           </button>
         </template>
       </div>
     </div>
     <footer class="footer emoji-foot">
       <span v-if="current" class="emoji-meta">
-        <b>{{ current.name }}</b>
-        <span>{{ codePointLabel(shown(current)) }}</span>
-        <span class="emoji-entity">{{ entityOf(current) }}</span>
+        <b>{{ current.item.name }}</b>
+        <span>{{ codePointLabel(current.glyph) }}</span>
+        <span class="emoji-entity">{{ entityOf(current.item, current.glyph) }}</span>
       </span>
       <span v-else />
       <KeyHints :hints="HINTS" />

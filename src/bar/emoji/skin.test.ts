@@ -1,25 +1,31 @@
 import { describe, expect, it } from 'vitest';
 import { clampSkin, codePointLabel, numericEntity, withSkin } from './skin';
 
-const thumb = 0x1f44d;
-const man = 0x1f468;
-const woman = 0x1f469;
-
 describe('withSkin', () => {
-  it('inserts a Fitzpatrick modifier after each base and drops the variation selector', () => {
-    const bases = new Set([thumb, man, woman]);
-    expect(withSkin('\u{1F44D}', 0, bases)).toBe('\u{1F44D}');
-    expect(withSkin('\u{1F44D}', 1, bases)).toBe('\u{1F44D}\u{1F3FB}');
-    expect(withSkin('\u263A\uFE0F', 2, new Set([0x263a]))).toBe('\u263A\u{1F3FC}');
-    expect(withSkin('\u{1F468}\u200D\u{1F469}', 1, bases)).toBe(
-      '\u{1F468}\u{1F3FB}\u200D\u{1F469}\u{1F3FB}'
+  it('tones a simple emoji after its only base', () => {
+    expect(withSkin('\u{1F44D}', 0, [0])).toBe('\u{1F44D}');
+    expect(withSkin('\u{1F44D}', 1, [0])).toBe('\u{1F44D}\u{1F3FB}');
+    expect(withSkin('\u{1F44D}', 3, [])).toBe('\u{1F44D}');
+    expect(clampSkin(9)).toBe(0);
+    expect(clampSkin(4)).toBe(4);
+  });
+
+  it('drops the variation selector on a toned base and keeps one that is not toned', () => {
+    expect(withSkin('\u270C\uFE0F', 1, [0])).toBe('\u270C\u{1F3FB}');
+    expect(withSkin('\u270D\uFE0F', 2, [0])).toBe('\u270D\u{1F3FC}');
+    expect(withSkin('\u{1F469}\u200D\u2695\uFE0F', 1, [0])).toBe(
+      '\u{1F469}\u{1F3FB}\u200D\u2695\uFE0F'
     );
   });
 
-  it('tones the first character when the base set is empty', () => {
-    expect(withSkin('\u{1F44D}', 3, new Set())).toBe('\u{1F44D}\u{1F3FD}');
-    expect(clampSkin(9)).toBe(0);
-    expect(clampSkin(4)).toBe(4);
+  it('tones the people holding hands and not the handshake between them', () => {
+    expect(withSkin('\u{1F9D1}\u200D\u{1F91D}\u200D\u{1F9D1}', 1, [0, 4])).toBe(
+      '\u{1F9D1}\u{1F3FB}\u200D\u{1F91D}\u200D\u{1F9D1}\u{1F3FB}'
+    );
+  });
+
+  it('tones the person in a profession and leaves the object', () => {
+    expect(withSkin('\u{1F9D1}\u200D\u{1F4BB}', 4, [0])).toBe('\u{1F9D1}\u{1F3FE}\u200D\u{1F4BB}');
   });
 });
 
