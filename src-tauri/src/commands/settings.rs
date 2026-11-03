@@ -83,6 +83,15 @@ pub async fn permission_request(
                 open_pane(&app);
             }
         }
+        "screen" => {
+            let status =
+                tauri::async_runtime::spawn_blocking(|| permissions::screen_recording(true))
+                    .await
+                    .map_err(|err| err.to_string())?;
+            if status != Status::Granted {
+                open_pane(&app);
+            }
+        }
         "files" => {
             let snapshot = save(app.clone(), |persisted| {
                 persisted.protected_folders = true;

@@ -3190,3 +3190,128 @@ button.res-tile:hover {
   stroke-linecap: round;
   stroke-linejoin: round;
 }
+
+/* ---- Color card ("#c026d3", "color coral") ---- */
+.color-card {
+  display: grid;
+  flex: none;
+  grid-template-columns: 52px minmax(0, 1fr);
+  gap: 6px 12px;
+  margin: 8px 8px 2px;
+  padding: 10px 12px;
+  background: var(--panel);
+  border: 1px solid var(--stroke-faint);
+  border-radius: 12px;
+}
+
+.color-swatch {
+  grid-row: span 2;
+  align-self: start;
+  width: 52px;
+  height: 52px;
+  padding: 4px;
+  border-radius: 10px;
+  background:
+    linear-gradient(45deg, var(--stroke) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--stroke) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--stroke) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--stroke) 75%);
+  background-size: 10px 10px;
+  background-position:
+    0 0,
+    0 5px,
+    5px -5px,
+    -5px 0;
+}
+
+.color-swatch span {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 7px;
+  box-shadow: inset 0 0 0 1px var(--stroke-faint);
+}
+
+.color-formats {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.color-formats button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 1px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.color-formats button.on {
+  background: var(--select);
+}
+
+.color-formats code {
+  overflow: hidden;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.color-formats span {
+  flex: none;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.color-shades {
+  display: flex;
+  grid-column: 2;
+  gap: 4px;
+}
+
+.color-shade {
+  flex: 1;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  box-shadow: inset 0 0 0 1px var(--stroke-faint);
+  cursor: pointer;
+}
+
+.color-shade.on {
+  outline: 2px solid var(--text);
+  outline-offset: 1px;
+}
+
+.color-foot {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.color-foot .key-hints {
+  font-weight: 400;
+}

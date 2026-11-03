@@ -232,6 +232,12 @@ const COMMANDS: Command[] = [
     names: ['settings', 'setting', 'preferences'],
   },
   { id: 'scope:apps', label: 'Search apps', icon: 'glyph:grid', names: ['apps', 'applications'] },
+  {
+    id: 'pick-color',
+    label: 'Pick a color from the screen',
+    icon: 'glyph:eyedropper',
+    names: ['pick color', 'color picker', 'eyedropper'],
+  },
 ];
 
 /**

@@ -103,6 +103,7 @@ pub fn run_binding(app: &AppHandle, target: &str) {
             window::show_clipboard(app);
             Ok(())
         }
+        ("view", "pick-color") => crate::picker::start(app),
         ("view", _) | ("scope", _) => {
             window::show_bar(app);
             let opened = if kind == "scope" {

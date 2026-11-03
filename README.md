@@ -43,6 +43,7 @@ These answer in the top row as you type; Enter copies the answer. The last few c
 - Dates and timestamps: `unix`, `1760000000 unix`, `week`, `day of year`, `now iso`
 - Network: `ip` shows local and public addresses; `port 3000` or `:3000` shows what's listening there and can quit it; `ports` lists every listening port
 - Stocks and crypto: `TSLA`, `$aapl` or `aapl stock`, and `eth`, `btc` or `bitcoin` in any case, show a price card with its change and chart, from Yahoo Finance. Tab steps the chart through 1D, 5D, 1M and 1Y, and Ctrl+Enter opens the full quote.
+- Colors: `#c026d3`, `rgb(192 38 211)`, `hsl(296 70% 49%)`, `oklch(0.55 0.2 330)`, or `color coral`. The card shows HEX, RGB, HSL and OKLCH, seven shades, and the contrast with white and black. ↑↓ picks a format and Enter copies it; Tab steps through the shades. A bare name (`red`, `orange`) still finds an app.
 
 ### Apps, windows and launch groups
 
@@ -68,6 +69,7 @@ Type a utility's name to open it.
 - **Sound** (`vol`, `mixer`; Windows): every app's volume with live meters, mute and the output device. ↑↓ picks a row, ←→ moves it (Shift for 10%), M mutes, 1–9 and 0 jump to 10–100%, Tab switches device. Settings > Sound can take over the volume keys: Zephyr's own overlay replaces Windows' flyout, Alt with a volume key picks an app for the keys to change, and with the bar open the levels show in the bar.
 - **Speed test**: download, upload and lag under load, from Cloudflare.
 - **Weather**: `weather`, `weather raleigh nc` or `stockholm sweden weather`, from Open-Meteo. Tab steps through the next 48 hours with each hour's chance of rain.
+- **Color picker**: `pick color`, `color picker` or `eyedropper`, or a hotkey from Settings > Shortcuts, freezes the screen and magnifies the pixel under the cursor. Click or Enter copies its hex; Esc cancels. On macOS it needs Screen Recording and reads the main display.
 - **Now playing**: what's playing shows at the end of the search row, with play, pause and skip. Ctrl+Space plays or pauses, and scrolling over it changes the volume.
 - **Timers and focus**: `timer 5m tea` counts down and notifies; `timer` offers 5, 10 and 15 minutes, and Enter on a running one cancels it. `focus` offers 25, 50 and 90 minutes; `focus 50m`, `focus 1h deep work` or `focus deep work` starts a focus session (one at a time; starting another replaces it). The footer shows it. Settings > Focus sets the default length, a break that starts as a timer when it ends, apps to minimize, and sites the browser extension blocks until it's done.
 - **Typing test**: `!type` runs a Monkeytype-style test (15/30/60 seconds or 10/25/50 words) with WPM, accuracy, consistency and personal bests.

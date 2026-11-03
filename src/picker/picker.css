@@ -1,0 +1,49 @@
+/* The color picker covers the captured screen. The page is the frozen pixels; the loupe
+   floats over the cursor and never takes the click. */
+
+html.picker-page,
+html.picker-page body,
+html.picker-page #app {
+  width: 100%;
+  height: 100%;
+  background: #000;
+  cursor: crosshair;
+  user-select: none;
+}
+
+.picker-screen {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  image-rendering: pixelated;
+}
+
+.picker-loupe {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
+  border: 1px solid rgba(255, 255, 255, 0.85);
+  border-radius: 8px;
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.8),
+    0 8px 24px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+.picker-loupe canvas {
+  display: block;
+  image-rendering: pixelated;
+}
+
+.picker-hex {
+  display: block;
+  padding: 3px 0 4px;
+  background: rgba(0, 0, 0, 0.82);
+  color: #fff;
+  font-family: ui-monospace, 'Cascadia Code', 'Segoe UI Mono', monospace;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-align: center;
+}
