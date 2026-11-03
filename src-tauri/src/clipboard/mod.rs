@@ -1022,22 +1022,24 @@ pub fn paste(id: u64, plain: bool, hide: impl FnOnce()) -> Result<PasteOutcome, 
     Ok(PasteOutcome::Pasted)
 }
 
-/// Puts text on the clipboard the way a copy from Zephyr does: history records it once, and
-/// the watcher skips this write so it isn't recorded again. Nothing is put back afterwards.
+/// Puts text on the clipboard the way a copy from Zephyr does: history records it once (unless
+/// Zephyr is an ignored app), and the watcher skips this write so it isn't recorded again.
+/// Nothing is put back afterwards.
 pub fn copy_text(text: &str) -> Result<(), String> {
     if text.is_empty() || text.trim().is_empty() || text.len() > MAX_TEXT_BYTES {
-        return Err("Nothing to paste".into());
+        return Err("Nothing to copy".into());
     }
     let mut history = history()
         .lock()
         .map_err(|_| "Clipboard history is unavailable")?;
     platform().write(&Content::Text(text.to_string()), false)?;
     history.own_write = Some(platform().change_count());
-    if history.settings.enabled && history.cipher.is_some() {
+    let source = Some(("Zephyr".to_string(), "zephyr".to_string()));
+    if history.settings.enabled && history.cipher.is_some() && !history.ignores(source.as_ref()) {
         let _ = history.record(
             Capture {
                 content: Content::Text(text.to_string()),
-                source: Some(("Zephyr".into(), "zephyr".into())),
+                source,
             },
             now_secs(),
         );
@@ -1065,12 +1067,6 @@ pub fn paste_text(text: &str, hide: impl FnOnce()) -> Result<PasteOutcome, Strin
 
 pub fn can_paste() -> bool {
     platform().can_paste(false)
-}
-
-/// Puts text on the clipboard the way another app would, so history records the copy.
-/// Unlike [`copy`], this does not mark the write as ours.
-pub fn write_text(text: &str) -> Result<(), String> {
-    platform().write(&Content::Text(text.to_string()), false)
 }
 
 /// Puts a PNG on the clipboard as an image, as a debug snapshot does. History records it like

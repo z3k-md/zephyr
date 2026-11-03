@@ -1,7 +1,7 @@
 //! The screen color picker. The bar hides, the screen is captured (the whole virtual
 //! desktop on Windows, the main display on macOS), and a borderless window shows that
 //! frame with a loupe. The window is made the first time and reused. Picking copies the
-//! hex as an ordinary clipboard write, so history records it as a color.
+//! hex the way Zephyr's other copies do, and history files it as a color.
 
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
@@ -215,7 +215,7 @@ pub fn choose(app: &AppHandle, hex: &str) -> Result<(), String> {
     let _ops = lock_ops();
     let copied: Result<String, String> = (|| {
         let hex = normalize_hex(hex).ok_or_else(|| "That isn't a color".to_string())?;
-        crate::clipboard::write_text(&hex)?;
+        crate::clipboard::copy_text(&hex)?;
         Ok(hex)
     })();
     end_session(app);
