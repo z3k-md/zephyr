@@ -77,6 +77,8 @@
   import { useNowPlaying } from './nowPlaying';
   import { useFooterStats } from './footerStats';
   import { bindingForAlias, bindingTarget, buildRows, groups, rowKey, type RowCtx } from './rows';
+  import { reconcileSelection } from './selection';
+  import { footerFit } from './footerFit';
   import { colonEmojiQuery, isEmojiColon, takeEmojiScope } from './emoji/query';
   import { googleUrl } from './google';
   import { useDevices } from './useDevices';
@@ -247,6 +249,12 @@
   let userMoved = false;
   // Arrow presses that land before the first rows do.
   let pendingMove = 0;
+
+  watch(emojiOpen, (open) => {
+    if (!open) return;
+    actionsOpen.value = false;
+    pendingMove = 0;
+  });
   let unlistens: UnlistenFn[] = [];
   // A list caught up a moment after a quit or close; dropped if the bar goes first.
   const later = useLater();
@@ -285,7 +293,10 @@
   // `cal` lists the day. A meeting about to start leads the empty bar.
   const calendar = useCalendar();
   const calendarChip = computed(() => calendar.chip());
+  /** The footer chip. A scope blanks the text the rows are built from, so `agenda`
+   *  would never lead and the soon-meeting row would stay in front. */
   function showCalendar() {
+    scope.value = null;
     query.value = 'agenda';
     void nextTick(() => {
       const input = inputEl.value;
@@ -330,7 +341,8 @@
             : result.preselect + timers.rows.length
           : timers.preselect;
     }
-    if (!typed.trim()) {
+    // A scope blanks `typed` above. Only a truly empty main bar grows a meeting row.
+    if (!scope.value && !typed.trim()) {
       const soon = calendar.soon();
       if (soon) {
         result.rows.unshift(soon);
@@ -351,11 +363,35 @@
     }
     return result;
   });
-  const items = computed(() => built.value.rows);
+  // The emoji grid covers the results, including in the moment before it mounts.
+  // Row actions read this list, so they have nothing to run while it is up.
+  const items = computed(() => (emojiOpen.value ? [] : built.value.rows));
   const sections = computed(() => groups(items.value));
 
   const selectedItem = computed(() =>
     selected.value >= 0 ? items.value[selected.value] : undefined
+  );
+
+  // Calendar, timer and focus rows change with the clock and with fetches, after
+  // the search that last set the selection. Follow the row, not the index.
+  let shownKeys: string[] = [];
+  watch(
+    () => `${built.value.preselect ?? ''}|${built.value.rows.map(rowKey).join('\n')}`,
+    () => {
+      const next = built.value;
+      const nextKeys = next.rows.map(rowKey);
+      const reconciled = reconcileSelection(
+        shownKeys,
+        selected.value,
+        userMoved,
+        nextKeys,
+        next.preselect
+      );
+      shownKeys = nextKeys;
+      userMoved = reconciled.userMoved;
+      if (selected.value !== reconciled.index) selected.value = reconciled.index;
+    },
+    { flush: 'sync' }
   );
 
   // Type-ahead: the rest of what Enter would act on, drawn faintly after the cursor.
@@ -1080,26 +1116,18 @@
     void setBarHeight(height).catch(() => (sentHeight = 0));
   }
 
-  /** Shows a suggest reply, keeping the row the user moved to selected when late results
-   *  reshuffle the list. */
+  /** Shows a suggest reply. The watch on the built rows keeps the selection; an arrow
+   *  pressed before any row existed moves once the rows are here. */
   async function applySuggestions(
     response: SuggestResponse,
     includeRemote: boolean,
     typed: string
   ) {
-    const kept = userMoved && selectedItem.value ? rowKey(selectedItem.value) : null;
     lastResponse.value = response;
     lastQuery.value = query.value;
     mode.value = response.mode;
     notice.value = response.notice;
-    const index = kept ? items.value.findIndex((row) => rowKey(row) === kept) : -1;
-    if (index >= 0) {
-      selected.value = index;
-    } else {
-      userMoved = false;
-      selected.value = built.value.preselect ?? -1;
-    }
-    if (pendingMove) {
+    if (pendingMove && items.value.length > 0) {
       const delta = pendingMove;
       pendingMove = 0;
       moveSelection(delta);
@@ -1162,6 +1190,27 @@
     }
   }
 
+  /** Backspace, arrows through the text, and the usual edit shortcuts. Not the keys
+   *  that run a row (Enter, Alt+number, Ctrl+K, up and down). */
+  function editsQuery(event: KeyboardEvent): boolean {
+    if (event.altKey) return false;
+    const editing =
+      event.key === 'Backspace' ||
+      event.key === 'Delete' ||
+      event.key === 'ArrowLeft' ||
+      event.key === 'ArrowRight' ||
+      event.key === 'Home' ||
+      event.key === 'End' ||
+      event.code === 'KeyA' ||
+      event.code === 'KeyC' ||
+      event.code === 'KeyV' ||
+      event.code === 'KeyX' ||
+      event.code === 'KeyZ' ||
+      event.code === 'KeyY';
+    if (event.ctrlKey || event.metaKey) return editing;
+    return editing || event.key.length === 1;
+  }
+
   function onKey(event: KeyboardEvent) {
     trace('key', {
       key: event.key,
@@ -1194,7 +1243,12 @@
       viewShowing()?.onKey(event);
       return;
     }
-    if (emojiOpen.value && emojiGrid.value?.onKey(event)) return;
+    // The grid covers the results. Until it mounts, `emojiGrid` is null and its
+    // keys would otherwise fall through to the rows underneath.
+    if (emojiOpen.value) {
+      actionsOpen.value = false;
+      if (emojiGrid.value?.onKey(event)) return;
+    }
     if (event.key === 'Enter' && /^!(?:sh|shell)$/i.test(query.value.trim())) {
       event.preventDefault();
       query.value = '';
@@ -1214,6 +1268,14 @@
     if (moveKeyOnly(event) && event.code === 'KeyS') {
       event.preventDefault();
       if (!event.repeat) void openSettings();
+      return;
+    }
+    // Esc still leaves, and Backspace on an empty scope still drops it. Typing
+    // still edits the query. Other keys act on rows the grid is covering.
+    const clearsScope =
+      event.key === 'Backspace' && !event.repeat && !query.value && scope.value !== null;
+    if (emojiOpen.value && event.key !== 'Escape' && !clearsScope) {
+      if (!editsQuery(event)) event.preventDefault();
       return;
     }
     // Ctrl+K and, while its menu is open, the menu's keys; anything else goes back to typing.
@@ -1399,6 +1461,21 @@
       notice,
       clearAfterOpen,
     });
+
+  // Which footer pieces give way. The bar is a fixed 680px, so this follows what's
+  // showing rather than the container's width.
+  const footerLevel = computed(() =>
+    footerFit({
+      playing: !!playingNow.value,
+      focus: !!focusNow.value,
+      meters: statsShown.value && !!meters.value,
+      gpu: !!(statsShown.value && meters.value?.gpu),
+      disk: !!(statsShown.value && meters.value?.diskLow),
+      net: !!netAlert.value,
+      meeting: !!calendarChip.value,
+      weather: !!forecast.value,
+    })
+  );
 
   // The ticker card: a stock or crypto typed on its own ("TSLA", "eth", "$aapl").
   const { cardQuote, quoteRange, stepRange, pickRange, openQuote } = useTickerCard({
@@ -1985,6 +2062,7 @@
         ref="statsEl"
         class="stats"
         :class="{ playing: playingNow, focusing: focusNow }"
+        :data-fit="footerLevel > 0 ? footerLevel : undefined"
         aria-label="System"
         @mousedown.prevent
       >

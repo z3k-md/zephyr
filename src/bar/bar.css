@@ -1064,6 +1064,7 @@ textarea.query {
   display: flex;
   flex: none;
   align-items: center;
+  min-width: 0;
   gap: 18px;
   /* Tall enough for the player's two lines, whether or not anything is playing, so the
      footer doesn't jump when a song starts or stops. */
@@ -1108,6 +1109,7 @@ textarea.query {
 }
 
 .footer-weather b {
+  flex: none;
   color: var(--fg);
   font-weight: 600;
 }
@@ -1295,14 +1297,50 @@ textarea.query {
   padding-left: 8px;
 }
 
-/* A running focus session shares the row with what's playing. Both shrink so the meters
-   still fit the bar's 680px. */
+/* A running focus session shares the row. The gap tightens; data-fit (set from
+   what's showing) drops lower-priority pieces so the row stays inside 680px:
+   the focus bar, then the meter bars, then the meter numbers, then the song title. */
 .stats.focusing {
   gap: 12px;
 }
 
-.stats.focusing .now-playing {
-  max-width: 168px;
+.stats:is([data-fit='1'], [data-fit='2'], [data-fit='3'], [data-fit='4']) .focus-strip-bar {
+  display: none;
+}
+
+.stats:is([data-fit='2'], [data-fit='3'], [data-fit='4']) .meter {
+  display: none;
+}
+
+.stats:is([data-fit='3'], [data-fit='4']) .meters .stat-value {
+  display: none;
+}
+
+.stats[data-fit='3'] {
+  gap: 8px;
+}
+
+.stats[data-fit='4'] {
+  gap: 4px;
+}
+
+/* The title ellipsizes; the cover and the buttons keep their width. */
+.stats[data-fit='4'] .now-playing {
+  flex: 1 1 168px;
+  max-width: 220px;
+  min-width: 168px;
+  overflow: hidden;
+}
+
+.stats[data-fit='4'] .now-playing-title {
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.stats[data-fit='4'] .now-playing-text,
+.stats[data-fit='4'] .now-playing-text:has(.now-playing-progress) {
+  width: auto;
+  min-width: 0;
 }
 
 .focus-strip {
@@ -1365,10 +1403,9 @@ textarea.query {
 .now-playing {
   position: relative;
   display: inline-flex;
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   align-items: center;
   gap: 2px;
-  min-width: 0;
   max-width: 300px;
   padding: 4px 4px 4px 5px;
   border-radius: 9px;

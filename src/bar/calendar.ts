@@ -51,15 +51,19 @@ function dayAt(now: number, offset: number): Date {
   return date;
 }
 
+/** True when the event overlaps that local day. The day ends at the next local
+ *  midnight, which is not 24 hours later when the clocks change. */
 export function onDay(event: CalEvent, day: Date): boolean {
   const start = day.getTime();
-  const end = start + 86_400_000;
+  const end = new Date(start);
+  end.setDate(end.getDate() + 1);
+  const endMs = end.getTime();
   if (event.allDay) {
     const key = ymd(day);
     return event.startDate <= key && event.endDate > key;
   }
-  if (event.endMs <= event.startMs) return event.startMs >= start && event.startMs < end;
-  return event.startMs < end && event.endMs > start;
+  if (event.endMs <= event.startMs) return event.startMs >= start && event.startMs < endMs;
+  return event.startMs < endMs && event.endMs > start;
 }
 
 export function lengthLabel(event: CalEvent): string {
@@ -180,6 +184,11 @@ function relative(startMs: number, now: number): string {
   return `in ${mins} min`;
 }
 
+/** Past rows kept in front of the current or next event. The list only shows the
+ *  rows that fit in the bar, so a longer run of past events would preselect one
+ *  the arrows and Alt+number can't reach. */
+const PAST_BEFORE = 2;
+
 /** Today's or tomorrow's rows, or a single line when there's nothing to show. */
 export function agendaRows(
   agenda: Agenda | null,
@@ -225,7 +234,8 @@ export function agendaRows(
     return row;
   });
   const next = rows.findIndex((row) => !row.calendar?.past);
-  return { rows, preselect: next >= 0 ? next : 0 };
+  if (next <= PAST_BEFORE) return { rows, preselect: next >= 0 ? next : 0 };
+  return { rows: rows.slice(next - PAST_BEFORE), preselect: PAST_BEFORE };
 }
 
 /** A meeting starting within 10 minutes, or one that started less than 5 minutes ago. */
