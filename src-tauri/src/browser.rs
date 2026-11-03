@@ -53,7 +53,9 @@ fn focus_block() -> &'static Mutex<FocusBlock> {
 }
 
 fn focus_message(sites: &[String], until: i64) -> String {
-    json!({ "type": "focus", "sites": sites, "until": until }).to_string()
+    // Not "focus", which asks to switch to a tab: an extension from before blocking would
+    // treat this as one.
+    json!({ "type": "focusBlock", "sites": sites, "until": until }).to_string()
 }
 
 /// Tells every connected extension which sites to block until `until` (unix seconds; 0

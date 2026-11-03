@@ -100,9 +100,9 @@ async function answer(data) {
   }
   if (message.type === 'ping') {
     socket?.send(JSON.stringify({ type: 'pong' }));
-  } else if (message.type === 'focus' && Array.isArray(message.sites)) {
-    // The same type as "switch to this tab", told apart by the site list.
-    focusBlock = { sites: message.sites, until: Number(message.until) || 0 };
+  } else if (message.type === 'focusBlock') {
+    const sites = Array.isArray(message.sites) ? message.sites : [];
+    focusBlock = { sites, until: Number(message.until) || 0 };
   } else if (message.type === 'focus') {
     const found = await focusTab(message.url).catch(() => false);
     socket?.send(JSON.stringify({ type: 'focused', id: message.id, found }));

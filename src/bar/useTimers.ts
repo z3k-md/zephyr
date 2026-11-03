@@ -103,8 +103,8 @@ export function useTimers(ctx: {
       const start = focusLengths(focusAsk).map((seconds) =>
         startRow(seconds, focusAsk.label, true)
       );
+      // A bare "focus" may be for an app or a system setting, so its presets don't take Enter.
       if (bare) {
-        preselect = rows.length;
         rows.push(...start);
       } else {
         rows.unshift(...start);
