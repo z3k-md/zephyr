@@ -151,16 +151,40 @@ pub fn of_app<'a>(app: &App, windows: &'a [OpenWindow]) -> Vec<&'a OpenWindow> {
         .collect()
 }
 
-/// Whether a focus session puts this window away. A program matches only its own executable
-/// (case-insensitive, either slash), so other programs in its folder stay up. A packaged app
-/// has no executable and is matched the same way as switching to it.
+/// Whether a focus session puts this window away: one of the app's windows (see [`belongs`])
+/// whose program is the app's own or is named after it. Steam's steamwebhelper.exe and the
+/// Discord.exe that Discord's Update.exe starts are put away; another program that only shares
+/// the folder stays up. A packaged app has no executable and is matched as switching does.
 #[cfg(any(windows, test))]
 fn tucked(app: &App, app_exe: Option<&str>, window: &OpenWindow) -> bool {
+    if !belongs(app, app_exe, window) {
+        return false;
+    }
     let Some(app_exe) = app_exe else {
-        return belongs(app, None, window);
+        return true;
     };
-    !window.exe.is_empty()
-        && window.exe.to_lowercase().replace('/', "\\") == app_exe.to_lowercase().replace('/', "\\")
+    let exe = window.exe.to_lowercase().replace('/', "\\");
+    if exe == app_exe.to_lowercase().replace('/', "\\") {
+        return true;
+    }
+    let stem: String = exe
+        .rsplit('\\')
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches(".exe")
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .collect();
+    let word: String = app
+        .name
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect();
+    word.len() >= 3 && stem.contains(&word)
 }
 
 /// Whether a window is one of `app`'s: by the AppUserModelID it declares, by the program the
@@ -805,6 +829,28 @@ mod tests {
         assert!(!tucked(&portable, exe, &neighbor));
         // belongs() still counts that neighbor; tucking must not.
         assert!(belongs(&portable, exe, &neighbor));
+
+        let steam = app(r"C:\Program Files (x86)\Steam\steam.exe", "Steam");
+        let steam_exe = Some(r"C:\Program Files (x86)\Steam\steam.exe");
+        assert!(tucked(
+            &steam,
+            steam_exe,
+            &window(
+                "Steam",
+                r"C:\Program Files (x86)\Steam\bin\cef\cef.win64\steamwebhelper.exe",
+                ""
+            )
+        ));
+        let discord = app(r"C:\Users\Zach\AppData\Local\Discord\Update.exe", "Discord");
+        assert!(tucked(
+            &discord,
+            Some(r"C:\Users\Zach\AppData\Local\Discord\Update.exe"),
+            &window(
+                "Discord",
+                r"C:\Users\Zach\AppData\Local\Discord\app-1.0.9200\Discord.exe",
+                ""
+            )
+        ));
 
         let terminal = app("Microsoft.WindowsTerminal_8wekyb3d8bbwe!App", "Terminal");
         assert!(tucked(
