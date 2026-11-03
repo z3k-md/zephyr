@@ -1,9 +1,9 @@
-import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { nowPlaying, nowPlayingControl, nowPlayingFocus } from '../api';
 import type { MediaControl, NowPlaying } from '../types';
 
-/** How long a paused song stays in the search bar. */
+/** How long a paused song stays in the bar. */
 const LINGER_MS = 2 * 60 * 1000;
 
 /**
@@ -17,6 +17,9 @@ export function useNowPlaying() {
   let unlisten: UnlistenFn | null = null;
   let clock = 0;
   let recheck = 0;
+  /** The second hand for the position, running only while a song plays in the shown bar. */
+  let ticker = 0;
+  let awake = false;
 
   onMounted(async () => {
     track.value = await nowPlaying().catch(() => null);
@@ -35,18 +38,34 @@ export function useNowPlaying() {
 
   // The clock only matters while the bar shows; the bar pauses it while hidden.
   function pause() {
+    awake = false;
     window.clearInterval(clock);
     clock = 0;
+    tick();
   }
 
   function resume() {
+    awake = true;
     now.value = Date.now();
     if (!clock) clock = window.setInterval(() => (now.value = Date.now()), 15000);
+    tick();
   }
+
+  function tick() {
+    const run = awake && !!track.value?.playing && track.value.positionMs !== null;
+    if (run && !ticker) ticker = window.setInterval(() => (now.value = Date.now()), 1000);
+    if (!run && ticker) {
+      window.clearInterval(ticker);
+      ticker = 0;
+    }
+  }
+
+  watch(() => [track.value?.playing, track.value?.positionMs], tick);
 
   onUnmounted(() => {
     unlisten?.();
     window.clearInterval(clock);
+    window.clearInterval(ticker);
     window.clearTimeout(recheck);
   });
 
@@ -58,13 +77,30 @@ export function useNowPlaying() {
     return played && now.value - played < LINGER_MS ? current : null;
   });
 
+  /** Where the shown song is now: its last report, counted on while it plays. */
+  const positionMs = computed(() => {
+    const current = shown.value;
+    if (current?.positionMs == null) return null;
+    const moved = current.playing ? Math.max(0, now.value - current.updatedAt) : 0;
+    const at = current.positionMs + moved;
+    return current.durationMs ? Math.min(at, current.durationMs) : at;
+  });
+
   function press(control: MediaControl) {
     const current = track.value;
     if (!current) return;
     // The button answers at once; the app's own report follows and corrects it if the press
     // didn't take.
     if (control === 'toggle') {
-      track.value = { ...current, playing: !current.playing, lastPlayedAt: Date.now() };
+      // The position restarts from where it stands, so the progress line doesn't jump.
+      const at = current === shown.value ? positionMs.value : current.positionMs;
+      track.value = {
+        ...current,
+        playing: !current.playing,
+        positionMs: at,
+        updatedAt: Date.now(),
+        lastPlayedAt: Date.now(),
+      };
     }
     void nowPlayingControl(control).catch(() => undefined);
     window.clearTimeout(recheck);
@@ -78,5 +114,5 @@ export function useNowPlaying() {
     await nowPlayingFocus().catch(() => false);
   }
 
-  return { track, shown, press, focus, pause, resume };
+  return { track, shown, positionMs, press, focus, pause, resume };
 }

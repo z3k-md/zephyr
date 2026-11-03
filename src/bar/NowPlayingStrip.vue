@@ -1,5 +1,5 @@
 <script setup lang="ts">
-  import { computed, onUnmounted, ref } from 'vue';
+  import { computed, onUnmounted, ref, watch } from 'vue';
   import { nowPlayingVolume } from '../api';
   import type { NowPlaying } from '../types';
   import { iconFor } from './appIcons';
@@ -7,13 +7,15 @@
   import { vTip } from '../tip';
   import Marquee from '../components/Marquee.vue';
 
-  // What's playing, at the end of the search row: one card with the cover (or the playing
-  // app's icon), the title and artist, and previous, play/pause and next, under one hover
-  // highlight. Right-clicking the card switches to what's playing; the scroll wheel over it
-  // turns that app up or down (its volume mixer level on Windows, Spotify's or Music's own
-  // volume on macOS), and the level shows in place of the artist.
+  // What's playing, at the left of the footer: one card with the cover (or the playing app's
+  // icon), the title, the artist and how far in, and previous, play/pause and next, under one
+  // hover highlight, with the song's progress under the text: a wave while it plays, flat
+  // while paused.
+  // Right-clicking the card switches to what's playing; the scroll wheel over it turns that
+  // app up or down (its volume mixer level on Windows, Spotify's or Music's own volume on
+  // macOS), and the level shows in place of the artist.
 
-  const props = defineProps<{ track: NowPlaying }>();
+  const props = defineProps<{ track: NowPlaying; positionMs: number | null }>();
   const emit = defineEmits<{ toggle: []; next: []; previous: []; focus: [] }>();
 
   // A browser's own icon says nothing about the song, so a tab with no cover gets the note.
@@ -25,6 +27,46 @@
 
   function isBrowser(app: string) {
     return /^(chrome|chromium|msedge|brave|vivaldi|opera|arc)\b/i.test(app);
+  }
+
+  /** How far in, as "1:42 / 4:03"; just the position for a stream with no length. */
+  const time = computed(() => {
+    const at = props.positionMs;
+    if (at === null) return null;
+    const length = props.track.durationMs;
+    return length ? `${clock(at)} / ${clock(length)}` : clock(at);
+  });
+
+  const progress = computed(() => {
+    const length = props.track.durationMs;
+    if (props.positionMs === null || !length) return null;
+    return Math.min(1, props.positionMs / length);
+  });
+
+  // The line glides through each second's tick, but jumps straight to a position that moved
+  // by more (the bar reopened after its clock stood still, a seek, a new song).
+  const snap = ref(true);
+  let snapFrame = 0;
+  watch(
+    () => props.positionMs,
+    (next, before) => {
+      if (next !== null && before != null && Math.abs(next - before) <= 1500) return;
+      snap.value = true;
+      cancelAnimationFrame(snapFrame);
+      snapFrame = requestAnimationFrame(() => {
+        snapFrame = requestAnimationFrame(() => (snap.value = false));
+      });
+    },
+    { immediate: true }
+  );
+  onUnmounted(() => cancelAnimationFrame(snapFrame));
+
+  function clock(ms: number) {
+    const seconds = Math.floor(ms / 1000);
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor(seconds / 60) % 60;
+    const rest = String(seconds % 60).padStart(2, '0');
+    return hours ? `${hours}:${String(minutes).padStart(2, '0')}:${rest}` : `${minutes}:${rest}`;
   }
 
   /** The level just set with the wheel, shown for a moment. */
@@ -69,7 +111,19 @@
       <span class="now-playing-text">
         <Marquee class="now-playing-song" :text="track.title" />
         <span v-if="level !== null" class="now-playing-artist">Volume {{ level }}%</span>
-        <span v-else-if="track.artist" class="now-playing-artist">{{ track.artist }}</span>
+        <span v-else-if="track.artist || time" class="now-playing-artist">
+          {{ [track.artist, time].filter(Boolean).join(' · ') }}
+        </span>
+        <span
+          v-if="progress !== null"
+          class="now-playing-progress"
+          :class="{ playing: track.playing, snap }"
+          :style="{ '--progress': `${progress * 100}%` }"
+          aria-hidden="true"
+        >
+          <span class="now-playing-played" />
+          <span class="now-playing-thumb" />
+        </span>
       </span>
     </button>
     <button

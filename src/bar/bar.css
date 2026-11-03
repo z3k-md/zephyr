@@ -1060,18 +1060,21 @@ textarea.query {
 /* The bar's slim footer: CPU, memory, disk and network, in fixed-width digits so the
    numbers don't jitter as they change. */
 .stats {
+  position: relative;
   display: flex;
   flex: none;
   align-items: center;
   gap: 18px;
-  height: 38px;
+  /* Tall enough for the player's two lines, whether or not anything is playing, so the
+     footer doesn't jump when a song starts or stops. */
+  height: 46px;
   box-sizing: border-box;
   padding: 0 16px;
   color: var(--muted);
   font-size: 11.5px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-  background: rgba(0, 0, 0, 0.14);
+  background: color-mix(in srgb, var(--shade) 14%, transparent);
   border-top: 1px solid var(--stroke);
 }
 
@@ -1288,14 +1291,26 @@ textarea.query {
 
 /* What's playing, at the end of the search field: one card whose hover lights the cover,
    the title and the buttons together. It gives way to the typed text. */
+.stats.playing {
+  padding-left: 8px;
+}
+
+.stats-divider {
+  flex: none;
+  width: 1px;
+  height: 16px;
+  margin: 0 -4px;
+  background: var(--stroke-strong);
+}
+
 .now-playing {
+  position: relative;
   display: inline-flex;
   flex: 0 1 auto;
   align-items: center;
   gap: 2px;
   min-width: 0;
-  max-width: 280px;
-  margin: -6px 0;
+  max-width: 300px;
   padding: 4px 4px 4px 5px;
   border-radius: 9px;
   color: var(--muted);
@@ -1386,7 +1401,88 @@ textarea.query {
 
 .now-playing-artist {
   font-size: 11px;
-  line-height: 14px;
+  line-height: 13px;
+}
+
+/* A steady width while there's a progress line, so the footer doesn't shift with each
+   song's title. */
+.now-playing-text:has(.now-playing-progress) {
+  width: 156px;
+}
+
+/* How far into the song, under the text: the part played is a wave in the accent while it
+   plays (flat while paused), then a gap, the thumb, and a faint flat track for the rest. */
+.now-playing-progress {
+  position: relative;
+  flex: none;
+  height: 6px;
+  margin-top: 2px;
+}
+
+.now-playing-progress::before,
+.now-playing-played,
+.now-playing-thumb {
+  position: absolute;
+  transition-duration: 1s;
+  transition-timing-function: linear;
+}
+
+.now-playing-progress::before {
+  content: '';
+  top: 2px;
+  right: 0;
+  left: calc(var(--progress) + 4px);
+  height: 2px;
+  border-radius: 1px;
+  background: var(--track);
+  transition-property: left;
+}
+
+.now-playing-played {
+  top: 2px;
+  left: 0;
+  width: max(0px, calc(var(--progress) - 4px));
+  height: 2px;
+  border-radius: 1px;
+  background: var(--focus);
+  transition-property: width;
+}
+
+.now-playing-progress.playing .now-playing-played {
+  top: 0;
+  height: 6px;
+  border-radius: 0;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='6'%3E%3Cpath d='M0 3Q3 .6 6 3T12 3' fill='none' stroke='%23000' stroke-width='1.8'/%3E%3C/svg%3E")
+    0 0 / 12px 6px repeat-x;
+  animation: now-playing-wave 1.2s linear infinite;
+}
+
+@keyframes now-playing-wave {
+  to {
+    mask-position: 12px 0;
+  }
+}
+
+.now-playing-thumb {
+  top: -1px;
+  left: var(--progress);
+  width: 3px;
+  height: 8px;
+  margin-left: -1.5px;
+  border-radius: 2px;
+  background: var(--focus);
+  transition-property: left;
+}
+
+.now-playing-progress.snap::before,
+.now-playing-progress.snap > * {
+  transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .now-playing-progress.playing .now-playing-played {
+    animation: none;
+  }
 }
 
 .now-playing-control svg {

@@ -656,11 +656,17 @@ section > button {
 }
 
 .marquee.moving .marquee-track {
+  position: relative;
   display: inline-block;
   will-change: transform;
 }
 
+/* The second copy sits past the first without taking room, so starting to scroll doesn't
+   widen a box that sizes to its text (which would resize the marquee and start it over). */
 .marquee-copy {
+  position: absolute;
+  top: 0;
+  left: 100%;
   padding-left: 40px;
 }
 

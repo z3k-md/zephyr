@@ -355,9 +355,25 @@ fn same_apart_from_time(a: Option<&NowPlaying>, b: Option<&NowPlaying>) -> bool 
                 && a.playing == b.playing
                 && a.artwork == b.artwork
                 && a.duration_ms == b.duration_ms
+                && !sought(a, b)
         }
         _ => false,
     }
+}
+
+/// Whether the position jumped (a seek) rather than moving on with the clock, so the bar's
+/// progress line, which counts on from the last report, needs the new one.
+fn sought(a: &NowPlaying, b: &NowPlaying) -> bool {
+    const SLACK_MS: i64 = 2000;
+    let (Some(before), Some(after)) = (a.position_ms, b.position_ms) else {
+        return a.position_ms.is_some() != b.position_ms.is_some();
+    };
+    let moved = if a.playing {
+        b.updated_at.saturating_sub(a.updated_at)
+    } else {
+        0
+    };
+    ((after as i64) - (before + moved) as i64).abs() > SLACK_MS
 }
 
 /// Whether an app id is a web browser, whose playing tab the extension can find.
@@ -467,6 +483,43 @@ mod tests {
                 "{reply}"
             );
         }
+    }
+
+    #[test]
+    fn a_seek_is_news_but_the_clock_moving_on_is_not() {
+        let at = |position: u64, updated_at: u64, playing: bool| NowPlaying {
+            title: "So What".into(),
+            artist: String::new(),
+            album: String::new(),
+            source_app: "Spotify.exe".into(),
+            playing,
+            position_ms: Some(position),
+            duration_ms: Some(562_000),
+            artwork: None,
+            updated_at,
+            last_played_at: None,
+        };
+        let before = at(10_000, 1_000_000, true);
+        // Ten seconds later, ten seconds on: the same.
+        assert!(same_apart_from_time(
+            Some(&before),
+            Some(&at(20_000, 1_010_000, true))
+        ));
+        // Ten seconds later, a minute on: a seek.
+        assert!(!same_apart_from_time(
+            Some(&before),
+            Some(&at(70_000, 1_010_000, true))
+        ));
+        // Paused, the position holds still.
+        let paused = at(10_000, 1_000_000, false);
+        assert!(same_apart_from_time(
+            Some(&paused),
+            Some(&at(10_000, 1_060_000, false))
+        ));
+        assert!(!same_apart_from_time(
+            Some(&paused),
+            Some(&at(0, 1_060_000, false))
+        ));
     }
 
     fn session(title: &str, playing: bool, current: bool) -> Session {

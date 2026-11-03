@@ -14,6 +14,7 @@ use windows::Media::Control::{
     GlobalSystemMediaTransportControlsSessionManager as Manager,
     GlobalSystemMediaTransportControlsSessionPlaybackStatus as Status,
     MediaPropertiesChangedEventArgs, PlaybackInfoChangedEventArgs, SessionsChangedEventArgs,
+    TimelinePropertiesChangedEventArgs,
 };
 use windows::Storage::Streams::DataReader;
 
@@ -28,7 +29,7 @@ pub struct Windows {
     /// Set when apps come or go, so the next read listens to the new ones.
     sessions_changed: Arc<AtomicBool>,
     /// The sessions listened to, with their event tokens.
-    watched: Vec<(MediaSession, i64, i64)>,
+    watched: Vec<(MediaSession, i64, i64, i64)>,
     /// The sessions in the order of the last list.
     listed: Vec<MediaSession>,
 }
@@ -68,11 +69,12 @@ impl Windows {
         })
     }
 
-    /// Listens to each app's track and play state, after apps come or go.
+    /// Listens to each app's track, play state and position, after apps come or go.
     fn watch_sessions(&mut self, sessions: &[MediaSession]) {
-        for (session, media, playback) in self.watched.drain(..) {
+        for (session, media, playback, timeline) in self.watched.drain(..) {
             let _ = session.RemoveMediaPropertiesChanged(media);
             let _ = session.RemovePlaybackInfoChanged(playback);
+            let _ = session.RemoveTimelinePropertiesChanged(timeline);
         }
         for session in sessions {
             let sender = self.wake.clone();
@@ -91,8 +93,18 @@ impl Windows {
                 let _ = sender.send(Wake::Changed);
                 Ok(())
             }));
-            if let (Ok(media), Ok(playback)) = (media, playback) {
-                self.watched.push((session.clone(), media, playback));
+            // A seek; the watcher only tells the bar when it moves the position.
+            let sender = self.wake.clone();
+            let timeline = session.TimelinePropertiesChanged(&TypedEventHandler::<
+                MediaSession,
+                TimelinePropertiesChangedEventArgs,
+            >::new(move |_, _| {
+                let _ = sender.send(Wake::Changed);
+                Ok(())
+            }));
+            if let (Ok(media), Ok(playback), Ok(timeline)) = (media, playback, timeline) {
+                self.watched
+                    .push((session.clone(), media, playback, timeline));
             }
         }
     }
@@ -201,10 +213,20 @@ fn read(session: &MediaSession) -> Session {
     let timeline = session.GetTimelineProperties().ok();
     // TimeSpan counts 100 ns ticks.
     let ms = |ticks: i64| (ticks > 0).then_some(ticks as u64 / 10_000);
-    let position_ms = timeline
+    // The position is as of the app's last report, which can be a while back; while playing,
+    // it has moved on since.
+    let reported = timeline
         .as_ref()
         .and_then(|timeline| timeline.Position().ok())
         .and_then(|span| ms(span.Duration));
+    let since = timeline
+        .as_ref()
+        .and_then(|timeline| timeline.LastUpdatedTime().ok())
+        .and_then(|time| elapsed_since(time.UniversalTime));
+    let position_ms = match (reported, since) {
+        (Some(position), Some(since)) if playing => Some(position + since),
+        _ => reported,
+    };
     let duration_ms = timeline
         .as_ref()
         .and_then(|timeline| timeline.EndTime().ok())
@@ -219,6 +241,17 @@ fn read(session: &MediaSession) -> Session {
         position_ms,
         duration_ms,
     }
+}
+
+/// How long ago a Windows time was, in ms; `None` when it's unset or in the future.
+fn elapsed_since(universal_time: i64) -> Option<u64> {
+    // UniversalTime counts 100 ns ticks since 1601; Unix time starts 11644473600 s later.
+    const UNIX_EPOCH_TICKS: i64 = 116_444_736_000_000_000;
+    if universal_time <= UNIX_EPOCH_TICKS {
+        return None;
+    }
+    let then = ((universal_time - UNIX_EPOCH_TICKS) / 10_000) as u64;
+    crate::util::now_ms().checked_sub(then)
 }
 
 /// Brings an app's window forward: an `.exe` name finds that program's main window; a

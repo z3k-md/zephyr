@@ -1716,15 +1716,6 @@
             @select="trackCaret"
           />
         </div>
-        <!-- What's playing, at the end of the field, in every view of the main bar. -->
-        <NowPlayingStrip
-          v-if="playingNow"
-          :track="playingNow"
-          @toggle="media.press('toggle')"
-          @next="media.press('next')"
-          @previous="media.press('previous')"
-          @focus="media.focus()"
-        />
         <!-- With Ctrl held the bar can be dragged. -->
         <span v-if="movable" class="move-hint">
           <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -1822,14 +1813,27 @@
         :style="previewStyle"
       />
 
-      <!-- The meters at the left (a click opens System Resources); the weather at the right. -->
+      <!-- What's playing at the left, then the meters (a click opens System Resources); the
+           weather at the right. -->
       <footer
-        v-if="(statsShown && meters) || forecast"
+        v-if="(statsShown && meters) || forecast || playingNow"
         ref="statsEl"
         class="stats"
+        :class="{ playing: playingNow }"
         aria-label="System"
         @mousedown.prevent
       >
+        <template v-if="playingNow">
+          <NowPlayingStrip
+            :track="playingNow"
+            :position-ms="media.positionMs.value"
+            @toggle="media.press('toggle')"
+            @next="media.press('next')"
+            @previous="media.press('previous')"
+            @focus="media.focus()"
+          />
+          <span v-if="statsShown && meters" class="stats-divider" aria-hidden="true" />
+        </template>
         <span
           v-if="statsShown && meters"
           class="meters"
