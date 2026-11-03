@@ -31,3 +31,8 @@ The extension catches that too, switches to the open tab and closes the new one.
 
 It needs the `tabs`, `webNavigation` and `alarms` permissions, and talks only to Zephyr on this
 computer.
+
+During a focus session Zephyr also sends the sites to block and when the session ends
+(`{type:"focus", sites, until}`). Until then, a top-frame navigation to one of those sites, or
+any subdomain of it, opens a page that says the site is blocked for focus and how long is left.
+Without the extension the session still runs; those sites just stay open.

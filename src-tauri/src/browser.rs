@@ -26,6 +26,12 @@ struct Waiting {
     reply: Sender<bool>,
 }
 
+/// Sites blocked while a focus session runs, and when it ends (unix seconds; 0 means none).
+struct FocusBlock {
+    sites: Vec<String>,
+    until: i64,
+}
+
 fn clients() -> &'static Mutex<Vec<Client>> {
     static CLIENTS: OnceLock<Mutex<Vec<Client>>> = OnceLock::new();
     CLIENTS.get_or_init(Default::default)
@@ -34,6 +40,41 @@ fn clients() -> &'static Mutex<Vec<Client>> {
 fn waiting() -> &'static Mutex<Vec<Waiting>> {
     static WAITING: OnceLock<Mutex<Vec<Waiting>>> = OnceLock::new();
     WAITING.get_or_init(Default::default)
+}
+
+fn focus_block() -> &'static Mutex<FocusBlock> {
+    static BLOCK: OnceLock<Mutex<FocusBlock>> = OnceLock::new();
+    BLOCK.get_or_init(|| {
+        Mutex::new(FocusBlock {
+            sites: Vec::new(),
+            until: 0,
+        })
+    })
+}
+
+fn focus_message(sites: &[String], until: i64) -> String {
+    json!({ "type": "focus", "sites": sites, "until": until }).to_string()
+}
+
+/// Tells every connected extension which sites to block until `until` (unix seconds; 0
+/// means no focus session is running). One that connects later is told the same.
+pub fn set_focus_sites(sites: Vec<String>, until: i64) {
+    let message = focus_message(&sites, until);
+    if let Ok(mut block) = focus_block().lock() {
+        *block = FocusBlock { sites, until };
+    }
+    let Ok(clients) = clients().lock() else {
+        return;
+    };
+    for client in clients.iter() {
+        let _ = client.outbox.send(message.clone());
+    }
+}
+
+fn send_focus(outbox: &Sender<String>) {
+    if let Ok(block) = focus_block().lock() {
+        let _ = outbox.send(focus_message(&block.sites, block.until));
+    }
 }
 
 static NEXT: AtomicU64 = AtomicU64::new(1);
@@ -110,8 +151,14 @@ fn serve(stream: TcpStream) {
     let (outbox, inbox) = mpsc::channel();
     let id = NEXT.fetch_add(1, Ordering::SeqCst);
     if let Ok(mut clients) = clients().lock() {
-        clients.push(Client { id, outbox });
+        clients.push(Client {
+            id,
+            outbox: outbox.clone(),
+        });
     }
+    // After the client is listed, so a session that starts as it connects isn't missed,
+    // and this send covers a session already running.
+    send_focus(&outbox);
     log::info!("browser extension connected");
     pump(&mut socket, &inbox);
     if let Ok(mut clients) = clients().lock() {

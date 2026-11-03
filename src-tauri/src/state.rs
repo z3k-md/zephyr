@@ -80,6 +80,8 @@ pub struct Persisted {
     pub power: Option<crate::power::Schedule>,
     /// Countdown timers started from the bar.
     pub timers: Vec<crate::countdown::Countdown>,
+    /// Focus sessions: the default length, the break, and the apps and sites put aside.
+    pub focus: crate::focus::FocusSettings,
     /// Notes open in their own windows, reopened where they were at the next start.
     pub note_windows: Vec<NoteWindow>,
     /// Whether Ctrl+R and Ctrl+Shift+S record and snapshot Zephyr's window for bug reports.
@@ -268,6 +270,7 @@ impl Persisted {
             onboarding_every_launch: false,
             power: None,
             timers: Vec::new(),
+            focus: crate::focus::FocusSettings::default(),
             note_windows: Vec::new(),
             bug_capture: true,
             protected_folders: false,

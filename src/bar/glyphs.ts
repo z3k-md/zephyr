@@ -19,6 +19,8 @@ export const GLYPHS: Record<string, string> = {
     '<rect x="5.5" y="3.5" width="13" height="17" rx="2"/><path d="M8.5 7.5h7M9 12h.01M12 12h.01M15 12h.01M9 16h.01M12 16h.01M15 16h.01"/>',
   conversion: '<path d="M5 8h13l-3-3M19 16H6l3 3"/>',
   clock: '<circle cx="12" cy="12" r="8"/><path d="M12 7.5V12l3 2"/>',
+  // A target, for a focus session. Distinct from the clock a plain timer uses.
+  focus: '<circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="7.5"/>',
   // A clock turning back, as browsers mark recent searches.
   history:
     '<path d="M4 12a8 8 0 1 0 2.4-5.7L4 8.7"/><path d="M4 4.5v4.2h4.2"/><path d="M12 8v4l2.8 1.8"/>',

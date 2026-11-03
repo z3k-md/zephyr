@@ -69,6 +69,7 @@ Type a utility's name to open it.
 - **Speed test**: download, upload and lag under load, from Cloudflare.
 - **Weather**: `weather`, `weather raleigh nc` or `stockholm sweden weather`, from Open-Meteo. Tab steps through the next 48 hours with each hour's chance of rain.
 - **Now playing**: what's playing shows at the end of the search row, with play, pause and skip. Ctrl+Space plays or pauses, and scrolling over it changes the volume.
+- **Timers and focus**: `timer 5m tea` counts down and notifies; `timer` offers 5, 10 and 15 minutes, and Enter on a running one cancels it. `focus` offers 25, 50 and 90 minutes; `focus 50m`, `focus 1h deep work` or `focus deep work` starts a focus session (one at a time; starting another replaces it). The footer shows it. Settings > Focus sets the default length, a break that starts as a timer when it ends, apps to minimize, and sites the browser extension blocks until it's done.
 - **Typing test**: `!type` runs a Monkeytype-style test (15/30/60 seconds or 10/25/50 words) with WPM, accuracy, consistency and personal bests.
 
 ### Links

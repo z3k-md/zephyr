@@ -11,6 +11,7 @@ mod countdown;
 mod cputemp;
 mod deeplink;
 mod files;
+mod focus;
 mod gpu;
 mod handoff;
 mod history;
@@ -244,6 +245,7 @@ pub fn run() {
             commands::power::power_cancel,
             commands::countdown::timer_start,
             commands::countdown::timer_cancel,
+            commands::countdown::save_focus,
             commands::media::now_playing,
             commands::media::now_playing_control,
             commands::media::now_playing_volume,

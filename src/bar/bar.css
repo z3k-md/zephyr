@@ -1295,6 +1295,65 @@ textarea.query {
   padding-left: 8px;
 }
 
+/* A running focus session shares the row with what's playing. Both shrink so the meters
+   still fit the bar's 680px. */
+.stats.focusing {
+  gap: 12px;
+}
+
+.stats.focusing .now-playing {
+  max-width: 168px;
+}
+
+.focus-strip {
+  display: inline-flex;
+  flex: 0 1 168px;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 200px;
+  color: var(--muted);
+}
+
+.focus-strip-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--active);
+}
+
+.focus-strip-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--fg);
+}
+
+.focus-strip-time {
+  flex: none;
+  color: var(--fg-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+.focus-strip-bar {
+  position: relative;
+  flex: none;
+  width: 36px;
+  height: 3px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--ink) 12%, transparent);
+}
+
+.focus-strip-fill {
+  position: absolute;
+  inset: 0;
+  border-radius: 2px;
+  background: var(--active);
+  transform-origin: left center;
+}
+
 .stats-divider {
   flex: none;
   width: 1px;
