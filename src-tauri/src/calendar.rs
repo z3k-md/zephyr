@@ -10,10 +10,11 @@ use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::Duration;
 
 use chrono::{
-    DateTime, Datelike, Days, Duration as ChronoDuration, FixedOffset, Local, LocalResult,
-    NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc, Weekday,
+    DateTime, Datelike, Days, Duration as ChronoDuration, LocalResult, NaiveDate, NaiveDateTime,
+    NaiveTime, TimeZone, Timelike, Utc, Weekday,
 };
 use chrono_tz::Tz;
+use futures_util::StreamExt;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -21,6 +22,8 @@ use crate::state::AppState;
 use crate::util::now_ms;
 
 const FRESH_MS: u64 = 5 * 60 * 1000;
+/// A feed larger than this is refused. Checked on Content-Length, then again while streaming.
+const MAX_FEED_BYTES: usize = 8 * 1024 * 1024;
 /// The keychain service. The account is the feed's id.
 pub const SECRET_SERVICE: &str = "com.zephyr.app.calendar";
 
@@ -175,7 +178,16 @@ fn run(app: AppHandle) {
         if !due.is_empty() {
             let mut results = Vec::new();
             for id in &due {
-                results.push((id.clone(), fetch_feed(id)));
+                // A panic in one feed is that feed's error. The thread keeps refreshing the rest.
+                let result = std::panic::catch_unwind(|| fetch_feed(id));
+                let result = match result {
+                    Ok(result) => result,
+                    Err(_) => {
+                        log::warn!("calendar feed panicked");
+                        Err("Couldn't read this calendar".into())
+                    }
+                };
+                results.push((id.clone(), result));
             }
             if let Ok(mut guard) = shared.lock() {
                 let fetched = now_ms();
@@ -305,17 +317,27 @@ fn fetch_feed(id: &str) -> Result<Vec<Event>, String> {
         .filter(|url| !url.is_empty())
         .ok_or_else(|| "The calendar link is missing".to_string())?;
     let owner = owner_email(&url);
+    let url =
+        normalize_feed_url(url.trim()).ok_or_else(|| "The calendar link is missing".to_string())?;
     let ics = tauri::async_runtime::block_on(fetch_ics(&url))?;
-    let (now, offset) = local_clock();
-    let mut events = parse_events(&ics, owner.as_deref(), now, offset)?;
+    let (now, zone) = local_clock();
+    let mut events = parse_events(&ics, owner.as_deref(), now, zone)?;
     if events.len() > 300 {
         events.truncate(300);
     }
     Ok(events)
 }
 
-fn local_clock() -> (DateTime<Utc>, FixedOffset) {
-    (Utc::now(), *Local::now().offset())
+fn local_clock() -> (DateTime<Utc>, Tz) {
+    (Utc::now(), local_zone())
+}
+
+/// The machine's zone. Floating times use the offset in effect on their own date.
+fn local_zone() -> Tz {
+    iana_time_zone::get_timezone()
+        .ok()
+        .and_then(|name| name.parse().ok())
+        .unwrap_or(chrono_tz::UTC)
 }
 
 async fn fetch_ics(url: &str) -> Result<String, String> {
@@ -330,14 +352,22 @@ async fn fetch_ics(url: &str) -> Result<String, String> {
     if !status.is_success() {
         return Err(format!("The calendar replied {status}"));
     }
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|_| "Couldn't read the calendar".to_string())?;
-    if bytes.len() > 8 * 1024 * 1024 {
+    if response
+        .content_length()
+        .is_some_and(|len| len > MAX_FEED_BYTES as u64)
+    {
         return Err("The calendar is too large".into());
     }
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
+    let mut body = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|_| "Couldn't read the calendar".to_string())?;
+        if body.len().saturating_add(chunk.len()) > MAX_FEED_BYTES {
+            return Err("The calendar is too large".into());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(String::from_utf8_lossy(&body).into_owned())
 }
 
 /// The next palette color that no feed is using.
@@ -350,20 +380,40 @@ pub fn next_color(feeds: &[Feed]) -> String {
         .to_string()
 }
 
-/// A name and an http(s) link, trimmed. The link is a secret and is not kept in settings.
+/// A name and an http(s) link, trimmed. `webcal://` and `webcals://` are stored as `https://`.
+/// The link is a secret and is not kept in settings.
 pub fn validate_link(name: &str, url: &str) -> Result<(String, String), String> {
     let name = validate_name(name)?;
     let url = url.trim();
     if url.chars().count() > 2000 {
         return Err("That link is too long".into());
     }
-    if !(url.starts_with("https://") || url.starts_with("http://")) {
-        return Err("The link has to start with https://".into());
-    }
     if url.chars().any(char::is_whitespace) {
         return Err("That link has a space in it".into());
     }
-    Ok((name, url.to_string()))
+    let url = normalize_feed_url(url).ok_or("The link has to start with https://")?;
+    Ok((name, url))
+}
+
+/// `webcal://` and `webcals://` become `https://`. Any other non-http scheme is refused.
+fn normalize_feed_url(url: &str) -> Option<String> {
+    if let Some(rest) = strip_prefix_ignore_ascii(url, "webcal://")
+        .or_else(|| strip_prefix_ignore_ascii(url, "webcals://"))
+    {
+        return Some(format!("https://{rest}"));
+    }
+    if strip_prefix_ignore_ascii(url, "https://").is_some()
+        || strip_prefix_ignore_ascii(url, "http://").is_some()
+    {
+        return Some(url.to_string());
+    }
+    None
+}
+
+fn strip_prefix_ignore_ascii<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
+    text.get(..prefix.len())
+        .filter(|head| head.eq_ignore_ascii_case(prefix))
+        .and_then(|_| text.get(prefix.len()..))
 }
 
 pub fn validate_name(name: &str) -> Result<String, String> {
@@ -449,7 +499,21 @@ struct Rule {
     by_day: Vec<ByDay>,
     by_month_day: Vec<i32>,
     by_month: Vec<u32>,
+    by_year_day: Vec<i32>,
+    by_week_no: Vec<i32>,
+    by_hour: Vec<u32>,
+    by_minute: Vec<u32>,
+    by_set_pos: Vec<i32>,
     wkst: Weekday,
+    /// A part this parser does not expand. The series then keeps its first time, plus any RDATE.
+    unhonored: Option<String>,
+}
+
+/// Weeks and days are civil days. Hours, minutes and seconds are exact.
+#[derive(Clone, Copy, Debug)]
+struct CalDuration {
+    days: i64,
+    seconds: i64,
 }
 
 #[derive(Clone, Debug)]
@@ -464,10 +528,11 @@ struct RawEvent {
     declined: bool,
     start: Stamp,
     end: Option<Stamp>,
-    duration: Option<ChronoDuration>,
+    duration: Option<CalDuration>,
     anchor: Anchor,
     rule: Option<Rule>,
     exdates: Vec<Stamp>,
+    rdates: Vec<Stamp>,
     recurrence_id: Option<Stamp>,
 }
 
@@ -483,23 +548,18 @@ fn parse_events(
     ics: &str,
     owner: Option<&str>,
     now: DateTime<Utc>,
-    offset: FixedOffset,
+    zone: Tz,
 ) -> Result<Vec<Event>, String> {
     if !looks_like_ics(ics) {
         return Err("That link isn't an iCal feed".into());
     }
-    let window = window_for(now, offset);
+    let window = window_for(now, zone);
     let mut events = Vec::new();
-    for group in group_events(read_events(ics, owner, offset)) {
+    for group in group_events(read_events(ics, owner, zone)) {
         if group.master.declined || is_cancelled(&group.master.status) {
             continue;
         }
-        events.extend(expand_group(
-            &group.master,
-            &group.overrides,
-            &window,
-            offset,
-        ));
+        events.extend(expand_group(&group.master, &group.overrides, &window, zone));
     }
     events.sort_by(|a, b| a.start_ms.cmp(&b.start_ms).then(a.title.cmp(&b.title)));
     Ok(events)
@@ -510,16 +570,16 @@ fn looks_like_ics(text: &str) -> bool {
     lower.contains("begin:vcalendar") || lower.contains("begin:vevent")
 }
 
-fn window_for(now: DateTime<Utc>, offset: FixedOffset) -> Window {
-    let today = now.with_timezone(&offset).date_naive();
+fn window_for(now: DateTime<Utc>, zone: Tz) -> Window {
+    let today = now.with_timezone(&zone).date_naive();
     let start_date = today.checked_sub_days(Days::new(1)).unwrap_or(today);
     let end_date = today.checked_add_days(Days::new(2)).unwrap_or(today);
     Window {
-        start: at_local(start_date, NaiveTime::MIN, offset).unwrap_or(now),
+        start: at_local(start_date, NaiveTime::MIN, zone).unwrap_or(now),
         end: at_local(
             end_date,
             NaiveTime::from_hms_opt(23, 59, 59).unwrap_or(NaiveTime::MIN),
-            offset,
+            zone,
         )
         .unwrap_or(now),
         start_date,
@@ -527,9 +587,9 @@ fn window_for(now: DateTime<Utc>, offset: FixedOffset) -> Window {
     }
 }
 
-fn at_local(date: NaiveDate, time: NaiveTime, offset: FixedOffset) -> Option<DateTime<Utc>> {
+fn at_local(date: NaiveDate, time: NaiveTime, zone: Tz) -> Option<DateTime<Utc>> {
     let naive = date.and_time(time);
-    match offset.from_local_datetime(&naive) {
+    match zone.from_local_datetime(&naive) {
         LocalResult::Single(dt) | LocalResult::Ambiguous(dt, _) => Some(dt.with_timezone(&Utc)),
         LocalResult::None => None,
     }
@@ -572,10 +632,10 @@ fn group_events(raws: Vec<RawEvent>) -> Vec<Group> {
     groups
 }
 
-fn read_events(ics: &str, owner: Option<&str>, offset: FixedOffset) -> Vec<RawEvent> {
+fn read_events(ics: &str, owner: Option<&str>, zone: Tz) -> Vec<RawEvent> {
     let mut events = Vec::new();
     for props in extract_vevents(ics) {
-        if let Some(raw) = build_raw(&props, owner, offset) {
+        if let Some(raw) = build_raw(&props, owner, zone) {
             events.push(raw);
         }
     }
@@ -633,7 +693,7 @@ fn unfold(text: &str) -> String {
     for line in lines {
         let line = line.trim_end_matches('\r');
         if line.starts_with([' ', '\t']) {
-            out.push_str(&line[1..]);
+            out.push_str(line.get(1..).unwrap_or(""));
         } else {
             out.push('\n');
             out.push_str(line);
@@ -696,7 +756,7 @@ fn split_unquoted_all(text: &str, sep: char) -> Vec<String> {
 fn unquote(value: &str) -> String {
     let value = value.trim();
     if value.len() >= 2 && value.starts_with('"') && value.ends_with('"') {
-        value[1..value.len() - 1].to_string()
+        value.get(1..value.len() - 1).unwrap_or(value).to_string()
     } else {
         value.to_string()
     }
@@ -726,12 +786,12 @@ fn param<'a>(params: &'a [(String, String)], name: &str) -> Option<&'a str> {
         .map(|(_, value)| value.as_str())
 }
 
-fn build_raw(props: &[ContentLine], owner: Option<&str>, offset: FixedOffset) -> Option<RawEvent> {
+fn build_raw(props: &[ContentLine], owner: Option<&str>, zone: Tz) -> Option<RawEvent> {
     let start_prop = props
         .iter()
         .find(|(name, _, _)| name.eq_ignore_ascii_case("DTSTART"))?;
     let anchor = anchor_of(&start_prop.1, &start_prop.2);
-    let start = parse_stamp(&start_prop.2, &start_prop.1, anchor, offset)?;
+    let start = parse_stamp(&start_prop.2, &start_prop.1, anchor, zone)?;
     let mut raw = RawEvent {
         uid: String::new(),
         summary: String::new(),
@@ -747,13 +807,14 @@ fn build_raw(props: &[ContentLine], owner: Option<&str>, offset: FixedOffset) ->
         anchor,
         rule: None,
         exdates: Vec::new(),
+        rdates: Vec::new(),
         recurrence_id: None,
     };
     for (name, params, value) in props {
         if name.eq_ignore_ascii_case("DTSTART") {
             continue;
         } else if name.eq_ignore_ascii_case("DTEND") {
-            raw.end = parse_stamp(value, params, anchor, offset);
+            raw.end = parse_stamp(value, params, anchor, zone);
         } else if name.eq_ignore_ascii_case("DURATION") {
             raw.duration = parse_duration(value);
         } else if name.eq_ignore_ascii_case("UID") {
@@ -771,12 +832,15 @@ fn build_raw(props: &[ContentLine], owner: Option<&str>, offset: FixedOffset) ->
         } else if name.eq_ignore_ascii_case("STATUS") {
             raw.status = value.trim().to_string();
         } else if name.eq_ignore_ascii_case("RRULE") && raw.rule.is_none() {
-            raw.rule = parse_rule(value, anchor, offset);
+            raw.rule = parse_rule(value, anchor, zone);
         } else if name.eq_ignore_ascii_case("EXDATE") {
             raw.exdates
-                .extend(parse_stamp_list(value, params, anchor, offset));
+                .extend(parse_stamp_list(value, params, anchor, zone));
+        } else if name.eq_ignore_ascii_case("RDATE") {
+            raw.rdates
+                .extend(parse_stamp_list(value, params, anchor, zone));
         } else if name.eq_ignore_ascii_case("RECURRENCE-ID") {
-            raw.recurrence_id = parse_stamp(value, params, anchor, offset);
+            raw.recurrence_id = parse_stamp(value, params, anchor, zone);
         } else if name.eq_ignore_ascii_case("ATTENDEE") && attendee_declined(params, value, owner) {
             raw.declined = true;
         }
@@ -809,9 +873,7 @@ fn attendee_declined(params: &[(String, String)], value: &str, owner: Option<&st
 
 fn email_of(value: &str) -> &str {
     let value = value.trim();
-    value
-        .get(7..)
-        .filter(|_| value.len() >= 7 && value[..7].eq_ignore_ascii_case("mailto:"))
+    strip_prefix_ignore_ascii(value, "mailto:")
         .unwrap_or(value)
         .trim()
 }
@@ -824,11 +886,11 @@ fn parse_stamp_list(
     value: &str,
     params: &[(String, String)],
     anchor: Anchor,
-    offset: FixedOffset,
+    zone: Tz,
 ) -> Vec<Stamp> {
     value
         .split(',')
-        .filter_map(|part| parse_stamp(part, params, anchor, offset))
+        .filter_map(|part| parse_stamp(part, params, anchor, zone))
         .collect()
 }
 
@@ -836,7 +898,7 @@ fn parse_stamp(
     value: &str,
     params: &[(String, String)],
     anchor: Anchor,
-    offset: FixedOffset,
+    zone: Tz,
 ) -> Option<Stamp> {
     let value = value.trim();
     if value.is_empty() {
@@ -854,18 +916,15 @@ fn parse_stamp(
     if let Some(tzid) = param(params, "TZID")
         && let Some(tz) = zone_from_tzid(tzid)
     {
-        return Some(Stamp::Instant(from_naive(naive, Anchor::Zoned(tz), offset)));
+        return Some(Stamp::Instant(from_naive(naive, Anchor::Zoned(tz), zone)));
     }
-    Some(Stamp::Instant(from_naive(naive, anchor, offset)))
+    Some(Stamp::Instant(from_naive(naive, anchor, zone)))
 }
 
 fn parse_date(value: &str) -> Option<NaiveDate> {
-    if value.len() < 8 {
-        return None;
-    }
-    let year: i32 = value[0..4].parse().ok()?;
-    let month: u32 = value[4..6].parse().ok()?;
-    let day: u32 = value[6..8].parse().ok()?;
+    let year: i32 = value.get(0..4)?.parse().ok()?;
+    let month: u32 = value.get(4..6)?.parse().ok()?;
+    let day: u32 = value.get(6..8)?.parse().ok()?;
     NaiveDate::from_ymd_opt(year, month, day)
 }
 
@@ -873,16 +932,13 @@ fn parse_naive(value: &str) -> Option<NaiveDateTime> {
     let value = value.trim_end_matches(['Z', 'z']);
     let (date, time) = value.split_once('T')?;
     let date = parse_date(date)?;
-    if time.len() < 6 {
-        return None;
-    }
-    let hour: u32 = time[0..2].parse().ok()?;
-    let minute: u32 = time[2..4].parse().ok()?;
-    let second: u32 = time[4..6].parse().ok()?;
+    let hour: u32 = time.get(0..2)?.parse().ok()?;
+    let minute: u32 = time.get(2..4)?.parse().ok()?;
+    let second: u32 = time.get(4..6)?.parse().ok()?;
     date.and_hms_opt(hour, minute, second)
 }
 
-fn parse_duration(value: &str) -> Option<ChronoDuration> {
+fn parse_duration(value: &str) -> Option<CalDuration> {
     let mut rest = value.trim().strip_prefix(['P', 'p'])?;
     let mut weeks = 0i64;
     let mut days = 0i64;
@@ -893,7 +949,7 @@ fn parse_duration(value: &str) -> Option<ChronoDuration> {
     while !rest.is_empty() {
         if rest.starts_with(['T', 't']) {
             time = true;
-            rest = &rest[1..];
+            rest = rest.get(1..)?;
             continue;
         }
         let digits = rest
@@ -902,26 +958,27 @@ fn parse_duration(value: &str) -> Option<ChronoDuration> {
         if digits == 0 {
             return None;
         }
-        let count: i64 = rest[..digits].parse().ok()?;
-        let unit = rest[digits..].chars().next()?;
-        rest = &rest[digits + unit.len_utf8()..];
+        let count: i64 = rest.get(..digits)?.parse().ok()?;
+        let unit = rest.get(digits..)?.chars().next()?;
+        rest = rest.get(digits + unit.len_utf8()..)?;
         match unit.to_ascii_uppercase() {
             'W' => weeks = count,
             'D' => days = count,
             'H' => hours = count,
             'M' if time => minutes = count,
-            'M' => days += count.saturating_mul(30),
+            'M' => days = days.saturating_add(count.saturating_mul(30)),
             'S' => seconds = count,
-            'Y' => days += count.saturating_mul(365),
+            'Y' => days = days.saturating_add(count.saturating_mul(365)),
             _ => return None,
         }
     }
-    Some(
-        ChronoDuration::days(weeks.saturating_mul(7).saturating_add(days))
-            + ChronoDuration::hours(hours)
-            + ChronoDuration::minutes(minutes)
-            + ChronoDuration::seconds(seconds),
-    )
+    Some(CalDuration {
+        days: weeks.saturating_mul(7).saturating_add(days),
+        seconds: hours
+            .saturating_mul(3600)
+            .saturating_add(minutes.saturating_mul(60))
+            .saturating_add(seconds),
+    })
 }
 
 fn zone_from_tzid(tzid: &str) -> Option<Tz> {
@@ -999,14 +1056,11 @@ fn windows_zone(name: &str) -> Option<&'static str> {
     })
 }
 
-fn from_naive(naive: NaiveDateTime, anchor: Anchor, offset: FixedOffset) -> DateTime<Utc> {
+fn from_naive(naive: NaiveDateTime, anchor: Anchor, zone: Tz) -> DateTime<Utc> {
     match anchor {
         Anchor::Zoned(tz) => zone_to_utc(naive, &tz),
         Anchor::Utc => naive.and_utc(),
-        Anchor::Floating => match offset.from_local_datetime(&naive) {
-            LocalResult::Single(dt) | LocalResult::Ambiguous(dt, _) => dt.with_timezone(&Utc),
-            LocalResult::None => naive.and_utc(),
-        },
+        Anchor::Floating => zone_to_utc(naive, &zone),
     }
 }
 
@@ -1026,15 +1080,15 @@ fn zone_to_utc(naive: NaiveDateTime, tz: &Tz) -> DateTime<Utc> {
     }
 }
 
-fn to_naive(instant: DateTime<Utc>, anchor: Anchor, offset: FixedOffset) -> NaiveDateTime {
+fn to_naive(instant: DateTime<Utc>, anchor: Anchor, zone: Tz) -> NaiveDateTime {
     match anchor {
         Anchor::Zoned(tz) => instant.with_timezone(&tz).naive_local(),
         Anchor::Utc => instant.naive_utc(),
-        Anchor::Floating => instant.with_timezone(&offset).naive_local(),
+        Anchor::Floating => instant.with_timezone(&zone).naive_local(),
     }
 }
 
-fn parse_rule(value: &str, anchor: Anchor, offset: FixedOffset) -> Option<Rule> {
+fn parse_rule(value: &str, anchor: Anchor, zone: Tz) -> Option<Rule> {
     let mut freq = None;
     let mut interval = 1i64;
     let mut count = None;
@@ -1042,39 +1096,98 @@ fn parse_rule(value: &str, anchor: Anchor, offset: FixedOffset) -> Option<Rule> 
     let mut by_day = Vec::new();
     let mut by_month_day = Vec::new();
     let mut by_month = Vec::new();
+    let mut by_year_day = Vec::new();
+    let mut by_week_no = Vec::new();
+    let mut by_hour = Vec::new();
+    let mut by_minute = Vec::new();
+    let mut by_set_pos = Vec::new();
     let mut wkst = Weekday::Mon;
+    let mut unhonored = None;
     for part in value.split(';') {
         let Some((key, val)) = part.split_once('=') else {
             continue;
         };
-        match key.to_ascii_uppercase().as_str() {
+        let key = key.to_ascii_uppercase();
+        match key.as_str() {
             "FREQ" => freq = parse_freq(val),
             "INTERVAL" => interval = val.parse::<i64>().unwrap_or(1).max(1),
             "COUNT" => count = val.parse().ok(),
-            "UNTIL" => until = parse_stamp(val, &[], anchor, offset),
-            "BYDAY" => by_day = parse_byday(val),
-            "BYMONTHDAY" => by_month_day = parse_ints(val),
-            "BYMONTH" => {
-                by_month = parse_ints(val)
-                    .into_iter()
-                    .filter(|month| (1..=12).contains(month))
-                    .map(|month| month as u32)
-                    .collect();
-            }
+            "UNTIL" => until = parse_stamp(val, &[], anchor, zone),
+            "BYDAY" => match parse_byday(val) {
+                days if days.is_empty() => note_unhonored(&mut unhonored, &key),
+                days => by_day = days,
+            },
+            "BYMONTHDAY" => match kept_ints(val, |day| day != 0 && (-31..=31).contains(&day)) {
+                Some(days) => by_month_day = days,
+                None => note_unhonored(&mut unhonored, &key),
+            },
+            "BYMONTH" => match kept_ints(val, |month| (1..=12).contains(&month)) {
+                Some(months) => by_month = months.into_iter().map(|month| month as u32).collect(),
+                None => note_unhonored(&mut unhonored, &key),
+            },
+            "BYYEARDAY" => match kept_ints(val, |day| day != 0 && (-366..=366).contains(&day)) {
+                Some(days) => by_year_day = days,
+                None => note_unhonored(&mut unhonored, &key),
+            },
+            "BYWEEKNO" => match kept_ints(val, |week| week != 0 && (-53..=53).contains(&week)) {
+                Some(weeks) => by_week_no = weeks,
+                None => note_unhonored(&mut unhonored, &key),
+            },
+            "BYHOUR" => match kept_ints(val, |hour| (0..24).contains(&hour)) {
+                Some(hours) => by_hour = hours.into_iter().map(|hour| hour as u32).collect(),
+                None => note_unhonored(&mut unhonored, &key),
+            },
+            "BYMINUTE" => match kept_ints(val, |minute| (0..60).contains(&minute)) {
+                Some(minutes) => {
+                    by_minute = minutes.into_iter().map(|minute| minute as u32).collect();
+                }
+                None => note_unhonored(&mut unhonored, &key),
+            },
+            "BYSETPOS" => match kept_ints(val, |pos| pos != 0) {
+                Some(positions) => by_set_pos = positions,
+                None => note_unhonored(&mut unhonored, &key),
+            },
             "WKST" => wkst = weekday_token(val).unwrap_or(Weekday::Mon),
-            _ => {}
+            _ => note_unhonored(&mut unhonored, &key),
         }
     }
+    let freq = freq?;
+    // A numbered weekday is only defined for months and years. Elsewhere it would match
+    // every one of those weekdays, which is a wider series than the rule asked for.
+    if by_day.iter().any(|day| day.nth.is_some()) && !matches!(freq, Freq::Monthly | Freq::Yearly) {
+        note_unhonored(&mut unhonored, "BYDAY");
+    }
     Some(Rule {
-        freq: freq?,
+        freq,
         interval,
         count,
         until,
         by_day,
         by_month_day,
         by_month,
+        by_year_day,
+        by_week_no,
+        by_hour,
+        by_minute,
+        by_set_pos,
         wkst,
+        unhonored,
     })
+}
+
+fn note_unhonored(slot: &mut Option<String>, part: &str) {
+    if slot.is_none() {
+        *slot = Some(part.to_string());
+    }
+}
+
+fn kept_ints(value: &str, keep: impl Fn(i32) -> bool) -> Option<Vec<i32>> {
+    let parsed = parse_ints(value);
+    if parsed.is_empty() {
+        return None;
+    }
+    let kept: Vec<i32> = parsed.into_iter().filter(|number| keep(*number)).collect();
+    if kept.is_empty() { None } else { Some(kept) }
 }
 
 fn parse_freq(value: &str) -> Option<Freq> {
@@ -1095,16 +1208,12 @@ fn parse_byday(value: &str) -> Vec<ByDay> {
 
 fn parse_byday_token(token: &str) -> Option<ByDay> {
     let token = token.trim();
-    if token.len() < 2 {
-        return None;
+    if let Some(weekday) = weekday_token(token) {
+        return Some(ByDay { nth: None, weekday });
     }
-    if token.len() == 2 {
-        return Some(ByDay {
-            nth: None,
-            weekday: weekday_token(token)?,
-        });
-    }
-    let (nth, day) = token.split_at(token.len() - 2);
+    let split = token.len().checked_sub(2)?;
+    let nth = token.get(..split)?;
+    let day = token.get(split..)?;
     Some(ByDay {
         nth: Some(nth.parse().ok()?),
         weekday: weekday_token(day)?,
@@ -1135,33 +1244,39 @@ fn expand_group(
     master: &RawEvent,
     overrides: &[RawEvent],
     window: &Window,
-    offset: FixedOffset,
+    zone: Tz,
 ) -> Vec<Event> {
-    let Some((start, end)) = span(master) else {
+    let Some((start, end)) = span(master, zone) else {
         return Vec::new();
     };
-    let duration = positive_duration(duration_between(start, end));
+    // A DURATION's days stay civil. An end time is a fixed length, measured on the first instance.
+    let duration = match master.duration {
+        Some(duration) if master.end.is_none() => positive_duration(duration),
+        _ => positive_duration(duration_between(start, end)),
+    };
     let mut produced = match &master.rule {
-        Some(rule) => generate(master, rule, window, offset),
+        Some(rule) => generate(master, rule, window, zone),
         None => vec![start],
     };
+    produced.extend(master.rdates.iter().copied());
+    produced = dedup_stamps(produced, master.anchor, zone);
     produced.retain(|stamp| {
         !master
             .exdates
             .iter()
-            .any(|ex| same_stamp(*stamp, *ex, master.anchor, offset))
+            .any(|ex| same_stamp(*stamp, *ex, master.anchor, zone))
     });
     let mut events = Vec::new();
     for stamp in produced {
         if overrides.iter().any(|extra| {
             extra
                 .recurrence_id
-                .is_some_and(|id| same_stamp(stamp, id, master.anchor, offset))
+                .is_some_and(|id| same_stamp(stamp, id, master.anchor, zone))
         }) {
             continue;
         }
-        let end = add_duration(stamp, duration);
-        if let Some(event) = build_event(master, stamp, end, window, offset) {
+        let end = add_duration(stamp, duration, master.anchor, zone);
+        if let Some(event) = build_event(master, stamp, end, window) {
             events.push(event);
         }
     }
@@ -1170,15 +1285,15 @@ fn expand_group(
             continue;
         }
         let merged = overlay(master, extra);
-        let Some((start, end)) = span(&merged) else {
+        let Some((start, end)) = span(&merged, zone) else {
             continue;
         };
         let end = if extra.end.is_none() && extra.duration.is_none() {
-            add_duration(start, duration)
+            add_duration(start, duration, merged.anchor, zone)
         } else {
             end
         };
-        if let Some(event) = build_event(&merged, start, end, window, offset) {
+        if let Some(event) = build_event(&merged, start, end, window) {
             events.push(event);
         }
     }
@@ -1212,16 +1327,17 @@ fn overlay(master: &RawEvent, extra: &RawEvent) -> RawEvent {
     event.rule = None;
     event.recurrence_id = extra.recurrence_id;
     event.exdates.clear();
+    event.rdates.clear();
     event
 }
 
-fn span(raw: &RawEvent) -> Option<(Stamp, Stamp)> {
+fn span(raw: &RawEvent, zone: Tz) -> Option<(Stamp, Stamp)> {
     let start = raw.start;
     if let Some(end) = raw.end {
         return Some((start, end));
     }
     if let Some(duration) = raw.duration {
-        return Some((start, add_duration(start, duration)));
+        return Some((start, add_duration(start, duration, raw.anchor, zone)));
     }
     let end = match start {
         Stamp::Date(date) => Stamp::Date(date.checked_add_days(Days::new(1)).unwrap_or(date)),
@@ -1230,62 +1346,115 @@ fn span(raw: &RawEvent) -> Option<(Stamp, Stamp)> {
     Some((start, end))
 }
 
-fn duration_between(start: Stamp, end: Stamp) -> ChronoDuration {
+fn duration_between(start: Stamp, end: Stamp) -> CalDuration {
     match (start, end) {
-        (Stamp::Instant(start), Stamp::Instant(end)) => end.signed_duration_since(start),
-        (Stamp::Date(start), Stamp::Date(end)) => end.signed_duration_since(start),
-        _ => ChronoDuration::zero(),
+        (Stamp::Instant(start), Stamp::Instant(end)) => CalDuration {
+            days: 0,
+            seconds: end.signed_duration_since(start).num_seconds(),
+        },
+        (Stamp::Date(start), Stamp::Date(end)) => CalDuration {
+            days: end.signed_duration_since(start).num_days(),
+            seconds: 0,
+        },
+        _ => CalDuration {
+            days: 0,
+            seconds: 0,
+        },
     }
 }
 
-fn positive_duration(duration: ChronoDuration) -> ChronoDuration {
-    if duration < ChronoDuration::zero() {
-        ChronoDuration::zero()
+fn positive_duration(duration: CalDuration) -> CalDuration {
+    if duration.days < 0 || (duration.days == 0 && duration.seconds < 0) {
+        CalDuration {
+            days: 0,
+            seconds: 0,
+        }
     } else {
         duration
     }
 }
 
-fn add_duration(start: Stamp, duration: ChronoDuration) -> Stamp {
+fn add_duration(start: Stamp, duration: CalDuration, anchor: Anchor, zone: Tz) -> Stamp {
     match start {
-        Stamp::Instant(instant) => Stamp::Instant(instant + duration),
         Stamp::Date(date) => {
-            let days = duration.num_days().max(0) as u64;
-            let days = if days == 0 && duration > ChronoDuration::zero() {
+            let days = if duration.days > 0 {
+                duration.days as u64
+            } else if duration.seconds > 0 {
                 1
             } else {
-                days
+                0
             };
             Stamp::Date(date.checked_add_days(Days::new(days)).unwrap_or(date))
+        }
+        Stamp::Instant(instant) => {
+            if duration.days == 0 {
+                return Stamp::Instant(instant + ChronoDuration::seconds(duration.seconds));
+            }
+            let naive = to_naive(instant, anchor, zone);
+            let Some(shifted) = naive
+                .date()
+                .checked_add_signed(ChronoDuration::days(duration.days))
+                .and_then(|date| {
+                    date.and_time(naive.time())
+                        .checked_add_signed(ChronoDuration::seconds(duration.seconds))
+                })
+            else {
+                return Stamp::Instant(instant);
+            };
+            Stamp::Instant(from_naive(shifted, anchor, zone))
         }
     }
 }
 
-fn same_stamp(a: Stamp, b: Stamp, anchor: Anchor, offset: FixedOffset) -> bool {
+fn dedup_stamps(stamps: Vec<Stamp>, anchor: Anchor, zone: Tz) -> Vec<Stamp> {
+    let mut kept = Vec::new();
+    for stamp in stamps {
+        if !kept
+            .iter()
+            .any(|have| same_stamp(*have, stamp, anchor, zone))
+        {
+            kept.push(stamp);
+        }
+    }
+    kept
+}
+
+fn same_stamp(a: Stamp, b: Stamp, anchor: Anchor, zone: Tz) -> bool {
     match (a, b) {
         (Stamp::Date(a), Stamp::Date(b)) => a == b,
         (Stamp::Instant(a), Stamp::Instant(b)) => a.timestamp() == b.timestamp(),
         (Stamp::Date(date), Stamp::Instant(instant))
         | (Stamp::Instant(instant), Stamp::Date(date)) => {
-            to_naive(instant, anchor, offset).date() == date
+            to_naive(instant, anchor, zone).date() == date
         }
     }
 }
 
-fn generate(master: &RawEvent, rule: &Rule, window: &Window, offset: FixedOffset) -> Vec<Stamp> {
-    let Some(start_naive) = stamp_naive(master.start, master.anchor, offset) else {
+struct When {
+    anchor: Anchor,
+    zone: Tz,
+    date_only: bool,
+}
+
+fn generate(master: &RawEvent, rule: &Rule, window: &Window, zone: Tz) -> Vec<Stamp> {
+    if let Some(part) = &rule.unhonored {
+        log::warn!("calendar recurrence skips {part}");
+        return vec![master.start];
+    }
+    let Some(start_naive) = stamp_naive(master.start, master.anchor, zone) else {
         return vec![master.start];
     };
     let hard_end = rule
         .until
-        .and_then(|until| stamp_naive(until, master.anchor, offset))
-        .unwrap_or_else(|| to_naive(window.end, master.anchor, offset));
-    let hard_end = hard_end.min(to_naive(window.end, master.anchor, offset));
-    let not_before = to_naive(
-        window.start - ChronoDuration::days(2),
-        master.anchor,
-        offset,
-    );
+        .and_then(|until| stamp_naive(until, master.anchor, zone))
+        .unwrap_or_else(|| to_naive(window.end, master.anchor, zone));
+    let hard_end = hard_end.min(to_naive(window.end, master.anchor, zone));
+    let not_before = to_naive(window.start - ChronoDuration::days(2), master.anchor, zone);
+    let when = When {
+        anchor: master.anchor,
+        zone,
+        date_only: matches!(master.start, Stamp::Date(_)),
+    };
     let mut times = match rule.freq {
         Freq::Minutely => gen_stepped(
             start_naive,
@@ -1293,6 +1462,7 @@ fn generate(master: &RawEvent, rule: &Rule, window: &Window, offset: FixedOffset
             not_before,
             ChronoDuration::minutes(rule.interval),
             rule,
+            &when,
             true,
         ),
         Freq::Hourly => gen_stepped(
@@ -1301,6 +1471,7 @@ fn generate(master: &RawEvent, rule: &Rule, window: &Window, offset: FixedOffset
             not_before,
             ChronoDuration::hours(rule.interval),
             rule,
+            &when,
             true,
         ),
         Freq::Daily => gen_stepped(
@@ -1309,51 +1480,43 @@ fn generate(master: &RawEvent, rule: &Rule, window: &Window, offset: FixedOffset
             not_before,
             ChronoDuration::days(rule.interval),
             rule,
+            &when,
             false,
         ),
-        Freq::Weekly => gen_weekly(start_naive, hard_end, rule),
-        Freq::Monthly => gen_monthly(start_naive, hard_end, rule),
-        Freq::Yearly => gen_yearly(start_naive, hard_end, rule),
+        Freq::Weekly => gen_weekly(start_naive, hard_end, rule, &when),
+        Freq::Monthly => gen_monthly(start_naive, hard_end, rule, &when),
+        Freq::Yearly => gen_yearly(start_naive, hard_end, rule, &when),
     };
-    ensure_start(&mut times, start_naive, rule.count, hard_end);
     times.sort();
     times.dedup();
     times
         .into_iter()
         .map(|naive| {
-            if matches!(master.start, Stamp::Date(_)) {
+            if when.date_only {
                 Stamp::Date(naive.date())
             } else {
-                Stamp::Instant(from_naive(naive, master.anchor, offset))
+                Stamp::Instant(from_naive(naive, master.anchor, zone))
             }
         })
         .collect()
 }
 
-fn stamp_naive(stamp: Stamp, anchor: Anchor, offset: FixedOffset) -> Option<NaiveDateTime> {
+fn stamp_naive(stamp: Stamp, anchor: Anchor, zone: Tz) -> Option<NaiveDateTime> {
     Some(match stamp {
-        Stamp::Instant(instant) => to_naive(instant, anchor, offset),
+        Stamp::Instant(instant) => to_naive(instant, anchor, zone),
         Stamp::Date(date) => date.and_time(NaiveTime::MIN),
     })
 }
 
-fn ensure_start(
-    times: &mut Vec<NaiveDateTime>,
-    start: NaiveDateTime,
-    count: Option<u32>,
-    hard_end: NaiveDateTime,
-) {
-    if start > hard_end || times.contains(&start) {
-        return;
-    }
-    times.insert(0, start);
-    if let Some(max) = count {
-        times.truncate(max as usize);
-    }
-}
-
 fn filters_empty(rule: &Rule) -> bool {
-    rule.by_day.is_empty() && rule.by_month_day.is_empty() && rule.by_month.is_empty()
+    rule.by_day.is_empty()
+        && rule.by_month_day.is_empty()
+        && rule.by_month.is_empty()
+        && rule.by_year_day.is_empty()
+        && rule.by_week_no.is_empty()
+        && rule.by_hour.is_empty()
+        && rule.by_minute.is_empty()
+        && rule.by_set_pos.is_empty()
 }
 
 fn gen_stepped(
@@ -1362,12 +1525,14 @@ fn gen_stepped(
     not_before: NaiveDateTime,
     step: ChronoDuration,
     rule: &Rule,
+    when: &When,
     jump: bool,
 ) -> Vec<NaiveDateTime> {
     let mut out = Vec::new();
     let mut seen = 0u32;
     let mut cursor = start;
-    if jump && filters_empty(rule) && start < not_before {
+    // Jumping counts every step, including a local time that does not exist, so only UTC uses it.
+    if jump && filters_empty(rule) && matches!(when.anchor, Anchor::Utc) && start < not_before {
         let steps = steps_between(start, not_before, step);
         if rule.count.is_some_and(|max| steps as u32 >= max) {
             return out;
@@ -1380,12 +1545,14 @@ fn gen_stepped(
     let mut guard = 0u32;
     while cursor <= hard_end && guard < 100_000 {
         guard += 1;
-        if day_ok(cursor, rule) {
-            seen += 1;
-            if rule.count.is_some_and(|max| seen > max) {
-                break;
+        if occurrence_ok(cursor, rule) && time_exists(cursor, when) {
+            for time in select_setpos(vec![cursor], &rule.by_set_pos) {
+                seen += 1;
+                if rule.count.is_some_and(|max| seen > max) {
+                    return out;
+                }
+                out.push(time);
             }
-            out.push(cursor);
         }
         let Some(next) = cursor.checked_add_signed(step) else {
             break;
@@ -1411,17 +1578,12 @@ fn add_steps(start: NaiveDateTime, step: ChronoDuration, steps: i64) -> Option<N
     start.checked_add_signed(ChronoDuration::seconds(secs))
 }
 
-fn day_ok(time: NaiveDateTime, rule: &Rule) -> bool {
-    if !rule.by_month.is_empty() && !rule.by_month.contains(&time.month()) {
-        return false;
-    }
-    if rule.by_day.is_empty() {
-        return true;
-    }
-    rule.by_day.iter().any(|day| day.weekday == time.weekday())
-}
-
-fn gen_weekly(start: NaiveDateTime, hard_end: NaiveDateTime, rule: &Rule) -> Vec<NaiveDateTime> {
+fn gen_weekly(
+    start: NaiveDateTime,
+    hard_end: NaiveDateTime,
+    rule: &Rule,
+    when: &When,
+) -> Vec<NaiveDateTime> {
     let days: Vec<Weekday> = if rule.by_day.is_empty() {
         vec![start.weekday()]
     } else {
@@ -1445,22 +1607,14 @@ fn gen_weekly(start: NaiveDateTime, hard_end: NaiveDateTime, rule: &Rule) -> Vec
                 continue;
             };
             let time = date.and_time(start.time());
-            if time >= start && time <= hard_end && month_ok(time, rule) {
+            if occurrence_ok(time, rule) {
                 batch.push(time);
             }
         }
         batch.sort();
         batch.dedup();
-        let mut stop = false;
-        for time in batch {
-            seen += 1;
-            if rule.count.is_some_and(|max| seen > max) {
-                stop = true;
-                break;
-            }
-            out.push(time);
-        }
-        if stop {
+        let batch = select_setpos(batch, &rule.by_set_pos);
+        if !accept_times(&mut out, &mut seen, batch, start, hard_end, rule, when) {
             break;
         }
         week += rule.interval;
@@ -1479,11 +1633,12 @@ fn weekday_offset(day: Weekday, wkst: Weekday) -> i64 {
     (day - start).rem_euclid(7)
 }
 
-fn month_ok(time: NaiveDateTime, rule: &Rule) -> bool {
-    rule.by_month.is_empty() || rule.by_month.contains(&time.month())
-}
-
-fn gen_monthly(start: NaiveDateTime, hard_end: NaiveDateTime, rule: &Rule) -> Vec<NaiveDateTime> {
+fn gen_monthly(
+    start: NaiveDateTime,
+    hard_end: NaiveDateTime,
+    rule: &Rule,
+    when: &When,
+) -> Vec<NaiveDateTime> {
     let mut out = Vec::new();
     let mut seen = 0u32;
     let mut step = 0i32;
@@ -1495,17 +1650,23 @@ fn gen_monthly(start: NaiveDateTime, hard_end: NaiveDateTime, rule: &Rule) -> Ve
         if month_start > hard_end.date() {
             break;
         }
-        if month_ok_month(month, rule)
-            && !push_month(&mut out, &mut seen, year, month, start, hard_end, rule)
-        {
-            break;
+        if month_ok_month(month, rule) {
+            let batch = select_setpos(month_times(year, month, start, rule), &rule.by_set_pos);
+            if !accept_times(&mut out, &mut seen, batch, start, hard_end, rule, when) {
+                break;
+            }
         }
         step += rule.interval as i32;
     }
     out
 }
 
-fn gen_yearly(start: NaiveDateTime, hard_end: NaiveDateTime, rule: &Rule) -> Vec<NaiveDateTime> {
+fn gen_yearly(
+    start: NaiveDateTime,
+    hard_end: NaiveDateTime,
+    rule: &Rule,
+    when: &When,
+) -> Vec<NaiveDateTime> {
     let mut out = Vec::new();
     let mut seen = 0u32;
     let mut year = start.year();
@@ -1517,14 +1678,14 @@ fn gen_yearly(start: NaiveDateTime, hard_end: NaiveDateTime, rule: &Rule) -> Vec
         } else {
             rule.by_month.clone()
         };
-        let mut stop = false;
+        let mut batch = Vec::new();
         for month in months {
-            if !push_month(&mut out, &mut seen, year, month, start, hard_end, rule) {
-                stop = true;
-                break;
-            }
+            batch.extend(month_times(year, month, start, rule));
         }
-        if stop {
+        batch.sort();
+        batch.dedup();
+        let batch = select_setpos(batch, &rule.by_set_pos);
+        if !accept_times(&mut out, &mut seen, batch, start, hard_end, rule, when) {
             break;
         }
         year += rule.interval as i32;
@@ -1536,25 +1697,40 @@ fn month_ok_month(month: u32, rule: &Rule) -> bool {
     rule.by_month.is_empty() || rule.by_month.contains(&month)
 }
 
-fn push_month(
-    out: &mut Vec<NaiveDateTime>,
-    seen: &mut u32,
-    year: i32,
-    month: u32,
-    start: NaiveDateTime,
-    hard_end: NaiveDateTime,
-    rule: &Rule,
-) -> bool {
+fn month_times(year: i32, month: u32, start: NaiveDateTime, rule: &Rule) -> Vec<NaiveDateTime> {
     let mut batch = Vec::new();
     for date in month_dates(year, month, start, rule) {
         let time = date.and_time(start.time());
-        if time >= start && time <= hard_end {
+        if occurrence_ok(time, rule) {
             batch.push(time);
         }
     }
     batch.sort();
     batch.dedup();
-    for time in batch {
+    batch
+}
+
+/// Keeps occurrences inside the window and the count. Times the zone skips are not counted.
+/// False means the series is finished.
+fn accept_times(
+    out: &mut Vec<NaiveDateTime>,
+    seen: &mut u32,
+    times: Vec<NaiveDateTime>,
+    start: NaiveDateTime,
+    hard_end: NaiveDateTime,
+    rule: &Rule,
+    when: &When,
+) -> bool {
+    for time in times {
+        if time < start {
+            continue;
+        }
+        if time > hard_end {
+            return false;
+        }
+        if !time_exists(time, when) {
+            continue;
+        }
         *seen += 1;
         if rule.count.is_some_and(|max| *seen > max) {
             return false;
@@ -1562,6 +1738,122 @@ fn push_month(
         out.push(time);
     }
     true
+}
+
+fn time_exists(naive: NaiveDateTime, when: &When) -> bool {
+    if when.date_only {
+        return true;
+    }
+    let zone = match when.anchor {
+        Anchor::Utc => return true,
+        Anchor::Zoned(tz) => tz,
+        Anchor::Floating => when.zone,
+    };
+    !matches!(zone.from_local_datetime(&naive), LocalResult::None)
+}
+
+fn select_setpos(times: Vec<NaiveDateTime>, positions: &[i32]) -> Vec<NaiveDateTime> {
+    if positions.is_empty() {
+        return times;
+    }
+    let len = times.len() as i32;
+    let mut picked = Vec::new();
+    for pos in positions {
+        let index = if *pos > 0 { *pos - 1 } else { len + *pos };
+        if (0..len).contains(&index) {
+            picked.push(times[index as usize]);
+        }
+    }
+    picked.sort();
+    picked.dedup();
+    picked
+}
+
+fn occurrence_ok(time: NaiveDateTime, rule: &Rule) -> bool {
+    (rule.by_month.is_empty() || rule.by_month.contains(&time.month()))
+        && month_day_matches(time.date(), &rule.by_month_day)
+        && year_day_matches(time.date(), &rule.by_year_day)
+        && week_matches(time.date(), &rule.by_week_no, rule.wkst)
+        && (rule.by_hour.is_empty() || rule.by_hour.contains(&time.hour()))
+        && (rule.by_minute.is_empty() || rule.by_minute.contains(&time.minute()))
+        && byday_matches(time.date(), rule)
+}
+
+fn month_day_matches(date: NaiveDate, days: &[i32]) -> bool {
+    days.is_empty()
+        || days
+            .iter()
+            .any(|day| month_day(date.year(), date.month(), *day) == Some(date))
+}
+
+fn year_day_matches(date: NaiveDate, days: &[i32]) -> bool {
+    if days.is_empty() {
+        return true;
+    }
+    let last = NaiveDate::from_ymd_opt(date.year(), 12, 31).map_or(365, |end| end.ordinal() as i32);
+    let ordinal = date.ordinal() as i32;
+    days.iter().any(|day| {
+        let want = if *day > 0 { *day } else { last + *day + 1 };
+        want == ordinal
+    })
+}
+
+fn week_matches(date: NaiveDate, weeks: &[i32], wkst: Weekday) -> bool {
+    if weeks.is_empty() {
+        return true;
+    }
+    let Some((year, week)) = week_no(date, wkst) else {
+        return false;
+    };
+    let total = weeks_in_year(year, wkst).unwrap_or(week);
+    weeks.iter().any(|want| {
+        let number = if *want > 0 { *want } else { total + *want + 1 };
+        number == week
+    })
+}
+
+fn byday_matches(date: NaiveDate, rule: &Rule) -> bool {
+    rule.by_day.is_empty()
+        || rule
+            .by_day
+            .iter()
+            .any(|day| day.weekday == date.weekday() && nth_matches(date, day.nth))
+}
+
+fn nth_matches(date: NaiveDate, nth: Option<i8>) -> bool {
+    let Some(nth) = nth else {
+        return true;
+    };
+    nth_weekday(date.year(), date.month(), nth, date.weekday()) == Some(date)
+}
+
+/// Week 1 is the first week, starting on `wkst`, with at least four days in the year.
+fn week_no(date: NaiveDate, wkst: Weekday) -> Option<(i32, i32)> {
+    for year in [date.year() + 1, date.year(), date.year() - 1] {
+        let start = week1_start(year, wkst)?;
+        let next = week1_start(year + 1, wkst)?;
+        if date >= start && date < next {
+            let week = ((date - start).num_days() / 7) as i32 + 1;
+            return Some((year, week));
+        }
+    }
+    None
+}
+
+fn weeks_in_year(year: i32, wkst: Weekday) -> Option<i32> {
+    let start = week1_start(year, wkst)?;
+    let next = week1_start(year + 1, wkst)?;
+    Some(((next - start).num_days() / 7) as i32)
+}
+
+fn week1_start(year: i32, wkst: Weekday) -> Option<NaiveDate> {
+    let jan1 = NaiveDate::from_ymd_opt(year, 1, 1)?;
+    let start = week_start(jan1, wkst);
+    if weekday_offset(jan1.weekday(), wkst) <= 3 {
+        Some(start)
+    } else {
+        start.checked_add_days(Days::new(7))
+    }
 }
 
 fn month_dates(year: i32, month: u32, start: NaiveDateTime, rule: &Rule) -> Vec<NaiveDate> {
@@ -1668,13 +1960,7 @@ fn add_months(year: i32, month: u32, add: i32) -> (i32, u32) {
     (year, month)
 }
 
-fn build_event(
-    raw: &RawEvent,
-    start: Stamp,
-    end: Stamp,
-    window: &Window,
-    offset: FixedOffset,
-) -> Option<Event> {
+fn build_event(raw: &RawEvent, start: Stamp, end: Stamp, window: &Window) -> Option<Event> {
     let meeting = meeting_link(&raw.conference, &raw.url, &raw.location, &raw.description);
     let title = if raw.summary.trim().is_empty() {
         "(No title)".to_string()
@@ -1727,7 +2013,6 @@ fn build_event(
             if start_at > window.end || end_at < window.start {
                 return None;
             }
-            let _ = offset;
             Some(Event {
                 id: event_id(&raw.uid, start),
                 feed_id: String::new(),
@@ -1785,7 +2070,10 @@ fn meeting_link(conference: &str, url: &str, location: &str, description: &str) 
 fn first_meeting(text: &str) -> Option<Meeting> {
     let mut from = 0;
     while from < text.len() {
-        let Some(at) = next_marker(&text[from..]) else {
+        let Some(slice) = text.get(from..) else {
+            break;
+        };
+        let Some(at) = next_marker(slice) else {
             break;
         };
         let at = from + at;
@@ -1826,9 +2114,9 @@ fn take_url(text: &str, marker_at: usize) -> (String, usize) {
     while start > 0 && is_url_host(bytes[start - 1]) {
         start -= 1;
     }
-    if start >= 8 && text[start - 8..start].eq_ignore_ascii_case("https://") {
+    if ends_with_ignore_ascii(text, start, "https://") {
         start -= 8;
-    } else if start >= 7 && text[start - 7..start].eq_ignore_ascii_case("http://") {
+    } else if ends_with_ignore_ascii(text, start, "http://") {
         start -= 7;
     }
     let mut end = start;
@@ -1838,15 +2126,24 @@ fn take_url(text: &str, marker_at: usize) -> (String, usize) {
     while end > start && matches!(bytes[end - 1], b'.' | b',' | b';' | b')' | b']') {
         end -= 1;
     }
-    let raw = &text[start..end];
-    let url = if raw.len() >= 7 && raw[..7].eq_ignore_ascii_case("http://")
-        || raw.len() >= 8 && raw[..8].eq_ignore_ascii_case("https://")
+    let Some(raw) = text.get(start..end) else {
+        return (String::new(), marker_at.saturating_add(1).min(text.len()));
+    };
+    let url = if strip_prefix_ignore_ascii(raw, "http://").is_some()
+        || strip_prefix_ignore_ascii(raw, "https://").is_some()
     {
         raw.to_string()
     } else {
         format!("https://{raw}")
     };
     (url, end.max(marker_at.saturating_add(1)))
+}
+
+fn ends_with_ignore_ascii(text: &str, end: usize, prefix: &str) -> bool {
+    end >= prefix.len()
+        && text
+            .get(end - prefix.len()..end)
+            .is_some_and(|slice| slice.eq_ignore_ascii_case(prefix))
 }
 
 fn is_url_host(byte: u8) -> bool {
@@ -1858,30 +2155,16 @@ fn is_url_end(byte: u8) -> bool {
 }
 
 fn classify(url: &str) -> Option<Meeting> {
-    let rest = if url.len() >= 8 && url[..8].eq_ignore_ascii_case("https://") {
-        &url[8..]
-    } else if url.len() >= 7 && url[..7].eq_ignore_ascii_case("http://") {
-        &url[7..]
-    } else {
-        return None;
-    };
-    let (host, path) = rest.split_once('/').unwrap_or((rest, ""));
-    let host = host.split('@').next_back().unwrap_or(host);
-    let host = host.split(':').next().unwrap_or(host);
-    let host = host.to_ascii_lowercase();
-    let path_l = path.to_ascii_lowercase();
+    let url = unwrap_redirects(url);
+    let parsed = http_url(&url)?;
+    let host = parsed.host_str()?.to_ascii_lowercase();
+    let path = parsed.path().trim_start_matches('/').to_ascii_lowercase();
     let provider = if host == "meet.google.com" && !path.is_empty() {
         "Google Meet"
-    } else if (host == "zoom.us" || host.ends_with(".zoom.us"))
-        && (path_l.starts_with("j/")
-            || path_l.starts_with("my/")
-            || path_l.starts_with("s/")
-            || path_l.starts_with("w/")
-            || path_l.starts_with("wc/"))
-    {
+    } else if (host == "zoom.us" || host.ends_with(".zoom.us")) && zoom_path(&path) {
         "Zoom"
-    } else if (host == "teams.microsoft.com" && path_l.starts_with("l/meetup-join/"))
-        || (host == "teams.live.com" && path_l.starts_with("meet/"))
+    } else if (host == "teams.microsoft.com" && teams_path(&path))
+        || (host == "teams.live.com" && path_after(&path, "meet/"))
     {
         "Teams"
     } else if (host == "webex.com" || host.ends_with(".webex.com")) && !path.is_empty() {
@@ -1889,10 +2172,71 @@ fn classify(url: &str) -> Option<Meeting> {
     } else {
         return None;
     };
-    Some(Meeting {
-        url: url.to_string(),
-        provider,
-    })
+    Some(Meeting { url, provider })
+}
+
+fn zoom_path(path: &str) -> bool {
+    ["j/", "my/", "s/", "w/", "wc/"]
+        .iter()
+        .any(|prefix| path.starts_with(prefix))
+}
+
+fn teams_path(path: &str) -> bool {
+    path_after(path, "l/meetup-join/") || path_after(path, "meet/")
+}
+
+fn path_after(path: &str, prefix: &str) -> bool {
+    path.starts_with(prefix) && path.len() > prefix.len()
+}
+
+/// An http(s) URL with no userinfo and no backslash. A browser reads `\` as `/`, so a
+/// backslash would name a different host than a textual split.
+fn http_url(url: &str) -> Option<url::Url> {
+    if url.contains('\\') || url.chars().any(char::is_whitespace) {
+        return None;
+    }
+    let parsed = url::Url::parse(url).ok()?;
+    if parsed.scheme() != "http" && parsed.scheme() != "https" {
+        return None;
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return None;
+    }
+    parsed.host_str()?;
+    Some(parsed)
+}
+
+/// Outlook Safe Links and Google's `/url?q=` wrapper, a few layers deep.
+fn unwrap_redirects(url: &str) -> String {
+    let mut current = url.to_string();
+    for _ in 0..3 {
+        let Some(next) = redirect_target(&current) else {
+            break;
+        };
+        if next == current || next.len() > 2000 {
+            break;
+        }
+        current = next;
+    }
+    current
+}
+
+fn redirect_target(url: &str) -> Option<String> {
+    let parsed = http_url(url)?;
+    let host = parsed.host_str()?.to_ascii_lowercase();
+    let key = if host == "www.google.com" && parsed.path() == "/url" {
+        "q"
+    } else if host == "safelinks.protection.outlook.com"
+        || host.ends_with(".safelinks.protection.outlook.com")
+    {
+        "url"
+    } else {
+        return None;
+    };
+    parsed
+        .query_pairs()
+        .find(|(name, _)| name == key)
+        .map(|(_, value)| value.into_owned())
 }
 
 fn owner_email(url: &str) -> Option<String> {
@@ -1915,14 +2259,21 @@ fn find_email(text: &str) -> Option<String> {
             while end < bytes.len() && is_email_domain(bytes[end]) {
                 end += 1;
             }
-            let local = &text[start..index];
-            let domain = &text[index + 1..end];
+            let Some(local) = text.get(start..index) else {
+                index += 1;
+                continue;
+            };
+            let Some(domain) = text.get(index + 1..end) else {
+                index += 1;
+                continue;
+            };
             if !local.is_empty()
                 && domain.contains('.')
                 && !domain.starts_with('.')
                 && !domain.ends_with('.')
+                && let Some(address) = text.get(start..end)
             {
-                return Some(text[start..end].to_ascii_lowercase());
+                return Some(address.to_ascii_lowercase());
             }
         }
         index += 1;
@@ -1947,10 +2298,12 @@ mod tests {
             .unwrap()
     }
 
-    fn parse_at(ics: &str, owner: Option<&str>, offset_hours: i32) -> Vec<Event> {
-        let now = utc(2026, 11, 3, 18, 0, 0);
-        let offset = FixedOffset::east_opt(offset_hours * 3600).unwrap();
-        parse_events(ics, owner, now, offset).unwrap()
+    fn parse_at(ics: &str, owner: Option<&str>, zone: Tz) -> Vec<Event> {
+        parse_in(ics, owner, utc(2026, 11, 3, 18, 0, 0), zone)
+    }
+
+    fn parse_in(ics: &str, owner: Option<&str>, now: DateTime<Utc>, zone: Tz) -> Vec<Event> {
+        parse_events(ics, owner, now, zone).unwrap()
     }
 
     fn titles(events: &[Event]) -> Vec<&str> {
@@ -1969,7 +2322,7 @@ SUMMARY:Design\n  \
 review\\, part\\n2\n\
 END:VEVENT\n\
 END:VCALENDAR\n";
-        let events = parse_at(ics, None, 0);
+        let events = parse_at(ics, None, chrono_tz::UTC);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].title, "Design review, part\n2");
     }
@@ -1986,7 +2339,7 @@ SUMMARY:Design review\n\
 LOCATION:Room 4\n\
 END:VEVENT\n\
 END:VCALENDAR\n";
-        let events = parse_at(ics, None, 0);
+        let events = parse_at(ics, None, chrono_tz::UTC);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].title, "Design review");
         assert_eq!(events[0].location, "Room 4");
@@ -2012,7 +2365,7 @@ DTEND;TZID=America/New_York:20261103T100000\n\
 SUMMARY:East\n\
 END:VEVENT\n\
 END:VCALENDAR\n";
-        let events = parse_at(new_york, None, 0);
+        let events = parse_at(new_york, None, chrono_tz::UTC);
         assert_eq!(
             events[0].start_ms,
             utc(2026, 11, 3, 14, 0, 0).timestamp_millis()
@@ -2031,7 +2384,7 @@ DTEND;TZID=Pacific Standard Time:20261103T100000\n\
 SUMMARY:West\n\
 END:VEVENT\n\
 END:VCALENDAR\n";
-        let events = parse_at(pacific, None, 0);
+        let events = parse_at(pacific, None, chrono_tz::UTC);
         assert_eq!(
             events[0].start_ms,
             utc(2026, 11, 3, 17, 0, 0).timestamp_millis()
@@ -2046,7 +2399,7 @@ DTEND:20261103T100000\n\
 SUMMARY:Float\n\
 END:VEVENT\n\
 END:VCALENDAR\n";
-        let events = parse_at(floating, None, -5);
+        let events = parse_at(floating, None, chrono_tz::America::New_York);
         assert_eq!(
             events[0].start_ms,
             utc(2026, 11, 3, 14, 0, 0).timestamp_millis()
@@ -2068,7 +2421,7 @@ DTEND;VALUE=DATE:20261105\n\
 SUMMARY:Offsite\n\
 END:VEVENT\n\
 END:VCALENDAR\n";
-        let events = parse_at(ics, None, 0);
+        let events = parse_at(ics, None, chrono_tz::UTC);
         assert_eq!(events.len(), 1);
         assert!(events[0].all_day);
         assert_eq!(events[0].start_date, "2026-11-03");
@@ -2088,8 +2441,8 @@ BEGIN:VEVENT\n\
 UID:series\n\
 DTSTART:20261102T150000Z\n\
 DTEND:20261102T160000Z\n\
-RRULE:FREQ=WEEKLY;BYDAY=MO,WE\n\
-EXDATE:20261109T150000Z\n\
+RRULE:FREQ=WEEKLY;BYDAY=MO,WE,TH\n\
+EXDATE:20261105T150000Z\n\
 SUMMARY:Standup\n\
 END:VEVENT\n\
 BEGIN:VEVENT\n\
@@ -2107,7 +2460,7 @@ RRULE:FREQ=DAILY;COUNT=1\n\
 SUMMARY:Once\n\
 END:VEVENT\n\
 END:VCALENDAR\n";
-        let events = parse_at(ics, None, 0);
+        let events = parse_at(ics, None, chrono_tz::UTC);
         assert_eq!(titles(&events), ["Standup moved", "Once", "Standup"]);
         let moved = events
             .iter()
@@ -2129,6 +2482,11 @@ END:VCALENDAR\n";
             events
                 .iter()
                 .all(|event| event.start_ms != utc(2026, 11, 2, 15, 0, 0).timestamp_millis())
+        );
+        assert!(
+            events
+                .iter()
+                .all(|event| event.start_ms != utc(2026, 11, 5, 15, 0, 0).timestamp_millis())
         );
     }
 
@@ -2157,7 +2515,7 @@ DTSTART:20261103T120000Z\n\
 STATUS:CANCELLED\n\
 END:VEVENT\n\
 END:VCALENDAR\n";
-        let events = parse_at(ics, None, 0);
+        let events = parse_at(ics, None, chrono_tz::UTC);
         assert!(events.iter().any(|event| event.title == "First Tuesday"));
         let daily: Vec<i64> = events
             .iter()
@@ -2195,9 +2553,9 @@ SUMMARY:Keep other\n\
 ATTENDEE;PARTSTAT=DECLINED:mailto:other@example.com\n\
 END:VEVENT\n\
 END:VCALENDAR\n";
-        let with_owner = parse_at(ics, Some("me@example.com"), 0);
+        let with_owner = parse_at(ics, Some("me@example.com"), chrono_tz::UTC);
         assert_eq!(titles(&with_owner), ["Keep other"]);
-        let without = parse_at(ics, None, 0);
+        let without = parse_at(ics, None, chrono_tz::UTC);
         assert_eq!(titles(&without), ["Mine", "Keep other"]);
         assert_eq!(
             owner_email(
@@ -2259,7 +2617,7 @@ X-GOOGLE-CONFERENCE:https://meet.google.com/abc-defg-hij\n\
 DESCRIPTION:backup https://zoom.us/j/1\n\
 END:VEVENT\n\
 END:VCALENDAR\n";
-        let events = parse_at(ics, None, 0);
+        let events = parse_at(ics, None, chrono_tz::UTC);
         assert_eq!(events[0].provider, "Google Meet");
         assert_eq!(events[0].url, "https://meet.google.com/abc-defg-hij");
     }
@@ -2287,7 +2645,7 @@ DTEND:20261106T160000Z\n\
 SUMMARY:Far\n\
 END:VEVENT\n\
 END:VCALENDAR\n";
-        assert_eq!(titles(&parse_at(ics, None, 0)), ["Soon"]);
+        assert_eq!(titles(&parse_at(ics, None, chrono_tz::UTC)), ["Soon"]);
     }
 
     #[test]
@@ -2296,7 +2654,7 @@ END:VCALENDAR\n";
             "<html>login</html>",
             None,
             utc(2026, 11, 3, 18, 0, 0),
-            FixedOffset::east_opt(0).unwrap(),
+            chrono_tz::UTC,
         );
         assert!(err.is_err());
     }
@@ -2314,7 +2672,25 @@ END:VCALENDAR\n";
         let name = validate_name("  Work   calendar ").unwrap();
         assert_eq!(name, "Work calendar");
         assert!(validate_link("Work", "not a link").is_err());
-        assert!(validate_link("Work", "https://example.com/cal.ics").is_ok());
+        assert!(validate_link("Work", "ftp://example.com/cal.ics").is_err());
+        assert_eq!(
+            validate_link("Work", "https://example.com/cal.ics")
+                .unwrap()
+                .1,
+            "https://example.com/cal.ics"
+        );
+        assert_eq!(
+            validate_link("Work", "webcal://example.com/cal.ics")
+                .unwrap()
+                .1,
+            "https://example.com/cal.ics"
+        );
+        assert_eq!(
+            validate_link("Work", "webcals://example.com/secret.ics")
+                .unwrap()
+                .1,
+            "https://example.com/secret.ics"
+        );
         let mut feeds = vec![
             Feed {
                 id: "a".into(),
@@ -2335,5 +2711,319 @@ END:VCALENDAR\n";
             feeds.iter().find(|feed| feed.id == "b").unwrap().order
                 < feeds.iter().find(|feed| feed.id == "a").unwrap().order
         );
+    }
+
+    fn zoned(
+        zone: Tz,
+        year: i32,
+        month: u32,
+        day: u32,
+        hour: u32,
+        minute: u32,
+        second: u32,
+    ) -> DateTime<Utc> {
+        zone.with_ymd_and_hms(year, month, day, hour, minute, second)
+            .earliest()
+            .unwrap()
+            .with_timezone(&Utc)
+    }
+
+    #[test]
+    fn cjk_and_emoji_around_a_link_do_not_panic() {
+        assert_eq!(
+            first_meeting("参加：https://meet.google.com/abc-defg-hij")
+                .unwrap()
+                .provider,
+            "Google Meet"
+        );
+        assert_eq!(
+            first_meeting("🎉🎉 https://meet.google.com/abc-defg-hij")
+                .unwrap()
+                .url,
+            "https://meet.google.com/abc-defg-hij"
+        );
+        let ics = "\
+BEGIN:VCALENDAR\n\
+BEGIN:VEVENT\n\
+UID:bad\n\
+DTSTART:参加参加参加\n\
+SUMMARY:壊れ\n\
+END:VEVENT\n\
+BEGIN:VEVENT\n\
+UID:cjk\n\
+DTSTART:20261103T150000Z\n\
+DTEND:20261103T160000Z\n\
+SUMMARY:参加 🎉\n\
+LOCATION:参加：https://meet.google.com/abc-defg-hij\n\
+DESCRIPTION:🎉🎉 bring notes\n\
+END:VEVENT\n\
+END:VCALENDAR\n";
+        let events = parse_at(ics, None, chrono_tz::UTC);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].title, "参加 🎉");
+        assert_eq!(events[0].provider, "Google Meet");
+        assert_eq!(events[0].url, "https://meet.google.com/abc-defg-hij");
+    }
+
+    #[test]
+    fn meeting_links_follow_the_parsed_host() {
+        assert!(meeting_link("", "", "https://evil.example\\@meet.google.com/abc", "").is_none());
+        assert!(
+            meeting_link(
+                "",
+                "",
+                "https://evil.example@meet.google.com/abc-defg-hij",
+                ""
+            )
+            .is_none()
+        );
+        assert!(classify("ftp://meet.google.com/abc-defg-hij").is_none());
+        assert!(classify("javascript:alert(1)").is_none());
+        assert_eq!(
+            meeting_link("", "", "https://teams.microsoft.com/meet/abc?p=xyz", "")
+                .unwrap()
+                .provider,
+            "Teams"
+        );
+        let safe = "https://nam10.safelinks.protection.outlook.com/?url=https%3A%2F%2Fmeet.google.com%2Fabc-defg-hij&data=05";
+        let unwrapped = meeting_link("", "", safe, "").unwrap();
+        assert_eq!(unwrapped.provider, "Google Meet");
+        assert_eq!(unwrapped.url, "https://meet.google.com/abc-defg-hij");
+        let google =
+            "https://www.google.com/url?q=https%3A%2F%2Fteams.microsoft.com%2Fmeet%2Fabc%3Fp%3D1";
+        let unwrapped = meeting_link("", "", google, "").unwrap();
+        assert_eq!(unwrapped.provider, "Teams");
+        assert_eq!(unwrapped.url, "https://teams.microsoft.com/meet/abc?p=1");
+    }
+
+    #[test]
+    fn a_missing_local_time_is_skipped_before_count() {
+        let ics = "\
+BEGIN:VCALENDAR\n\
+BEGIN:VEVENT\n\
+UID:gap\n\
+DTSTART;TZID=America/New_York:20260307T023000\n\
+DTEND;TZID=America/New_York:20260307T033000\n\
+RRULE:FREQ=DAILY;COUNT=3\n\
+SUMMARY:Early\n\
+END:VEVENT\n\
+END:VCALENDAR\n";
+        let events = parse_in(
+            ics,
+            None,
+            utc(2026, 3, 8, 18, 0, 0),
+            chrono_tz::America::New_York,
+        );
+        let starts: Vec<i64> = events.iter().map(|event| event.start_ms).collect();
+        let zone = chrono_tz::America::New_York;
+        assert_eq!(
+            starts,
+            vec![
+                zoned(zone, 2026, 3, 7, 2, 30, 0).timestamp_millis(),
+                zoned(zone, 2026, 3, 9, 2, 30, 0).timestamp_millis(),
+                zoned(zone, 2026, 3, 10, 2, 30, 0).timestamp_millis(),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_ambiguous_time_uses_the_earlier_offset() {
+        let zone = chrono_tz::America::New_York;
+        let naive = NaiveDate::from_ymd_opt(2026, 11, 1)
+            .unwrap()
+            .and_hms_opt(1, 30, 0)
+            .unwrap();
+        let chrono::LocalResult::Ambiguous(early, late) = zone.from_local_datetime(&naive) else {
+            panic!("01:30 should happen twice");
+        };
+        assert!(early < late);
+        let ics = "\
+BEGIN:VCALENDAR\n\
+BEGIN:VEVENT\n\
+UID:fall\n\
+DTSTART;TZID=America/New_York:20261101T013000\n\
+DTEND;TZID=America/New_York:20261101T023000\n\
+SUMMARY:Fallback\n\
+END:VEVENT\n\
+END:VCALENDAR\n";
+        let events = parse_in(ics, None, utc(2026, 11, 1, 18, 0, 0), zone);
+        assert_eq!(events[0].start_ms, early.timestamp_millis());
+    }
+
+    #[test]
+    fn a_one_day_duration_ends_at_the_same_local_time() {
+        let ics = "\
+BEGIN:VCALENDAR\n\
+BEGIN:VEVENT\n\
+UID:p1d\n\
+DTSTART;TZID=America/Denver:20260307T090000\n\
+DURATION:P1D\n\
+SUMMARY:Day\n\
+END:VEVENT\n\
+END:VCALENDAR\n";
+        let zone = chrono_tz::America::Denver;
+        let events = parse_in(ics, None, utc(2026, 3, 7, 18, 0, 0), zone);
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].start_ms,
+            zoned(zone, 2026, 3, 7, 9, 0, 0).timestamp_millis()
+        );
+        assert_eq!(
+            events[0].end_ms,
+            zoned(zone, 2026, 3, 8, 9, 0, 0).timestamp_millis()
+        );
+    }
+
+    #[test]
+    fn floating_times_use_the_offset_on_their_own_date() {
+        let ics = "\
+BEGIN:VCALENDAR\n\
+BEGIN:VEVENT\n\
+UID:float\n\
+DTSTART:20260307T090000\n\
+DTEND:20260308T090000\n\
+SUMMARY:Float\n\
+END:VEVENT\n\
+END:VCALENDAR\n";
+        let zone = chrono_tz::America::Denver;
+        let events = parse_in(ics, None, utc(2026, 3, 7, 18, 0, 0), zone);
+        assert_eq!(
+            events[0].start_ms,
+            zoned(zone, 2026, 3, 7, 9, 0, 0).timestamp_millis()
+        );
+        assert_eq!(
+            events[0].end_ms,
+            zoned(zone, 2026, 3, 8, 9, 0, 0).timestamp_millis()
+        );
+    }
+
+    #[test]
+    fn selectors_limit_the_series() {
+        let last = "\
+BEGIN:VCALENDAR\n\
+BEGIN:VEVENT\n\
+UID:last\n\
+DTSTART:20261102T150000Z\n\
+DTEND:20261102T160000Z\n\
+RRULE:FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=-1\n\
+SUMMARY:Last weekday\n\
+END:VEVENT\n\
+END:VCALENDAR\n";
+        let events = parse_in(last, None, utc(2026, 11, 30, 18, 0, 0), chrono_tz::UTC);
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.start_ms)
+                .collect::<Vec<_>>(),
+            vec![utc(2026, 11, 30, 15, 0, 0).timestamp_millis()]
+        );
+
+        let firsts = "\
+BEGIN:VCALENDAR\n\
+BEGIN:VEVENT\n\
+UID:firsts\n\
+DTSTART:20261101T150000Z\n\
+DTEND:20261101T160000Z\n\
+RRULE:FREQ=DAILY;BYMONTHDAY=1\n\
+SUMMARY:Month day\n\
+END:VEVENT\n\
+END:VCALENDAR\n";
+        let events = parse_in(firsts, None, utc(2026, 11, 1, 18, 0, 0), chrono_tz::UTC);
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.start_ms)
+                .collect::<Vec<_>>(),
+            vec![utc(2026, 11, 1, 15, 0, 0).timestamp_millis()]
+        );
+
+        let both = "\
+BEGIN:VCALENDAR\n\
+BEGIN:VEVENT\n\
+UID:both\n\
+DTSTART:20261102T150000Z\n\
+DTEND:20261102T160000Z\n\
+RRULE:FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYMONTHDAY=3\n\
+SUMMARY:Third\n\
+END:VEVENT\n\
+END:VCALENDAR\n";
+        let events = parse_at(both, None, chrono_tz::UTC);
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.start_ms)
+                .collect::<Vec<_>>(),
+            vec![utc(2026, 11, 3, 15, 0, 0).timestamp_millis()]
+        );
+
+        let hours = "\
+BEGIN:VCALENDAR\n\
+BEGIN:VEVENT\n\
+UID:hour\n\
+DTSTART:20261102T150000Z\n\
+DTEND:20261102T160000Z\n\
+RRULE:FREQ=DAILY;BYHOUR=9\n\
+SUMMARY:Morning\n\
+END:VEVENT\n\
+END:VCALENDAR\n";
+        assert!(parse_at(hours, None, chrono_tz::UTC).is_empty());
+
+        assert_eq!(NaiveDate::from_ymd_opt(2026, 11, 3).unwrap().ordinal(), 307);
+        let year_day = "\
+BEGIN:VCALENDAR\n\
+BEGIN:VEVENT\n\
+UID:yday\n\
+DTSTART:20261101T150000Z\n\
+DTEND:20261101T160000Z\n\
+RRULE:FREQ=DAILY;BYYEARDAY=307\n\
+SUMMARY:Ordinal\n\
+END:VEVENT\n\
+END:VCALENDAR\n";
+        let events = parse_at(year_day, None, chrono_tz::UTC);
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.start_ms)
+                .collect::<Vec<_>>(),
+            vec![utc(2026, 11, 3, 15, 0, 0).timestamp_millis()]
+        );
+    }
+
+    #[test]
+    fn an_unknown_recurrence_part_keeps_the_first_time_and_rdates() {
+        let ics = "\
+BEGIN:VCALENDAR\n\
+BEGIN:VEVENT\n\
+UID:part\n\
+DTSTART:20261102T150000Z\n\
+DTEND:20261102T160000Z\n\
+RRULE:FREQ=DAILY;BYSECOND=0\n\
+RDATE:20261104T150000Z\n\
+SUMMARY:Limited\n\
+END:VEVENT\n\
+END:VCALENDAR\n";
+        let events = parse_at(ics, None, chrono_tz::UTC);
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.start_ms)
+                .collect::<Vec<_>>(),
+            vec![
+                utc(2026, 11, 2, 15, 0, 0).timestamp_millis(),
+                utc(2026, 11, 4, 15, 0, 0).timestamp_millis(),
+            ]
+        );
+    }
+
+    #[test]
+    fn week_numbers_match_iso_when_weeks_start_on_monday() {
+        for (year, month, day) in [(2023, 1, 1), (2025, 12, 29), (2026, 1, 1), (2026, 11, 3)] {
+            let date = NaiveDate::from_ymd_opt(year, month, day).unwrap();
+            let iso = date.iso_week();
+            assert_eq!(
+                week_no(date, Weekday::Mon),
+                Some((iso.year(), iso.week() as i32))
+            );
+        }
     }
 }

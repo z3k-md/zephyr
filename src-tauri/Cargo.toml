@@ -37,6 +37,8 @@ keyring = { version = "3", features = ["apple-native", "windows-native"] }
 chrono = "0.4"
 fend-core = "1.5"
 chrono-tz = "0.10"
+# The calendar resolves floating times in the machine's zone. Chrono already uses this crate.
+iana-time-zone = "0.1"
 tauri-plugin-deep-link = "2"
 url = "2"
 semver = "1"

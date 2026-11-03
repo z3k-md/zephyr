@@ -1,8 +1,8 @@
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 use super::{blocking, save, save_now};
 use crate::calendar::{self, Feed};
-use crate::state::Persisted;
+use crate::state::{AppState, Persisted};
 
 /// Events in memory, and each feed's last update or error.
 #[tauri::command]
@@ -72,21 +72,28 @@ pub async fn calendar_rename_feed(
     Ok(snapshot)
 }
 
+/// Removes a feed. The keychain entry is deleted first; if that fails, the feed stays so it
+/// can be retried.
 #[tauri::command]
 pub async fn calendar_remove_feed(app: AppHandle, id: String) -> Result<Persisted, String> {
-    let snapshot = save(app.clone(), {
+    let persisted = app.state::<AppState>().snapshot()?;
+    if !persisted.calendar_feeds.iter().any(|feed| feed.id == id) {
+        return Err("That calendar is gone".into());
+    }
+    blocking({
         let id = id.clone();
-        move |persisted| {
-            let before = persisted.calendar_feeds.len();
-            persisted.calendar_feeds.retain(|feed| feed.id != id);
-            if persisted.calendar_feeds.len() == before {
-                return Err("That calendar is gone".into());
-            }
-            Ok(())
-        }
+        move || crate::secrets::set(calendar::SECRET_SERVICE, &id, None)
     })
     .await?;
-    let _ = blocking(move || crate::secrets::set(calendar::SECRET_SERVICE, &id, None)).await;
+    let snapshot = save(app, move |persisted| {
+        let before = persisted.calendar_feeds.len();
+        persisted.calendar_feeds.retain(|feed| feed.id != id);
+        if persisted.calendar_feeds.len() == before {
+            return Err("That calendar is gone".into());
+        }
+        Ok(())
+    })
+    .await?;
     calendar::refresh();
     Ok(snapshot)
 }
