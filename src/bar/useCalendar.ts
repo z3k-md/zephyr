@@ -22,10 +22,16 @@ export function useCalendar() {
   let tick = 0;
 
   onMounted(async () => {
-    agenda.value = await calendarAgenda().catch(() => null);
+    // Listen first. A refresh that lands while the first fetch is still out has
+    // to win; that fetch's reply is already older.
+    let seen = 0;
     unlisten = await listen<Agenda>('calendar', (event) => {
+      seen += 1;
       agenda.value = event.payload;
     });
+    const before = seen;
+    const first = await calendarAgenda().catch(() => null);
+    if (seen === before) agenda.value = first;
   });
   onUnmounted(() => {
     unlisten?.();

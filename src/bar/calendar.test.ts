@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { CalEvent } from '../types';
 import {
   agendaLeads,
@@ -7,6 +7,7 @@ import {
   enterAction,
   footerChip,
   lengthLabel,
+  onDay,
   soonRow,
   subtitle,
 } from './calendar';
@@ -157,5 +158,59 @@ describe('rows', () => {
     );
     expect(quiet.rows[0].label).toBe('Nothing tomorrow');
     expect(enterAction(quiet.rows[0])).toBe('none');
+  });
+
+  it('keeps only the last two past events before the current one', () => {
+    const past = Array.from({ length: 20 }, (_, index) => {
+      const start = new Date(2026, 10, 3, 0, index, 0, 0).getTime();
+      return event({
+        id: `past-${index}`,
+        title: `Past ${index}`,
+        startMs: start,
+        endMs: start + 30_000,
+        url: '',
+      });
+    });
+    const next = event({ id: 'next', title: 'Next', startMs: now + 60 * 60_000 });
+    const { rows, preselect } = agendaRows({ events: [...past, next], feeds: [] }, 'today', now);
+    expect(rows.map((row) => row.label)).toEqual(['Past 18', 'Past 19', 'Next']);
+    expect(rows.filter((row) => row.calendar?.past)).toHaveLength(2);
+    expect(preselect).toBe(2);
+  });
+});
+
+describe('onDay across a DST change', () => {
+  // Node reads TZ when the Date is created. Denver's fall-back day is 25 hours
+  // and its spring-forward day is 23, so midnight-plus-24h is the wrong boundary.
+  const env = (globalThis as unknown as { process: { env: Record<string, string | undefined> } })
+    .process.env;
+  const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const previous = env.TZ;
+
+  beforeAll(() => {
+    env.TZ = 'America/Denver';
+  });
+  afterAll(() => {
+    env.TZ = previous ?? zone;
+  });
+
+  function midnight(year: number, month: number, day: number): Date {
+    const date = new Date(year, month, day);
+    date.setHours(0, 0, 0, 0);
+    return date;
+  }
+
+  it('includes 23:30 on the 25-hour fall-back day', () => {
+    const day = midnight(2026, 10, 1);
+    const at = new Date(2026, 10, 1, 23, 30).getTime();
+    expect(onDay(event({ startMs: at, endMs: at + 30 * 60_000 }), day)).toBe(true);
+  });
+
+  it('excludes 00:30 the morning after the 23-hour spring-forward day', () => {
+    const day = midnight(2026, 2, 8);
+    const at = new Date(2026, 2, 9, 0, 30).getTime();
+    const meeting = event({ startMs: at, endMs: at + 30 * 60_000 });
+    expect(onDay(meeting, day)).toBe(false);
+    expect(onDay(meeting, midnight(2026, 2, 9))).toBe(true);
   });
 });
