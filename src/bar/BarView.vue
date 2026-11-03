@@ -31,6 +31,7 @@
     openSettings,
     updateInstallNow,
     updateWaiting,
+    checkForUpdates,
     setActiveMode,
     revealFile,
     setBarHeight,
@@ -608,6 +609,19 @@
     void updateInstallNow().catch((error) => (notice.value = errorMessage(error)));
   }
 
+  // "Check for updates" typed in the bar, as Settings does it. Kept apart from the notice,
+  // which each suggest reply overwrites; typing again clears it.
+  const updateCheck = ref<string | null>(null);
+  function checkUpdatesFromBar() {
+    updateCheck.value = 'Checking for updates…';
+    const show = (text: string) => {
+      if (updateCheck.value) updateCheck.value = text;
+    };
+    void checkForUpdates()
+      .then(show)
+      .catch((error) => show(errorMessage(error)));
+  }
+
   // The page's keys from the start, ahead of anything the app sends.
   useWindowListener('keydown', onKey, true);
   useWindowListener('keydown', trackModifiers, true);
@@ -886,6 +900,9 @@
       // Into the Network view, where the test shows; a view kept open already has it.
       enter('network');
       void nextTick(() => networkView.value?.runSpeedTest());
+    } else if (id === 'update') {
+      checkUpdatesFromBar();
+      void focusInput();
     } else if (id === 'resources') {
       resourcesFilter.value = '';
       enter('resources');
@@ -936,6 +953,7 @@
     // The highlight stays put until this text's results replace it, so it doesn't blink.
     userMoved = false;
     notice.value = null;
+    if (query.value) updateCheck.value = null;
     scheduleSuggest();
   });
 
@@ -956,6 +974,7 @@
     scope.value = null;
     selected.value = -1;
     notice.value = null;
+    updateCheck.value = null;
   }
 
   async function focusInput() {
@@ -1749,7 +1768,9 @@
         </button>
       </div>
 
-      <p v-if="loadError || notice" class="notice">{{ loadError || notice }}</p>
+      <p v-if="loadError || notice || updateCheck" class="notice">
+        {{ loadError || notice || updateCheck }}
+      </p>
 
       <div class="bar-body">
         <WeatherCard

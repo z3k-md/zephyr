@@ -207,6 +207,12 @@ const COMMANDS: Command[] = [
     names: ['typing', 'type test', 'monkeytype', 'wpm'],
   },
   {
+    id: 'update',
+    label: 'Check for updates',
+    icon: 'glyph:sync',
+    names: ['update', 'updates', 'upgrade', 'update zephyr'],
+  },
+  {
     id: 'scope:files',
     label: 'Search files',
     icon: 'glyph:folder',
