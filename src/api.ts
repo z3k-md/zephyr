@@ -2,6 +2,7 @@ import { Channel, invoke as call, type InvokeArgs } from '@tauri-apps/api/core';
 import { logCommandFailure } from './log';
 import type {
   Countdown,
+  FocusSettings,
   ClipDetail,
   Sound,
   SoundLevel,
@@ -444,9 +445,15 @@ export function powerCancel(): Promise<void> {
   return invoke('power_cancel');
 }
 
-/** Starts a countdown timer for `seconds`, named `label` (may be empty). */
-export function timerStart(seconds: number, label: string): Promise<Countdown> {
-  return invoke<Countdown>('timer_start', { seconds, label });
+/** Starts a countdown timer for `seconds`, named `label` (may be empty). `focus` makes it
+ *  a focus session, which replaces one already running. */
+export function timerStart(seconds: number, label: string, focus = false): Promise<Countdown> {
+  return invoke<Countdown>('timer_start', { seconds, label, focus });
+}
+
+/** Saves Settings › Focus. */
+export function saveFocus(focus: FocusSettings): Promise<Snapshot> {
+  return invoke<Snapshot>('save_focus', { focus });
 }
 
 export function timerCancel(id: number): Promise<void> {

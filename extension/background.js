@@ -3,7 +3,27 @@
 // switches to it and closes the hand-off tab; otherwise the link redirects to the page as
 // it would without the extension.
 
+import { hostBlocked } from './focus.js';
+
 const HANDOFF = /^http:\/\/127\.0\.0\.1:\d+\/zephyr\/open\?/;
+
+/** Sites blocked until this unix time; 0 means no focus session is running. */
+let focusBlock = { sites: [], until: 0 };
+
+function focusActive() {
+  return focusBlock.until * 1000 > Date.now() && focusBlock.sites.length > 0;
+}
+
+/** A top-frame navigation to a blocked host, or null. */
+function blockedHost(url) {
+  if (!focusActive()) return null;
+  try {
+    const host = new URL(url).hostname;
+    return hostBlocked(host, focusBlock.sites) ? host : null;
+  } catch {
+    return null;
+  }
+}
 
 /** The page a hand-off link is for. */
 function wantedPage(link) {
@@ -80,6 +100,9 @@ async function answer(data) {
   }
   if (message.type === 'ping') {
     socket?.send(JSON.stringify({ type: 'pong' }));
+  } else if (message.type === 'focus' && Array.isArray(message.sites)) {
+    // The same type as "switch to this tab", told apart by the site list.
+    focusBlock = { sites: message.sites, until: Number(message.until) || 0 };
   } else if (message.type === 'focus') {
     const found = await focusTab(message.url).catch(() => false);
     socket?.send(JSON.stringify({ type: 'focused', id: message.id, found }));
@@ -111,6 +134,18 @@ chrome.runtime.onInstalled.addListener(connect);
 chrome.alarms.create('zephyr-link', { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener(connect);
 connect();
+
+// While a focus session runs, a top-frame navigation to a listed site (or a subdomain of
+// it) opens the blocked page instead. The extension page itself isn't one of those hosts.
+chrome.webNavigation.onBeforeNavigate.addListener((details) => {
+  if (details.frameId !== 0) return;
+  const host = blockedHost(details.url);
+  if (!host) return;
+  const page = new URL(chrome.runtime.getURL('blocked.html'));
+  page.searchParams.set('host', host);
+  page.searchParams.set('until', String(focusBlock.until));
+  chrome.tabs.update(details.tabId, { url: page.href }).catch(() => undefined);
+});
 
 // The fallback, when the link wasn't up: the app opened its hand-off link in a new tab.
 chrome.webNavigation.onBeforeNavigate.addListener(async (details) => {

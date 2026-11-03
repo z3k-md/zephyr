@@ -1304,6 +1304,11 @@
   margin-left: -10px;
 }
 
+.focus-minutes {
+  width: 88px;
+  flex: none;
+}
+
 .folders {
   list-style: none;
   padding: 0;

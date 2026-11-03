@@ -37,6 +37,8 @@ export interface Snapshot {
   power: PowerSchedule | null;
   /** Countdown timers started from the bar. */
   timers: Countdown[];
+  /** Focus sessions: the default length, the break, and the apps and sites put aside. */
+  focus: FocusSettings;
   showStats: boolean;
   onboardingDone: boolean;
   onboardingEveryLaunch: boolean;
@@ -278,8 +280,9 @@ export interface SuggestionRow extends Suggestion {
   keyHints?: { keys: string; label: string }[];
   /** For power rows: what Enter runs. */
   power?: PowerPreview;
-  /** For timer rows: the length to start, or the running timer (with its id) to cancel. */
-  timer?: { id?: number; seconds: number; label: string };
+  /** For timer rows: the length to start, or the running timer (with its id) to cancel.
+   *  `focus` is a focus session, which uses the same rows. */
+  timer?: { id?: number; seconds: number; label: string; focus?: boolean };
 }
 
 export interface NoteSummary {
@@ -368,6 +371,23 @@ export interface Countdown {
   at: number;
   seconds: number;
   label: string;
+  /** A focus session. Saved timers from before focus existed are plain ones. */
+  focus: boolean;
+}
+
+/** An app minimized (Windows) or hidden (macOS) while a focus session runs. */
+export interface FocusApp {
+  id: string;
+  name: string;
+}
+
+/** Settings › Focus. Lengths are seconds; a break of 0 starts none. */
+export interface FocusSettings {
+  seconds: number;
+  breakSeconds: number;
+  apps: FocusApp[];
+  /** Hosts such as "x.com". The extension blocks them and their subdomains. */
+  sites: string[];
 }
 
 export interface PowerSchedule {

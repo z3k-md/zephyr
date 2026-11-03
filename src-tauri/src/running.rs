@@ -96,6 +96,24 @@ pub fn close(handle: i64) -> bool {
     platform::close(handle)
 }
 
+/// Puts an app out of the way for a focus session: minimizes its windows on Windows, hides
+/// it on macOS. Nothing is quit, and the windows aren't brought back when the session ends.
+pub fn tuck(app: &App) {
+    #[cfg(windows)]
+    {
+        let exe = program_of(&app.id);
+        for window in platform::list() {
+            if belongs(app, exe.as_deref(), &window) {
+                platform::minimize(window.handle);
+            }
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = mac::hide(&app.id);
+    }
+}
+
 /// Quits an app gracefully, so it can still offer to save; nothing is force-killed. Windows
 /// asks each of its windows to close; macOS asks the app to quit, as its Quit menu item would.
 pub fn quit(app: &App) -> Result<(), String> {
@@ -385,7 +403,8 @@ mod platform {
     use windows::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GW_OWNER, GWL_EXSTYLE, GetWindow, GetWindowLongW, GetWindowTextLengthW,
         GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible,
-        PostMessageW, SW_RESTORE, SetForegroundWindow, ShowWindow, WM_CLOSE, WS_EX_TOOLWINDOW,
+        PostMessageW, SW_MINIMIZE, SW_RESTORE, SetForegroundWindow, ShowWindow, WM_CLOSE,
+        WS_EX_TOOLWINDOW,
     };
     use windows::core::{BOOL, GUID, PWSTR};
 
@@ -546,6 +565,15 @@ mod platform {
                 && PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0)).is_ok()
         }
     }
+
+    pub fn minimize(handle: i64) {
+        let hwnd = HWND(handle as isize as *mut _);
+        unsafe {
+            if IsWindow(Some(hwnd)).as_bool() {
+                let _ = ShowWindow(hwnd, SW_MINIMIZE);
+            }
+        }
+    }
 }
 
 /// macOS knows which apps run (NSWorkspace) without listing their windows: running app rows
@@ -580,6 +608,21 @@ mod mac {
                 item.running = true;
             }
         }
+    }
+
+    /// Hides every running copy of the app at `bundle`. Its windows leave the screen; the
+    /// app keeps running. False when it isn't running.
+    pub fn hide(bundle: &str) -> bool {
+        objc2::rc::autoreleasepool(|_| {
+            let mut hid = false;
+            for app in NSWorkspace::sharedWorkspace().runningApplications().iter() {
+                let path = app.bundleURL().and_then(|url| url.path());
+                if path.is_some_and(|path| path.to_string() == bundle) {
+                    hid |= app.hide();
+                }
+            }
+            hid
+        })
     }
 
     /// Asks every running copy of the app at `bundle` to quit; false when none is running.

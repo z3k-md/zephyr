@@ -34,6 +34,7 @@ const SECTION_TITLES: Record<string, string> = {
   shell: 'Shell',
   power: 'Power',
   timer: 'Timer',
+  focus: 'Focus',
   bookmarks: 'Bookmarks',
   windows: 'Windows',
   ports: 'Ports',

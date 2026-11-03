@@ -69,6 +69,7 @@
   import { useLater } from '../poll';
   import { useWindowListener } from '../windowEvents';
   import NowPlayingStrip from './NowPlayingStrip.vue';
+  import FocusStrip from './FocusStrip.vue';
   import { dragOut } from './dragOut';
   import { GLYPHS } from './glyphs';
   import { useNowPlaying } from './nowPlaying';
@@ -245,13 +246,20 @@
     notice,
   });
 
-  // Countdown timers ("timer 5m"): starting one, and running ones ticking down.
-  const { timerRows, startTimer, cancelTimer } = useTimers({
+  // Countdown timers ("timer 5m") and focus sessions ("focus 50m"): starting one, and
+  // running ones ticking down. The clock only moves while the bar shows.
+  const {
+    timerRows,
+    startTimer,
+    cancelTimer,
+    now: timerNow,
+  } = useTimers({
     snapshot,
     typed: () => (scope.value ? '' : lastQuery.value),
     query,
     notice,
   });
+  const focusNow = computed(() => snapshot.value?.timers?.find((timer) => timer.focus) ?? null);
 
   const { scheduleSuggest } = useSuggest({
     text: typedText,
@@ -273,15 +281,16 @@
       result.preselect =
         named >= 0 ? named : result.preselect === null ? null : result.preselect + power.length;
     }
-    // Timer rows lead too; "timer 5m" takes Enter.
+    // Timer and focus rows lead too; "timer 5m" and "focus 50m" take Enter.
     const timers = timerRows();
     if (timers.rows.length) {
       result.rows.unshift(...timers.rows);
-      result.preselect = timers.preselect
-        ? 0
-        : result.preselect === null
-          ? null
-          : result.preselect + timers.rows.length;
+      result.preselect =
+        timers.preselect === null
+          ? result.preselect === null
+            ? null
+            : result.preselect + timers.rows.length
+          : timers.preselect;
     }
     if (looksLikeCommand(lastQuery.value)) {
       result.rows.push({
@@ -1441,11 +1450,11 @@
         return;
       }
       if (item.kind === 'timer' && item.timer) {
-        await startTimer(item.timer.seconds, item.timer.label);
+        await startTimer(item.timer.seconds, item.timer.label, item.timer.focus);
         return;
       }
       if (item.kind === 'timerPending' && item.timer?.id) {
-        await cancelTimer(item.timer.id);
+        await cancelTimer(item.timer.id, item.timer.focus);
         return;
       }
       if (item.kind === 'powerPending' || (item.kind === 'power' && item.power?.cancel)) {
@@ -1834,13 +1843,13 @@
         :style="previewStyle"
       />
 
-      <!-- What's playing at the left, then the meters (a click opens System Resources); the
-           weather at the right. -->
+      <!-- What's playing at the left, then a running focus session, then the meters (a click
+           opens System Resources); the weather at the right. -->
       <footer
-        v-if="(statsShown && meters) || forecast || playingNow"
+        v-if="(statsShown && meters) || forecast || playingNow || focusNow"
         ref="statsEl"
         class="stats"
-        :class="{ playing: playingNow }"
+        :class="{ playing: playingNow, focusing: focusNow }"
         aria-label="System"
         @mousedown.prevent
       >
@@ -1853,8 +1862,20 @@
             @previous="media.press('previous')"
             @focus="media.focus()"
           />
-          <span v-if="statsShown && meters" class="stats-divider" aria-hidden="true" />
+          <span
+            v-if="focusNow || (statsShown && meters)"
+            class="stats-divider"
+            aria-hidden="true"
+          />
         </template>
+        <FocusStrip
+          v-if="focusNow"
+          :label="focusNow.label"
+          :seconds="focusNow.seconds"
+          :ends-at="focusNow.at"
+          :now="timerNow"
+        />
+        <span v-if="focusNow && statsShown && meters" class="stats-divider" aria-hidden="true" />
         <span
           v-if="statsShown && meters"
           class="meters"
