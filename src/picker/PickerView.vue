@@ -53,6 +53,28 @@
     place(Math.floor(width / 2), Math.floor(height / 2));
   }
 
+  /** The window is reused, so the old frame goes before it hides: the next pick starts
+   *  blank and takes no click until its own frame loads. */
+  function clear() {
+    width = 0;
+    height = 0;
+    pixels = new Uint8ClampedArray();
+    hex.value = '';
+    if (screenEl.value) screenEl.value.width = 0;
+  }
+
+  function choose() {
+    const picked = hex.value;
+    if (!picked) return;
+    clear();
+    void pickerChoose(picked);
+  }
+
+  function cancel() {
+    clear();
+    void pickerCancel();
+  }
+
   function sample(px: number, py: number): [number, number, number] {
     const sx = Math.min(width - 1, Math.max(0, px));
     const sy = Math.min(height - 1, Math.max(0, py));
@@ -123,12 +145,12 @@
   function onKey(event: KeyboardEvent) {
     if (event.key === 'Escape') {
       event.preventDefault();
-      void pickerCancel();
+      cancel();
       return;
     }
     if (event.key === 'Enter') {
       event.preventDefault();
-      if (!event.repeat && hex.value) void pickerChoose(hex.value);
+      if (!event.repeat) choose();
       return;
     }
     const step = event.shiftKey ? 10 : 1;
@@ -156,17 +178,17 @@
   function onPointerDown(event: MouseEvent) {
     if (event.button === 2) {
       event.preventDefault();
-      void pickerCancel();
+      cancel();
       return;
     }
     if (event.button !== 0) return;
     fromPointer(event);
-    if (hex.value) void pickerChoose(hex.value);
+    choose();
   }
 
   function onContext(event: Event) {
     event.preventDefault();
-    void pickerCancel();
+    cancel();
   }
 
   onMounted(async () => {
