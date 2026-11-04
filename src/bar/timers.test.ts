@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseDuration, parseTimer, timeLeft, timerLength } from './timers';
+import { parseDuration, parseFocus, parseTimer, timeLeft, timerLength } from './timers';
 
 describe('parseDuration', () => {
   it.each([
@@ -48,6 +48,30 @@ describe('parseTimer', () => {
     expect(parseTimer('timer 0')).toBeNull();
     expect(parseTimer('timer 30d')).toBeNull();
     expect(parseTimer('set timer 5m')).toBeNull();
+  });
+});
+
+describe('parseFocus', () => {
+  it('offers presets for a bare "focus"', () => {
+    expect(parseFocus('focus')).toEqual({ seconds: null, label: '' });
+    expect(parseFocus('Focus ')).toEqual({ seconds: null, label: '' });
+  });
+
+  it('reads a length, and a name after it', () => {
+    expect(parseFocus('focus 50m')).toEqual({ seconds: 3000, label: '' });
+    expect(parseFocus('focus 1h deep work')).toEqual({ seconds: 3600, label: 'deep work' });
+    expect(parseFocus('focus 50')).toEqual({ seconds: 50, label: '' });
+  });
+
+  it('uses the default length when the words are only a name', () => {
+    expect(parseFocus('focus deep work')).toEqual({ seconds: null, label: 'deep work' });
+  });
+
+  it('leaves other text, and a length a timer would refuse, alone', () => {
+    expect(parseFocus('focuses')).toBeNull();
+    expect(parseFocus('set focus 5m')).toBeNull();
+    expect(parseFocus('focus 0')).toBeNull();
+    expect(parseFocus('focus 200h')).toBeNull();
   });
 });
 

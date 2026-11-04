@@ -62,6 +62,8 @@
   import ShortcutsSection from './ShortcutsSection.vue';
   import BootChoice from './BootChoice.vue';
   import WeatherSection from './WeatherSection.vue';
+  import FocusSection from './FocusSection.vue';
+  import CalendarSection from './CalendarSection.vue';
   import SelectMenu from '../components/SelectMenu.vue';
   import { GLYPHS } from '../bar/glyphs';
   import { lastTestLine } from '../bar/network';
@@ -197,6 +199,20 @@
       icon: 'weatherPartly',
       group: 'utilities',
       keywords: 'location city celsius fahrenheit units',
+    },
+    {
+      id: 'focus',
+      label: 'Focus',
+      icon: 'focus',
+      group: 'utilities',
+      keywords: 'pomodoro break block sites',
+    },
+    {
+      id: 'calendar',
+      label: 'Calendar',
+      icon: 'calendar',
+      group: 'utilities',
+      keywords: 'agenda ical meetings feed',
     },
     { id: 'about', label: 'About', icon: 'info', pinned: true },
     { id: 'dev', label: 'Dev', icon: 'code', pinned: true },
@@ -1269,6 +1285,18 @@
       <WeatherSection
         v-if="snapshot"
         v-show="!search && active === 'weather'"
+        :snapshot="snapshot"
+        @apply="apply"
+      />
+      <FocusSection
+        v-if="snapshot"
+        v-show="!search && active === 'focus'"
+        :snapshot="snapshot"
+        @apply="apply"
+      />
+      <CalendarSection
+        v-if="snapshot"
+        v-show="!search && active === 'calendar'"
         :snapshot="snapshot"
         @apply="apply"
       />

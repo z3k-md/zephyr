@@ -1022,6 +1022,49 @@ pub fn paste(id: u64, plain: bool, hide: impl FnOnce()) -> Result<PasteOutcome, 
     Ok(PasteOutcome::Pasted)
 }
 
+/// Puts text on the clipboard the way a copy from Zephyr does: history records it once (unless
+/// Zephyr is an ignored app), and the watcher skips this write so it isn't recorded again.
+/// Nothing is put back afterwards.
+pub fn copy_text(text: &str) -> Result<(), String> {
+    if text.is_empty() || text.trim().is_empty() || text.len() > MAX_TEXT_BYTES {
+        return Err("Nothing to copy".into());
+    }
+    let mut history = history()
+        .lock()
+        .map_err(|_| "Clipboard history is unavailable")?;
+    platform().write(&Content::Text(text.to_string()), false)?;
+    history.own_write = Some(platform().change_count());
+    let source = Some(("Zephyr".to_string(), "zephyr".to_string()));
+    if history.settings.enabled && history.cipher.is_some() && !history.ignores(source.as_ref()) {
+        let _ = history.record(
+            Capture {
+                content: Content::Text(text.to_string()),
+                source,
+            },
+            now_secs(),
+        );
+        history.save();
+    }
+    Ok(())
+}
+
+/// Copies `text`, then pastes it into the app in front once the bar is out of the way.
+pub fn paste_text(text: &str, hide: impl FnOnce()) -> Result<PasteOutcome, String> {
+    copy_text(text)?;
+    if !platform().can_paste(false) {
+        platform().can_paste(true);
+        return Ok(PasteOutcome::NeedsPermission);
+    }
+    hide();
+    std::thread::spawn(|| {
+        std::thread::sleep(Duration::from_millis(120));
+        if let Err(err) = platform().send_paste() {
+            log::error!("couldn't paste: {err}");
+        }
+    });
+    Ok(PasteOutcome::Pasted)
+}
+
 pub fn can_paste() -> bool {
     platform().can_paste(false)
 }

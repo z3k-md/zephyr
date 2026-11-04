@@ -4,6 +4,7 @@ mod audio;
 mod bindings;
 mod bookmarks;
 mod browser;
+mod calendar;
 mod capture;
 mod clipboard;
 mod commands;
@@ -11,6 +12,7 @@ mod countdown;
 mod cputemp;
 mod deeplink;
 mod files;
+mod focus;
 mod gpu;
 mod handoff;
 mod history;
@@ -24,6 +26,7 @@ mod note_windows;
 mod notes;
 mod nowplaying;
 mod permissions;
+mod picker;
 mod power;
 mod query;
 mod resources;
@@ -71,7 +74,10 @@ pub fn init_logging() {
 }
 
 pub fn run() {
-    let builder = tauri::Builder::default();
+    let builder = tauri::Builder::default()
+        .register_uri_scheme_protocol("picker", |ctx, request| {
+            picker::serve(ctx.webview_label(), request)
+        });
     // We use window keyboard/mouse events, not raw device events. On Windows,
     // leave physical input on the normal hook path used by PowerToys and our OSD.
     #[cfg(windows)]
@@ -244,6 +250,7 @@ pub fn run() {
             commands::power::power_cancel,
             commands::countdown::timer_start,
             commands::countdown::timer_cancel,
+            commands::countdown::save_focus,
             commands::media::now_playing,
             commands::media::now_playing_control,
             commands::media::now_playing_volume,
@@ -279,6 +286,16 @@ pub fn run() {
             commands::net::speed_test,
             commands::net::speed_test_cancel,
             commands::net::network_addresses,
+            commands::picker::pick_color,
+            commands::picker::picker_choose,
+            commands::picker::picker_cancel,
+            commands::emoji::paste_text,
+            commands::emoji::save_emoji_prefs,
+            commands::calendar::calendar_agenda,
+            commands::calendar::calendar_add_feed,
+            commands::calendar::calendar_rename_feed,
+            commands::calendar::calendar_remove_feed,
+            commands::calendar::calendar_move_feed,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Zephyr")
@@ -401,6 +418,7 @@ fn open_stores(
     icons::init(app.path().app_cache_dir()?.join("icons"));
     capture::init(app.path().app_data_dir()?.join("captures"));
     weather::start(app.handle(), app.path().app_data_dir()?);
+    calendar::start(app.handle());
     // Dev builds keep their key in a file instead of the keychain (secrets.rs), so
     // they keep their own history too; sharing one wiped it at every switch.
     let clipboard_dir = if cfg!(debug_assertions) {

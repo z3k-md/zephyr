@@ -7,14 +7,17 @@ use crate::state::{AppState, Persisted};
 
 pub mod apps;
 pub mod bar;
+pub mod calendar;
 pub mod capture;
 pub mod clipboard;
 pub mod countdown;
 pub mod diagnostics;
+pub mod emoji;
 pub mod files;
 pub mod media;
 pub mod net;
 pub mod notes;
+pub mod picker;
 pub mod power;
 pub mod resources;
 pub mod search;

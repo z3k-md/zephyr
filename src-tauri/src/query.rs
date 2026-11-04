@@ -57,6 +57,7 @@ pub fn is_scope(word: &str) -> bool {
         || crate::notes::is_scope(word)
         || bookmarks::is_scope(word)
         || word == "type"
+        || word == "emoji"
 }
 
 pub fn parse_input(input: &str) -> Parsed {
@@ -442,6 +443,28 @@ mod tests {
         );
         assert_eq!(decide_text("!f"), Decision::Empty);
         assert_eq!(decide_text("budget"), search("budget"));
+    }
+
+    #[test]
+    fn emoji_is_a_scope() {
+        assert!(is_scope("emoji"));
+        assert!(!is_scope("emojis"));
+        assert_eq!(
+            parse_input("fire !emoji"),
+            Parsed {
+                query: "fire".into(),
+                scope: Some("emoji".into()),
+            }
+        );
+        assert_eq!(
+            parse_input("!emoji arrow"),
+            Parsed {
+                query: "arrow".into(),
+                scope: Some("emoji".into()),
+            }
+        );
+        assert_eq!(decide("!emoji", true, none()), Decision::Empty);
+        assert_eq!(decide("wave !emoji", true, none()), Decision::Empty);
     }
 
     #[test]

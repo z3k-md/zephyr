@@ -2,6 +2,7 @@ import { Channel, invoke as call, type InvokeArgs } from '@tauri-apps/api/core';
 import { logCommandFailure } from './log';
 import type {
   Countdown,
+  FocusSettings,
   ClipDetail,
   Sound,
   SoundLevel,
@@ -15,6 +16,7 @@ import type {
   FilePreview,
   MediaControl,
   NowPlaying,
+  Agenda,
   Forecast,
   Place,
   Quote,
@@ -213,6 +215,19 @@ export function clipDetail(id: number): Promise<ClipDetail> {
 /** Resolves to 'pasted', or 'needsPermission' when it could only copy. */
 export function clipPaste(id: number, plain: boolean): Promise<'pasted' | 'needsPermission'> {
   return invoke('clip_paste', { id, plain });
+}
+
+/** Puts `text` on the clipboard and pastes it, or only copies when `copyOnly`. Resolves to
+ *  'pasted', 'copied', or 'needsPermission' when it could only copy. */
+export function pasteText(
+  text: string,
+  copyOnly: boolean
+): Promise<'pasted' | 'copied' | 'needsPermission'> {
+  return invoke('paste_text', { text, copyOnly });
+}
+
+export function saveEmojiPrefs(skin: number, recents: string[]): Promise<Snapshot> {
+  return invoke<Snapshot>('save_emoji_prefs', { skin, recents });
 }
 
 export function clipCopy(id: number): Promise<void> {
@@ -444,9 +459,15 @@ export function powerCancel(): Promise<void> {
   return invoke('power_cancel');
 }
 
-/** Starts a countdown timer for `seconds`, named `label` (may be empty). */
-export function timerStart(seconds: number, label: string): Promise<Countdown> {
-  return invoke<Countdown>('timer_start', { seconds, label });
+/** Starts a countdown timer for `seconds`, named `label` (may be empty). `focus` makes it
+ *  a focus session, which replaces one already running. */
+export function timerStart(seconds: number, label: string, focus = false): Promise<Countdown> {
+  return invoke<Countdown>('timer_start', { seconds, label, focus });
+}
+
+/** Saves Settings › Focus. */
+export function saveFocus(focus: FocusSettings): Promise<Snapshot> {
+  return invoke<Snapshot>('save_focus', { focus });
 }
 
 export function timerCancel(id: number): Promise<void> {
@@ -792,4 +813,42 @@ export function saveVolumeOverlay(position: string): Promise<Snapshot> {
 /** A volume key pressed with the bar in front, handed to Zephyr's volume keys. */
 export function volumeKey(key: 'up' | 'down' | 'mute', alt: boolean): Promise<void> {
   return invoke('volume_key', { key, alt });
+}
+
+/** Hide the bar and open the screen color picker. */
+export function pickColor(): Promise<void> {
+  return invoke('pick_color');
+}
+
+/** The loupe's pixel: copy its hex and show the bar with that color typed in. */
+export function pickerChoose(hex: string): Promise<void> {
+  return invoke('picker_choose', { hex });
+}
+
+/** Close the color picker and drop the screenshot. */
+export function pickerCancel(): Promise<void> {
+  return invoke('picker_cancel');
+}
+
+/** Today's and tomorrow's events, and each feed's last update or error. */
+export function calendarAgenda(): Promise<Agenda> {
+  return invoke<Agenda>('calendar_agenda');
+}
+
+/** Adds an iCal feed. The link is stored in the keychain. */
+export function calendarAddFeed(name: string, url: string): Promise<Snapshot> {
+  return invoke<Snapshot>('calendar_add_feed', { name, url });
+}
+
+export function calendarRenameFeed(id: string, name: string): Promise<Snapshot> {
+  return invoke<Snapshot>('calendar_rename_feed', { id, name });
+}
+
+export function calendarRemoveFeed(id: string): Promise<Snapshot> {
+  return invoke<Snapshot>('calendar_remove_feed', { id });
+}
+
+/** Moves a feed up or down. */
+export function calendarMoveFeed(id: string, up: boolean): Promise<Snapshot> {
+  return invoke<Snapshot>('calendar_move_feed', { id, up });
 }

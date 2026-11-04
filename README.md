@@ -15,7 +15,7 @@ A launcher bar for Windows and macOS. Summon it over any app and type to open an
 - Ctrl+S (⌘S) opens Settings. Esc steps back to the main bar.
 - The empty bar shows recent searches, recent apps, the utilities you use most, and your IP address.
 - Reopening the bar soon after closing it returns to the view you were in (Settings > General).
-- The footer shows CPU, GPU and memory, network trouble and the weather; click any of them for more.
+- The footer shows CPU, GPU and memory, network trouble, the weather and the next meeting; click any of them for more.
 
 ### Scopes
 
@@ -31,6 +31,7 @@ A `!word` before or after the text narrows the search. Unknown `!words` stay as 
 | `!clip`       | Clipboard history                                                                                                       |
 | `!sh`, `>`    | The shell                                                                                                               |
 | `!type`       | The typing test                                                                                                         |
+| `!emoji`      | Emoji and symbols (`:fire`, `:arrow`, `fire !emoji`)                                                                    |
 
 Without a scope, a clear match for a setting, file or bookmark shows as at most two rows under the other results, and Enter never picks one unless you arrow to it. Only files you've opened from Zephyr before appear unscoped.
 
@@ -43,6 +44,7 @@ These answer in the top row as you type; Enter copies the answer. The last few c
 - Dates and timestamps: `unix`, `1760000000 unix`, `week`, `day of year`, `now iso`
 - Network: `ip` shows local and public addresses; `port 3000` or `:3000` shows what's listening there and can quit it; `ports` lists every listening port
 - Stocks and crypto: `TSLA`, `$aapl` or `aapl stock`, and `eth`, `btc` or `bitcoin` in any case, show a price card with its change and chart, from Yahoo Finance. Tab steps the chart through 1D, 5D, 1M and 1Y, and Ctrl+Enter opens the full quote.
+- Colors: `#c026d3`, `rgb(192 38 211)`, `hsl(296 70% 49%)`, `oklch(0.55 0.2 330)`, or `color coral`. The card shows HEX, RGB, HSL and OKLCH, seven shades, and the contrast with white and black. ↑↓ picks a format and Enter copies it; Tab steps through the shades. A bare name (`red`, `orange`) still finds an app.
 
 ### Apps, windows and launch groups
 
@@ -61,6 +63,7 @@ These answer in the top row as you type; Enter copies the answer. The last few c
 Type a utility's name to open it.
 
 - **Clipboard history**: ⌘⇧V (Alt+Shift+V on Windows) or `!clip` searches everything you've copied, including text, links, colors, images and files, and the text in copied screenshots. Enter pastes into the app you're in, Ctrl+Enter (⌘Enter) copies, Shift+Enter pastes as plain text. History stays on this computer, encrypted with a key in the system keychain (Credential Manager on Windows), and copies from password managers are never recorded.
+- **Emoji**: `:fire` or `!emoji` searches emoji and symbols. Enter pastes into the app in front, Ctrl+Enter (⌘Enter) copies, and Tab cycles a skin tone. Recents and the skin tone are remembered.
 - **Notes**: ⌥⌘N (Ctrl+Alt+N on Windows) opens a small rich-text note in its own window, and `!note` finds one or starts one. Notes are HTML files in Zephyr's settings folder, and open notes come back at the next start.
 - **Shell**: `>` or `!sh` runs commands in the bar (Git Bash, PowerShell or WSL on Windows; your login shell on macOS). Ctrl+C stops a command, and Ctrl+Enter hands off to a real terminal.
 - **Resources** (`top`): CPU, memory, GPU and network over the last 15 minutes, with apps above background processes. Ctrl+Backspace quits a process.
@@ -68,7 +71,10 @@ Type a utility's name to open it.
 - **Sound** (`vol`, `mixer`; Windows): every app's volume with live meters, mute and the output device. ↑↓ picks a row, ←→ moves it (Shift for 10%), M mutes, 1–9 and 0 jump to 10–100%, Tab switches device. Settings > Sound can take over the volume keys: Zephyr's own overlay replaces Windows' flyout, Alt with a volume key picks an app for the keys to change, and with the bar open the levels show in the bar.
 - **Speed test**: download, upload and lag under load, from Cloudflare.
 - **Weather**: `weather`, `weather raleigh nc` or `stockholm sweden weather`, from Open-Meteo. Tab steps through the next 48 hours with each hour's chance of rain.
+- **Color picker**: `pick color`, `color picker` or `eyedropper`, or a hotkey from Settings > Shortcuts, freezes the screen and magnifies the pixel under the cursor. Click or Enter copies its hex; Esc cancels. On macOS it needs Screen Recording and reads the main display.
+- **Calendar**: `agenda` or `cal today` lists today; `cal tomorrow` lists tomorrow. A bare `cal` or `calendar` lists today under the other results, so Calculator and the Calendar app stay on top. Enter joins the meeting, or copies the details when there is no link. A meeting starting within 10 minutes (or one that started less than 5 minutes ago) leads the empty bar, and the footer names the next one within 15 minutes. Settings > Calendar takes a secret iCal link: Google Calendar's Secret address in iCal format (calendar settings, Integrate calendar), Outlook's published ICS link, or iCloud's public calendar link (Share Calendar). The link stays in the system keychain.
 - **Now playing**: what's playing shows at the end of the search row, with play, pause and skip. Ctrl+Space plays or pauses, and scrolling over it changes the volume.
+- **Timers and focus**: `timer 5m tea` counts down and notifies; `timer` offers 5, 10 and 15 minutes, and Enter on a running one cancels it. `focus` offers 25, 50 and 90 minutes; `focus 50m`, `focus 1h deep work` or `focus deep work` starts a focus session (one at a time; starting another replaces it). The footer shows it. Settings > Focus sets the default length, a break that starts as a timer when it ends, apps to minimize, and sites the browser extension blocks until it's done.
 - **Typing test**: `!type` runs a Monkeytype-style test (15/30/60 seconds or 10/25/50 words) with WPM, accuracy, consistency and personal bests.
 
 ### Links

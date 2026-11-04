@@ -26,6 +26,12 @@ struct Waiting {
     reply: Sender<bool>,
 }
 
+/// Sites blocked while a focus session runs, and when it ends (unix seconds; 0 means none).
+struct FocusBlock {
+    sites: Vec<String>,
+    until: i64,
+}
+
 fn clients() -> &'static Mutex<Vec<Client>> {
     static CLIENTS: OnceLock<Mutex<Vec<Client>>> = OnceLock::new();
     CLIENTS.get_or_init(Default::default)
@@ -34,6 +40,51 @@ fn clients() -> &'static Mutex<Vec<Client>> {
 fn waiting() -> &'static Mutex<Vec<Waiting>> {
     static WAITING: OnceLock<Mutex<Vec<Waiting>>> = OnceLock::new();
     WAITING.get_or_init(Default::default)
+}
+
+fn focus_block() -> &'static Mutex<FocusBlock> {
+    static BLOCK: OnceLock<Mutex<FocusBlock>> = OnceLock::new();
+    BLOCK.get_or_init(|| {
+        Mutex::new(FocusBlock {
+            sites: Vec::new(),
+            until: 0,
+        })
+    })
+}
+
+fn focus_message(sites: &[String], until: i64) -> String {
+    // Not "focus", which asks to switch to a tab: an extension from before blocking would
+    // treat this as one.
+    json!({ "type": "focusBlock", "sites": sites, "until": until }).to_string()
+}
+
+/// Remembers the block and the message clients should hear for it. Send that message
+/// before releasing the cache lock, so a later update can't reach a client first.
+fn remember(block: &mut FocusBlock, sites: Vec<String>, until: i64) -> String {
+    *block = FocusBlock { sites, until };
+    focus_message(&block.sites, block.until)
+}
+
+/// Tells every connected extension which sites to block until `until` (unix seconds; 0
+/// means no focus session is running). Sent while the cache lock is held, so the order
+/// clients hear matches the cache. One that connects later is told the same.
+pub fn set_focus_sites(sites: Vec<String>, until: i64) {
+    let Ok(mut block) = focus_block().lock() else {
+        return;
+    };
+    let message = remember(&mut block, sites, until);
+    let Ok(clients) = clients().lock() else {
+        return;
+    };
+    for client in clients.iter() {
+        let _ = client.outbox.send(message.clone());
+    }
+}
+
+fn send_focus(outbox: &Sender<String>) {
+    if let Ok(block) = focus_block().lock() {
+        let _ = outbox.send(focus_message(&block.sites, block.until));
+    }
 }
 
 static NEXT: AtomicU64 = AtomicU64::new(1);
@@ -110,8 +161,14 @@ fn serve(stream: TcpStream) {
     let (outbox, inbox) = mpsc::channel();
     let id = NEXT.fetch_add(1, Ordering::SeqCst);
     if let Ok(mut clients) = clients().lock() {
-        clients.push(Client { id, outbox });
+        clients.push(Client {
+            id,
+            outbox: outbox.clone(),
+        });
     }
+    // After the client is listed, so a session that starts as it connects isn't missed,
+    // and this send covers a session already running.
+    send_focus(&outbox);
     log::info!("browser extension connected");
     pump(&mut socket, &inbox);
     if let Ok(mut clients) = clients().lock() {
@@ -251,5 +308,21 @@ mod tests {
         assert!(!from_extension(Some("https://evil.example")));
         assert!(!from_extension(Some("null")));
         assert!(!from_extension(None));
+    }
+
+    #[test]
+    fn clients_hear_updates_in_the_order_the_cache_takes_them() {
+        let mut block = FocusBlock {
+            sites: Vec::new(),
+            until: 0,
+        };
+        let session = remember(&mut block, vec!["youtube.com".into()], 5_000);
+        assert_eq!(session, focus_message(&["youtube.com".into()], 5_000));
+        assert_eq!(block.sites, vec!["youtube.com".to_string()]);
+        assert_eq!(block.until, 5_000);
+        let cleared = remember(&mut block, Vec::new(), 0);
+        assert_eq!(cleared, focus_message(&[], 0));
+        assert!(block.sites.is_empty());
+        assert_eq!(block.until, 0);
     }
 }

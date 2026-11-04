@@ -33,6 +33,7 @@ pub fn pane(id: &str) -> Option<&'static str> {
         "files" => {
             "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders"
         }
+        "screen" => "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
         _ => return None,
     })
 }
@@ -59,7 +60,35 @@ pub fn statuses(protected_folders: bool) -> Vec<Permission> {
             id: "files",
             status: files_status(protected_folders),
         },
+        Permission {
+            id: "screen",
+            status: screen_recording(false),
+        },
     ]
+}
+
+/// Screen Recording, for the color picker. With `ask`, macOS shows its prompt if it never
+/// has. A denial after that is silent, and the Settings pane is the way back.
+pub fn screen_recording(ask: bool) -> Status {
+    #[cfg(target_os = "macos")]
+    {
+        if objc2_core_graphics::CGPreflightScreenCaptureAccess() {
+            return Status::Granted;
+        }
+        if !ask {
+            return Status::NotAsked;
+        }
+        if objc2_core_graphics::CGRequestScreenCaptureAccess() {
+            Status::Granted
+        } else {
+            Status::Denied
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = ask;
+        Status::Unknown
+    }
 }
 
 /// Desktop, Documents and Downloads: not asked until file search may read them, then

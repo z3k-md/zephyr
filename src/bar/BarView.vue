@@ -48,6 +48,7 @@
     openUrl,
     resourcesQuit,
     volumeKey,
+    pickColor,
   } from '../api';
   import ResourcesView from './ResourcesView.vue';
   import NetworkView from './NetworkView.vue';
@@ -61,6 +62,7 @@
   import FooterWeather from './FooterWeather.vue';
   import TickerCard from './TickerCard.vue';
   import WeatherCard from './WeatherCard.vue';
+  import ColorCard from './ColorCard.vue';
   import ActionMenu from '../components/ActionMenu.vue';
   import { useActionMenu, type MenuAction } from '../components/actionMenu';
   import { vTip } from '../tip';
@@ -69,21 +71,28 @@
   import { useLater } from '../poll';
   import { useWindowListener } from '../windowEvents';
   import NowPlayingStrip from './NowPlayingStrip.vue';
+  import FocusStrip from './FocusStrip.vue';
   import { dragOut } from './dragOut';
   import { GLYPHS } from './glyphs';
   import { useNowPlaying } from './nowPlaying';
   import { useFooterStats } from './footerStats';
   import { bindingForAlias, bindingTarget, buildRows, groups, rowKey, type RowCtx } from './rows';
+  import { reconcileSelection } from './selection';
+  import { footerFit } from './footerFit';
+  import { colonEmojiQuery, isEmojiColon, takeEmojiScope } from './emoji/query';
   import { googleUrl } from './google';
   import { useDevices } from './useDevices';
   import { usePower } from './usePower';
   import { useTimers } from './useTimers';
+  import { useCalendar } from './useCalendar';
+  import { enterAction } from './calendar';
   import { useRunKey } from './useRunKey';
   import { useSuggest } from './useSuggest';
   import { useTypeAhead } from './useTypeAhead';
   import { pastAnswers, rememberAnswer } from './answerHistory';
   import { useTickerCard } from './useTickerCard';
   import { useWeatherCard } from './useWeatherCard';
+  import { useColorCard } from './useColorCard';
   import {
     isSnapshot,
     type Binding,
@@ -99,21 +108,25 @@
   import type ClipboardViewComponent from './ClipboardView.vue';
   import type TypingViewComponent from '../typing/TypingView.vue';
   import type ShellViewComponent from '../shell/ShellView.vue';
+  import type EmojiGridComponent from './EmojiGrid.vue';
   const loadClipboard = () => import('./ClipboardView.vue');
   const loadTyping = () => import('../typing/TypingView.vue');
   const loadShell = () => import('../shell/ShellView.vue');
   const loadPreview = () => import('./FilePreviewPane.vue');
+  const loadEmojiGrid = () => import('./EmojiGrid.vue');
   const ClipboardView = defineAsyncComponent(loadClipboard);
   const TypingView = defineAsyncComponent(loadTyping);
   const ShellView = defineAsyncComponent(loadShell);
   const FilePreviewPane = defineAsyncComponent(loadPreview);
+  const EmojiGrid = defineAsyncComponent(loadEmojiGrid);
   let prefetched = false;
   function prefetchViews() {
     if (prefetched) return;
     prefetched = true;
-    for (const load of [loadClipboard, loadTyping, loadShell, loadPreview]) {
+    for (const load of [loadClipboard, loadTyping, loadShell, loadPreview, loadEmojiGrid]) {
       void load().catch(() => (prefetched = false));
     }
+    void import('./emoji/catalog').then((mod) => mod.loadCatalog()).catch(() => undefined);
   }
 
   const root = ref<HTMLElement | null>(null);
@@ -139,8 +152,18 @@
     settings: { bang: 'set', name: 'Settings' },
     app: { bang: 'app', name: 'Apps' },
     apps: { bang: 'app', name: 'Apps' },
+    emoji: { bang: 'emoji', name: 'Emoji' },
   };
   const scope = ref<Scope | null>(null);
+  /** `:fire` or the Emoji scope. A colon and digits (`:3000`) stays a port lookup. */
+  function emojiActive(): boolean {
+    return scope.value?.bang === 'emoji' || (!scope.value && isEmojiColon(query.value));
+  }
+  const emojiQuery = computed(() => {
+    if (scope.value?.bang === 'emoji') return colonEmojiQuery(query.value) ?? query.value.trim();
+    return colonEmojiQuery(query.value) ?? '';
+  });
+  const emojiGrid = ref<InstanceType<typeof EmojiGridComponent> | null>(null);
   /** What Rust sees: the text, behind its scope's bang when there is one. */
   function typedText(): string {
     return scope.value ? `!${scope.value.bang} ${query.value}` : query.value;
@@ -164,6 +187,7 @@
     shell: 'Shell',
   };
   const view = ref<View>('root');
+  const emojiOpen = computed(() => view.value === 'root' && emojiActive());
   const parked = ref('');
   // A view is mounted on first use and then kept, so its state survives leaving it.
   const visited = reactive<Record<string, boolean>>({});
@@ -225,6 +249,12 @@
   let userMoved = false;
   // Arrow presses that land before the first rows do.
   let pendingMove = 0;
+
+  watch(emojiOpen, (open) => {
+    if (!open) return;
+    actionsOpen.value = false;
+    pendingMove = 0;
+  });
   let unlistens: UnlistenFn[] = [];
   // A list caught up a moment after a quit or close; dropped if the bar goes first.
   const later = useLater();
@@ -245,13 +275,35 @@
     notice,
   });
 
-  // Countdown timers ("timer 5m"): starting one, and running ones ticking down.
-  const { timerRows, startTimer, cancelTimer } = useTimers({
+  // Countdown timers ("timer 5m") and focus sessions ("focus 50m"): starting one, and
+  // running ones ticking down. The clock only moves while the bar shows.
+  const {
+    timerRows,
+    startTimer,
+    cancelTimer,
+    now: timerNow,
+  } = useTimers({
     snapshot,
     typed: () => (scope.value ? '' : lastQuery.value),
     query,
     notice,
   });
+  const focusNow = computed(() => snapshot.value?.timers?.find((timer) => timer.focus) ?? null);
+
+  // `cal` lists the day. A meeting about to start leads the empty bar.
+  const calendar = useCalendar();
+  const calendarChip = computed(() => calendar.chip());
+  /** The footer chip. A scope blanks the text the rows are built from, so `agenda`
+   *  would never lead and the soon-meeting row would stay in front. */
+  function showCalendar() {
+    scope.value = null;
+    query.value = 'agenda';
+    void nextTick(() => {
+      const input = inputEl.value;
+      input?.focus();
+      input?.setSelectionRange(input.value.length, input.value.length);
+    });
+  }
 
   const { scheduleSuggest } = useSuggest({
     text: typedText,
@@ -263,8 +315,13 @@
   });
 
   const built = computed(() => {
-    if (!lastResponse.value) return { rows: [] as SuggestionRow[], preselect: null };
+    const typed = scope.value ? '' : lastQuery.value;
+    const agenda = calendar.rowsFor(typed);
+    if (agenda?.leads) return agenda;
+    if (!lastResponse.value) return agenda ?? { rows: [] as SuggestionRow[], preselect: null };
     const result = buildRows(lastResponse.value, rowCtx.value);
+    // A bare `cal` or `calendar` keeps Calculator or the Calendar app on top; the day follows.
+    if (agenda) result.rows.push(...agenda.rows);
     // Power rows lead; a command named outright ("shutdown") takes Enter.
     const power = powerRows();
     if (power.length) {
@@ -273,15 +330,25 @@
       result.preselect =
         named >= 0 ? named : result.preselect === null ? null : result.preselect + power.length;
     }
-    // Timer rows lead too; "timer 5m" takes Enter.
+    // Timer and focus rows lead too; "timer 5m" and "focus 50m" take Enter.
     const timers = timerRows();
     if (timers.rows.length) {
       result.rows.unshift(...timers.rows);
-      result.preselect = timers.preselect
-        ? 0
-        : result.preselect === null
-          ? null
-          : result.preselect + timers.rows.length;
+      result.preselect =
+        timers.preselect === null
+          ? result.preselect === null
+            ? null
+            : result.preselect + timers.rows.length
+          : timers.preselect;
+    }
+    // A scope blanks `typed` above. Only a truly empty main bar grows a meeting row.
+    if (!scope.value && !typed.trim()) {
+      const soon = calendar.soon();
+      if (soon) {
+        result.rows.unshift(soon);
+        if (soon.calendar?.url) result.preselect = 0;
+        else if (result.preselect !== null) result.preselect += 1;
+      }
     }
     if (looksLikeCommand(lastQuery.value)) {
       result.rows.push({
@@ -296,11 +363,35 @@
     }
     return result;
   });
-  const items = computed(() => built.value.rows);
+  // The emoji grid covers the results, including in the moment before it mounts.
+  // Row actions read this list, so they have nothing to run while it is up.
+  const items = computed(() => (emojiOpen.value ? [] : built.value.rows));
   const sections = computed(() => groups(items.value));
 
   const selectedItem = computed(() =>
     selected.value >= 0 ? items.value[selected.value] : undefined
+  );
+
+  // Calendar, timer and focus rows change with the clock and with fetches, after
+  // the search that last set the selection. Follow the row, not the index.
+  let shownKeys: string[] = [];
+  watch(
+    () => `${built.value.preselect ?? ''}|${built.value.rows.map(rowKey).join('\n')}`,
+    () => {
+      const next = built.value;
+      const nextKeys = next.rows.map(rowKey);
+      const reconciled = reconcileSelection(
+        shownKeys,
+        selected.value,
+        userMoved,
+        nextKeys,
+        next.preselect
+      );
+      shownKeys = nextKeys;
+      userMoved = reconciled.userMoved;
+      if (selected.value !== reconciled.index) selected.value = reconciled.index;
+    },
+    { flush: 'sync' }
   );
 
   // Type-ahead: the rest of what Enter would act on, drawn faintly after the cursor.
@@ -308,7 +399,7 @@
     query,
     inputEl,
     snapshot,
-    scoped: () => scope.value !== null,
+    scoped: () => scope.value !== null || isEmojiColon(query.value),
     items,
     selectedItem,
   });
@@ -462,6 +553,21 @@
       if (item.appId) {
         const appId = item.appId;
         list.push({ label: `Quit ${item.hint}`, run: () => quitApp(appId, item.hint) });
+      }
+    } else if (item?.kind === 'calendar' || item?.kind === 'calendarSoon') {
+      const cal = item.calendar;
+      if (cal?.url) {
+        const url = cal.url;
+        list.push({
+          label: 'Join',
+          keys: 'enter',
+          run: () => openUrl(url).catch((error) => (notice.value = errorMessage(error))),
+        });
+        list.push({ label: 'Copy link', run: () => copyText(url) });
+      }
+      if (cal?.details) {
+        const details = cal.details;
+        list.push({ label: 'Copy details', run: () => copyText(details) });
       }
     } else if (item?.kind === 'file' && item.path) {
       const path = item.path;
@@ -913,6 +1019,8 @@
     } else if (id === 'ip') {
       query.value = 'ip';
       void focusInput();
+    } else if (id === 'pick-color') {
+      void pickColor().catch((error) => (notice.value = errorMessage(error)));
     } else if (id.startsWith('group:')) {
       void launchGroup(id.slice(6)).catch((error) => (notice.value = errorMessage(error)));
     } else if (id.startsWith('scope:')) {
@@ -928,6 +1036,14 @@
       scope.value = SCOPES[scoped[1].toLowerCase()];
       query.value = scoped[2];
       return;
+    }
+    if (!scope.value) {
+      const emoji = takeEmojiScope(query.value);
+      if (emoji) {
+        scope.value = SCOPES.emoji;
+        query.value = emoji.query;
+        return;
+      }
     }
     if (/^!type$/i.test(query.value.trim()) && query.value.endsWith(' ')) {
       query.value = '';
@@ -954,6 +1070,7 @@
     userMoved = false;
     notice.value = null;
     if (query.value) updateCheck.value = null;
+    if (emojiActive()) return;
     scheduleSuggest();
   });
 
@@ -965,6 +1082,7 @@
     }
     selected.value = -1;
     userMoved = false;
+    if (next?.bang === 'emoji') return;
     scheduleSuggest();
   });
 
@@ -998,26 +1116,18 @@
     void setBarHeight(height).catch(() => (sentHeight = 0));
   }
 
-  /** Shows a suggest reply, keeping the row the user moved to selected when late results
-   *  reshuffle the list. */
+  /** Shows a suggest reply. The watch on the built rows keeps the selection; an arrow
+   *  pressed before any row existed moves once the rows are here. */
   async function applySuggestions(
     response: SuggestResponse,
     includeRemote: boolean,
     typed: string
   ) {
-    const kept = userMoved && selectedItem.value ? rowKey(selectedItem.value) : null;
     lastResponse.value = response;
     lastQuery.value = query.value;
     mode.value = response.mode;
     notice.value = response.notice;
-    const index = kept ? items.value.findIndex((row) => rowKey(row) === kept) : -1;
-    if (index >= 0) {
-      selected.value = index;
-    } else {
-      userMoved = false;
-      selected.value = built.value.preselect ?? -1;
-    }
-    if (pendingMove) {
+    if (pendingMove && items.value.length > 0) {
       const delta = pendingMove;
       pendingMove = 0;
       moveSelection(delta);
@@ -1080,6 +1190,27 @@
     }
   }
 
+  /** Backspace, arrows through the text, and the usual edit shortcuts. Not the keys
+   *  that run a row (Enter, Alt+number, Ctrl+K, up and down). */
+  function editsQuery(event: KeyboardEvent): boolean {
+    if (event.altKey) return false;
+    const editing =
+      event.key === 'Backspace' ||
+      event.key === 'Delete' ||
+      event.key === 'ArrowLeft' ||
+      event.key === 'ArrowRight' ||
+      event.key === 'Home' ||
+      event.key === 'End' ||
+      event.code === 'KeyA' ||
+      event.code === 'KeyC' ||
+      event.code === 'KeyV' ||
+      event.code === 'KeyX' ||
+      event.code === 'KeyZ' ||
+      event.code === 'KeyY';
+    if (event.ctrlKey || event.metaKey) return editing;
+    return editing || event.key.length === 1;
+  }
+
   function onKey(event: KeyboardEvent) {
     trace('key', {
       key: event.key,
@@ -1112,6 +1243,12 @@
       viewShowing()?.onKey(event);
       return;
     }
+    // The grid covers the results. Until it mounts, `emojiGrid` is null and its
+    // keys would otherwise fall through to the rows underneath.
+    if (emojiOpen.value) {
+      actionsOpen.value = false;
+      if (emojiGrid.value?.onKey(event)) return;
+    }
     if (event.key === 'Enter' && /^!(?:sh|shell)$/i.test(query.value.trim())) {
       event.preventDefault();
       query.value = '';
@@ -1131,6 +1268,14 @@
     if (moveKeyOnly(event) && event.code === 'KeyS') {
       event.preventDefault();
       if (!event.repeat) void openSettings();
+      return;
+    }
+    // Esc still leaves, and Backspace on an empty scope still drops it. Typing
+    // still edits the query. Other keys act on rows the grid is covering.
+    const clearsScope =
+      event.key === 'Backspace' && !event.repeat && !query.value && scope.value !== null;
+    if (emojiOpen.value && event.key !== 'Escape' && !clearsScope) {
+      if (!editsQuery(event)) event.preventDefault();
       return;
     }
     // Ctrl+K and, while its menu is open, the menu's keys; anything else goes back to typing.
@@ -1185,12 +1330,13 @@
       return;
     }
 
-    // Tab would only move focus out of the search box. On the ticker card it steps through the
-    // chart's spans, and on the weather card through the hours.
+    // Tab would only move focus out of the search box. On the color card it steps the shades,
+    // on the ticker card the chart's spans, and on the weather card the hours.
     if (event.key === 'Tab') {
       event.preventDefault();
       if (!modifier && !event.altKey) {
-        if (cardQuote.value) stepRange(event.shiftKey ? -1 : 1);
+        if (colorCard.value) stepShade(event.shiftKey ? -1 : 1);
+        else if (cardQuote.value) stepRange(event.shiftKey ? -1 : 1);
         else if (cardForecast.value) stepHour(event.shiftKey ? -1 : 1);
       }
       return;
@@ -1209,7 +1355,18 @@
 
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();
+      if (colorCard.value && !modifier && !event.altKey && !event.shiftKey) {
+        stepFormat(event.key === 'ArrowDown' ? 1 : -1);
+        return;
+      }
       moveSelection(event.key === 'ArrowDown' ? 1 : -1);
+      return;
+    }
+
+    // Enter on the color card copies the chosen format.
+    if (colorCard.value && !modifier && !event.altKey && !event.shiftKey && event.key === 'Enter') {
+      event.preventDefault();
+      if (!event.repeat) void copyColor();
       return;
     }
 
@@ -1279,6 +1436,21 @@
     }
   }
 
+  // The color card: a hex, a CSS color, or "color red".
+  const {
+    card: colorCard,
+    stepFormat,
+    stepShade,
+    pickFormat,
+    pickShade,
+    copyFormat: copyColor,
+  } = useColorCard({
+    query,
+    shown: () => !scope.value && view.value === 'root',
+    menuOpen: actionsOpen,
+    notice,
+  });
+
   // The weather card: "weather", "forecast", or either with a city ("weather in tokyo").
   const { forecast, cardForecast, cardHour, stepHour, pickHour, openForecast, showWeather } =
     useWeatherCard({
@@ -1289,6 +1461,21 @@
       notice,
       clearAfterOpen,
     });
+
+  // Which footer pieces give way. The bar is a fixed 680px, so this follows what's
+  // showing rather than the container's width.
+  const footerLevel = computed(() =>
+    footerFit({
+      playing: !!playingNow.value,
+      focus: !!focusNow.value,
+      meters: statsShown.value && !!meters.value,
+      gpu: !!(statsShown.value && meters.value?.gpu),
+      disk: !!(statsShown.value && meters.value?.diskLow),
+      net: !!netAlert.value,
+      meeting: !!calendarChip.value,
+      weather: !!forecast.value,
+    })
+  );
 
   // The ticker card: a stock or crypto typed on its own ("TSLA", "eth", "$aapl").
   const { cardQuote, quoteRange, stepRange, pickRange, openQuote } = useTickerCard({
@@ -1440,12 +1627,32 @@
         else openView('network');
         return;
       }
+      if (item.kind === 'calendar' || item.kind === 'calendarSoon') {
+        const action = enterAction(item);
+        if (action === 'join' && item.calendar?.url) {
+          try {
+            await openUrl(item.calendar.url);
+            query.value = '';
+          } catch (error) {
+            notice.value = errorMessage(error);
+          }
+        } else if (action === 'copy' && item.calendar?.details) {
+          await copyText(item.calendar.details);
+        } else if (action === 'settings') {
+          try {
+            await openSettings();
+          } catch (error) {
+            notice.value = errorMessage(error);
+          }
+        }
+        return;
+      }
       if (item.kind === 'timer' && item.timer) {
-        await startTimer(item.timer.seconds, item.timer.label);
+        await startTimer(item.timer.seconds, item.timer.label, item.timer.focus);
         return;
       }
       if (item.kind === 'timerPending' && item.timer?.id) {
-        await cancelTimer(item.timer.id);
+        await cancelTimer(item.timer.id, item.timer.focus);
         return;
       }
       if (item.kind === 'powerPending' || (item.kind === 'power' && item.power?.cancel)) {
@@ -1773,74 +1980,89 @@
       </p>
 
       <div class="bar-body">
-        <WeatherCard
-          v-if="cardForecast"
-          :forecast="cardForecast"
-          :hour="cardHour"
-          @open="openForecast"
-          @hour="pickHour"
+        <EmojiGrid
+          v-if="emojiOpen"
+          ref="emojiGrid"
+          :query="emojiQuery"
+          :skin="snapshot?.emojiSkin ?? 0"
+          :recents="snapshot?.emojiRecents"
+          @notice="notice = $event"
         />
-        <TickerCard
-          v-else-if="cardQuote"
-          :quote="cardQuote"
-          :range="quoteRange"
-          @open="openQuote"
-          @range="pickRange"
-        />
-        <ActionMenu
-          v-if="actionsOpen"
-          id="actions"
-          :actions="actions"
-          :index="actionIndex"
-          @run="menu.run"
-          @hover="menu.hover"
-          @fit="menu.shown.value = $event"
-        />
+        <template v-else>
+          <ColorCard v-if="colorCard" :color="colorCard" @format="pickFormat" @shade="pickShade" />
+          <WeatherCard
+            v-if="cardForecast"
+            :forecast="cardForecast"
+            :hour="cardHour"
+            @open="openForecast"
+            @hour="pickHour"
+          />
+          <TickerCard
+            v-else-if="cardQuote"
+            :quote="cardQuote"
+            :range="quoteRange"
+            @open="openQuote"
+            @range="pickRange"
+          />
+          <ActionMenu
+            v-if="actionsOpen"
+            id="actions"
+            :actions="actions"
+            :index="actionIndex"
+            @run="menu.run"
+            @hover="menu.hover"
+            @fit="menu.shown.value = $event"
+          />
 
-        <ResultList
-          v-else-if="items.length"
-          :groups="sections"
-          :selected="selected"
-          :numbered="showNumbers ? RUN_KEY : ''"
-          @choose="chooseAt"
-          @hover="hover"
-          @drag="dragRow"
-          @fit="visibleCount = $event"
-        >
-          <template #card="{ row, selected: chosen }">
-            <PortCard
-              v-if="row.kind === 'portCard'"
-              :row="row"
-              :selected="chosen"
-              :confirm="portConfirmText"
-            />
-            <NetworkCard
-              v-else
-              :row="row"
-              :selected="chosen"
-              :summary="netSummary"
-              :last-speed="snapshot?.lastSpeed ?? null"
-            />
-          </template>
-        </ResultList>
+          <ResultList
+            v-else-if="items.length"
+            :groups="sections"
+            :selected="selected"
+            :numbered="showNumbers ? RUN_KEY : ''"
+            @choose="chooseAt"
+            @hover="hover"
+            @drag="dragRow"
+            @fit="visibleCount = $event"
+          >
+            <template #card="{ row, selected: chosen }">
+              <PortCard
+                v-if="row.kind === 'portCard'"
+                :row="row"
+                :selected="chosen"
+                :confirm="portConfirmText"
+              />
+              <NetworkCard
+                v-else
+                :row="row"
+                :selected="chosen"
+                :summary="netSummary"
+                :last-speed="snapshot?.lastSpeed ?? null"
+              />
+            </template>
+          </ResultList>
+        </template>
       </div>
 
       <!-- After the list's v-if chain, which it must not join. -->
       <FilePreviewPane
-        v-if="previewShown && selectedItem?.path"
+        v-if="previewShown && !emojiOpen && selectedItem?.path"
         :path="selectedItem.path"
         :name="selectedItem.label"
         :icon="selectedItem.icon"
         :style="previewStyle"
       />
 
-      <!-- What's playing at the left, then the meters (a click opens System Resources); the
-           weather at the right. -->
+      <!-- What's playing at the left, then a running focus session, then the meters (a click
+           opens System Resources); the next meeting, then the weather at the right. -->
       <footer
-        v-if="(statsShown && meters) || forecast || playingNow"
+        v-if="
+          !emojiOpen &&
+          ((statsShown && meters) || forecast || playingNow || focusNow || calendarChip)
+        "
         ref="statsEl"
         class="stats"
-        :class="{ playing: playingNow }"
+        :class="{ playing: playingNow, focusing: focusNow }"
+        :data-fit="footerLevel > 0 ? footerLevel : undefined"
         aria-label="System"
         @mousedown.prevent
       >
@@ -1853,8 +2075,20 @@
             @previous="media.press('previous')"
             @focus="media.focus()"
           />
-          <span v-if="statsShown && meters" class="stats-divider" aria-hidden="true" />
+          <span
+            v-if="focusNow || (statsShown && meters)"
+            class="stats-divider"
+            aria-hidden="true"
+          />
         </template>
+        <FocusStrip
+          v-if="focusNow"
+          :label="focusNow.label"
+          :seconds="focusNow.seconds"
+          :ends-at="focusNow.at"
+          :now="timerNow"
+        />
+        <span v-if="focusNow && statsShown && meters" class="stats-divider" aria-hidden="true" />
         <span
           v-if="statsShown && meters"
           class="meters"
@@ -1918,6 +2152,17 @@
           <svg viewBox="0 0 24 24" aria-hidden="true" v-html="GLYPHS.updown" />
           {{ netAlertText }}
         </span>
+        <button
+          v-if="calendarChip"
+          v-tip="'Calendar'"
+          type="button"
+          class="cal-chip"
+          @mousedown.prevent
+          @click.stop="showCalendar"
+        >
+          <span class="cal-chip-title">{{ calendarChip.title }}</span>
+          <span class="cal-chip-when">{{ calendarChip.when }}</span>
+        </button>
         <FooterWeather v-if="forecast" :forecast="forecast" @open="showWeather" />
       </footer>
     </template>

@@ -34,6 +34,9 @@ const SECTION_TITLES: Record<string, string> = {
   shell: 'Shell',
   power: 'Power',
   timer: 'Timer',
+  focus: 'Focus',
+  today: 'Today',
+  tomorrow: 'Tomorrow',
   bookmarks: 'Bookmarks',
   windows: 'Windows',
   ports: 'Ports',
@@ -44,6 +47,7 @@ export function rowKey(row: SuggestionRow): string {
   if (row.kind === 'netCard') return `netCard-${row.target}`;
   // A running timer by its id, since its label ticks.
   if (row.timer?.id) return `timer-${row.timer.id}`;
+  if (row.calendar) return `cal-${row.calendar.id}`;
   if (row.portUse) {
     const use = row.portUse;
     return `${row.kind}-${use.protocol}-${use.port}-${use.pid}-${use.state}`;
@@ -231,6 +235,18 @@ const COMMANDS: Command[] = [
     names: ['settings', 'setting', 'preferences'],
   },
   { id: 'scope:apps', label: 'Search apps', icon: 'glyph:grid', names: ['apps', 'applications'] },
+  {
+    id: 'pick-color',
+    label: 'Pick a color from the screen',
+    icon: 'glyph:eyedropper',
+    names: ['pick color', 'color picker', 'eyedropper'],
+  },
+  {
+    id: 'scope:emoji',
+    label: 'Emoji',
+    icon: 'glyph:sparkle',
+    names: ['emoji', 'emojis', 'symbols'],
+  },
 ];
 
 /**

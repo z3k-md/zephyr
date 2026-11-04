@@ -96,6 +96,24 @@ pub fn close(handle: i64) -> bool {
     platform::close(handle)
 }
 
+/// Puts an app out of the way for a focus session: minimizes its windows on Windows, hides
+/// it on macOS. Nothing is quit, and the windows aren't brought back when the session ends.
+pub fn tuck(app: &App) {
+    #[cfg(windows)]
+    {
+        let exe = program_of(&app.id);
+        for window in platform::list() {
+            if tucked(app, exe.as_deref(), &window) {
+                platform::minimize(window.handle);
+            }
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = mac::hide(&app.id);
+    }
+}
+
 /// Quits an app gracefully, so it can still offer to save; nothing is force-killed. Windows
 /// asks each of its windows to close; macOS asks the app to quit, as its Quit menu item would.
 pub fn quit(app: &App) -> Result<(), String> {
@@ -131,6 +149,42 @@ pub fn of_app<'a>(app: &App, windows: &'a [OpenWindow]) -> Vec<&'a OpenWindow> {
         .iter()
         .filter(|window| belongs(app, exe.as_deref(), window))
         .collect()
+}
+
+/// Whether a focus session puts this window away: one of the app's windows (see [`belongs`])
+/// whose program is the app's own or is named after it. Steam's steamwebhelper.exe and the
+/// Discord.exe that Discord's Update.exe starts are put away; another program that only shares
+/// the folder stays up. A packaged app has no executable and is matched as switching does.
+#[cfg(any(windows, test))]
+fn tucked(app: &App, app_exe: Option<&str>, window: &OpenWindow) -> bool {
+    if !belongs(app, app_exe, window) {
+        return false;
+    }
+    let Some(app_exe) = app_exe else {
+        return true;
+    };
+    let exe = window.exe.to_lowercase().replace('/', "\\");
+    if exe == app_exe.to_lowercase().replace('/', "\\") {
+        return true;
+    }
+    let stem: String = exe
+        .rsplit('\\')
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches(".exe")
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .collect();
+    let word: String = app
+        .name
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect();
+    word.len() >= 3 && stem.contains(&word)
 }
 
 /// Whether a window is one of `app`'s: by the AppUserModelID it declares, by the program the
@@ -385,7 +439,8 @@ mod platform {
     use windows::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GW_OWNER, GWL_EXSTYLE, GetWindow, GetWindowLongW, GetWindowTextLengthW,
         GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible,
-        PostMessageW, SW_RESTORE, SetForegroundWindow, ShowWindow, WM_CLOSE, WS_EX_TOOLWINDOW,
+        PostMessageW, SW_MINIMIZE, SW_RESTORE, SetForegroundWindow, ShowWindow, WM_CLOSE,
+        WS_EX_TOOLWINDOW,
     };
     use windows::core::{BOOL, GUID, PWSTR};
 
@@ -546,6 +601,15 @@ mod platform {
                 && PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0)).is_ok()
         }
     }
+
+    pub fn minimize(handle: i64) {
+        let hwnd = HWND(handle as isize as *mut _);
+        unsafe {
+            if IsWindow(Some(hwnd)).as_bool() {
+                let _ = ShowWindow(hwnd, SW_MINIMIZE);
+            }
+        }
+    }
 }
 
 /// macOS knows which apps run (NSWorkspace) without listing their windows: running app rows
@@ -580,6 +644,21 @@ mod mac {
                 item.running = true;
             }
         }
+    }
+
+    /// Hides every running copy of the app at `bundle`. Its windows leave the screen; the
+    /// app keeps running. False when it isn't running.
+    pub fn hide(bundle: &str) -> bool {
+        objc2::rc::autoreleasepool(|_| {
+            let mut hid = false;
+            for app in NSWorkspace::sharedWorkspace().runningApplications().iter() {
+                let path = app.bundleURL().and_then(|url| url.path());
+                if path.is_some_and(|path| path.to_string() == bundle) {
+                    hid |= app.hide();
+                }
+            }
+            hid
+        })
     }
 
     /// Asks every running copy of the app at `bundle` to quit; false when none is running.
@@ -724,6 +803,69 @@ mod tests {
             &app(r"C:\Windows\regedit.exe", "Registry Editor"),
             Some(r"C:\Windows\regedit.exe"),
             &notepad
+        ));
+    }
+
+    #[test]
+    fn tucking_matches_a_programs_own_exe_not_its_neighbors() {
+        let app = |id: &str, name: &str| App {
+            id: id.into(),
+            name: name.into(),
+        };
+        let portable = app(r"C:\Users\Zach\Tools\foo.exe", "Foo");
+        let exe = Some(r"C:\Users\Zach\Tools\foo.exe");
+        assert!(tucked(
+            &portable,
+            exe,
+            &window("Foo", r"C:\Users\Zach\Tools\foo.exe", "")
+        ));
+        assert!(tucked(
+            &portable,
+            exe,
+            &window("Foo", r"c:/users/zach/tools/FOO.EXE", "")
+        ));
+        assert!(!tucked(&portable, exe, &window("Foo", "", "")));
+        let neighbor = window("Bar", r"C:\Users\Zach\Tools\bar.exe", "");
+        assert!(!tucked(&portable, exe, &neighbor));
+        // belongs() still counts that neighbor; tucking must not.
+        assert!(belongs(&portable, exe, &neighbor));
+
+        let steam = app(r"C:\Program Files (x86)\Steam\steam.exe", "Steam");
+        let steam_exe = Some(r"C:\Program Files (x86)\Steam\steam.exe");
+        assert!(tucked(
+            &steam,
+            steam_exe,
+            &window(
+                "Steam",
+                r"C:\Program Files (x86)\Steam\bin\cef\cef.win64\steamwebhelper.exe",
+                ""
+            )
+        ));
+        let discord = app(r"C:\Users\Zach\AppData\Local\Discord\Update.exe", "Discord");
+        assert!(tucked(
+            &discord,
+            Some(r"C:\Users\Zach\AppData\Local\Discord\Update.exe"),
+            &window(
+                "Discord",
+                r"C:\Users\Zach\AppData\Local\Discord\app-1.0.9200\Discord.exe",
+                ""
+            )
+        ));
+
+        let terminal = app("Microsoft.WindowsTerminal_8wekyb3d8bbwe!App", "Terminal");
+        assert!(tucked(
+            &terminal,
+            None,
+            &window(
+                "pwsh",
+                r"C:\Program Files\WindowsApps\Microsoft.WindowsTerminal\WindowsTerminal.exe",
+                "Microsoft.WindowsTerminal_8wekyb3d8bbwe!App"
+            )
+        ));
+        assert!(!tucked(
+            &terminal,
+            None,
+            &window("notes", r"C:\Windows\System32\notepad.exe", "")
         ));
     }
 

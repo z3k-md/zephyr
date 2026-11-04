@@ -12,6 +12,7 @@
   const pages = {
     grid: () => import('./grid/GridView.vue'),
     osd: () => import('./osd/OsdView.vue'),
+    picker: () => import('./picker/PickerView.vue'),
     update: () => import('./update/UpdateView.vue'),
     notes: () => import('./notes/NotesView.vue'),
     onboarding: () => import('./onboarding/OnboardingView.vue'),
