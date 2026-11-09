@@ -4,3 +4,5 @@ dist
 node_modules
 .git
 src/bar/emoji/data.json
+docs/.vitepress/cache
+docs/.vitepress/dist

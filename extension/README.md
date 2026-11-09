@@ -1,11 +1,6 @@
 # Zephyr browser extension
 
-Lets Zephyr switch to a tab you already have open instead of opening the page again. When you
-open a bookmark from the bar (typing `music`, say) and YouTube Music is already open, its tab
-comes to the front.
-
-Works in Chrome, Edge, Brave and other Chromium browsers. Without the extension, bookmarks
-still open, just always in a new tab.
+Chromium extension that lets Zephyr focus an existing tab when you open a bookmark from the bar. Full details: [Browser extension](https://z3k-md.github.io/zephyr/features/browser-extension).
 
 ## Install
 
@@ -13,28 +8,4 @@ still open, just always in a new tab.
 2. Turn on **Developer mode**.
 3. Click **Load unpacked** and choose this `extension` folder.
 
-After these files change, click the reload icon on the extension there. The `key` in the
-manifest gives the extension a fixed id (`akdgnalpenplabkcifocffknemieldni`), the only one Zephyr
-accepts; if you loaded it before the key was added, remove it and load it again.
-
-## How it works
-
-The extension keeps a local WebSocket open to Zephyr (`ws://127.0.0.1:47391`; Zephyr only
-accepts its own extension there). When you open a bookmark, Zephyr first asks it whether a tab
-is already on that page: the same address, or for a bookmark to a site or section (no
-`?query`), any page under it, so a `music.youtube.com` bookmark matches a song that is playing.
-If so, the extension switches to that tab and nothing new opens.
-
-When the link isn't up yet (just after the browser starts), Zephyr opens the page through a
-link to itself, `http://127.0.0.1:<port>/zephyr/open?u=<page>`, which redirects to the page.
-The extension catches that too, switches to the open tab and closes the new one.
-
-It needs the `tabs`, `webNavigation`, `alarms` and `storage` permissions, and talks only to Zephyr
-on this computer.
-
-During a focus session Zephyr also sends the sites to block and when the session ends
-(`{type:"focusBlock", sites, until}`). Until then, a top-frame navigation to one of those sites, or
-any subdomain of it, opens a page that says the site is blocked for focus and how long is left.
-Tabs already open on those sites are sent there too. The block is kept in the browser's session
-storage, so it still applies if the extension's worker restarts before the session ends. Without
-the extension the session still runs; those sites just stay open.
+After these files change, click the reload icon on the extension there. If you loaded it before the manifest `key` was added, remove it and load it again so the id matches what Zephyr expects.

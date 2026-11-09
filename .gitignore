@@ -23,5 +23,9 @@ dist-ssr
 
 .env
 
+# VitePress
+docs/.vitepress/cache
+docs/.vitepress/dist
+
 # Cargo builds pointed outside src-tauri (CARGO_TARGET_DIR)
 /target
