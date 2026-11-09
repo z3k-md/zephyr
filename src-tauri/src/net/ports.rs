@@ -199,8 +199,9 @@ fn processes(pids: &[u32]) -> HashMap<u32, Described> {
         .collect();
     missing.sort_unstable();
     missing.dedup();
-    if !missing.is_empty() {
-        let mut system = System::new();
+    if !missing.is_empty()
+        && let Ok(mut system) = System::new()
+    {
         system.refresh_processes_specifics(
             ProcessesToUpdate::Some(&missing),
             true,
