@@ -1074,6 +1074,18 @@
           />
           Keep clipboard history
         </label>
+        <label v-if="!isMac" class="check">
+          <input
+            type="checkbox"
+            :checked="snapshot.clipboard.cycleKeys"
+            :disabled="busy || !snapshot.clipboard.enabled"
+            @change="saveClip({ cycleKeys: !snapshot.clipboard.cycleKeys })"
+          />
+          Ctrl+C, then ↑ steps through history
+          <InfoTip
+            text="Hold Ctrl after copying and press ↑ to pick an earlier copy. Release Ctrl to copy it, or press V to paste it."
+          />
+        </label>
         <div class="field">
           <span>Shortcut</span>
           <ShortcutRecorder

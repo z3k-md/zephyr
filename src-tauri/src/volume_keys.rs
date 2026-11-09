@@ -21,6 +21,8 @@ pub struct Shown {
 }
 
 #[cfg(windows)]
+pub(crate) use win::on_key;
+#[cfg(windows)]
 pub use win::{guard, open_sound, press, set_enabled, set_position, wheel};
 
 #[cfg(not(windows))]
@@ -43,18 +45,16 @@ mod win {
 
     use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
     use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
-    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY,
         VK_VOLUME_DOWN, VK_VOLUME_MUTE, VK_VOLUME_UP,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        CallNextHookEx, DispatchMessageW, GWL_EXSTYLE, GWL_STYLE, GetMessageW, GetWindowLongPtrW,
-        HC_ACTION, HWND_TOPMOST, KBDLLHOOKSTRUCT, LLKHF_ALTDOWN, MSG, SW_HIDE, SWP_FRAMECHANGED,
-        SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SetWindowLongPtrW,
-        SetWindowPos, SetWindowsHookExW, ShowWindow, TranslateMessage, WH_KEYBOARD_LL, WM_KEYDOWN,
-        WM_SYSKEYDOWN, WS_CAPTION, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_MAXIMIZEBOX,
-        WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
+        GWL_EXSTYLE, GWL_STYLE, GetWindowLongPtrW, HWND_TOPMOST, KBDLLHOOKSTRUCT, LLKHF_ALTDOWN,
+        SW_HIDE, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+        SWP_SHOWWINDOW, SetWindowLongPtrW, SetWindowPos, ShowWindow, WM_KEYDOWN, WM_SYSKEYDOWN,
+        WS_CAPTION, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP,
+        WS_SYSMENU, WS_THICKFRAME,
     };
 
     use super::Shown;
@@ -99,8 +99,9 @@ mod win {
         Reset,
     }
 
-    /// Turns the takeover on or off. The hook and its worker start the first time it's on
-    /// and then stay, passing every key through while it's off.
+    /// Turns the takeover on or off. The worker starts the first time it's on and then
+    /// stays, passing every key through while it's off. The keyboard hook is the shared
+    /// one, and starts when this or the clipboard cycler is on.
     pub fn set_enabled(app: &AppHandle, on: bool) {
         ENABLED.store(on, Ordering::SeqCst);
         if !on {
@@ -111,9 +112,9 @@ mod win {
             if PRESSES.set(sender).is_ok() {
                 let app = app.clone();
                 std::thread::spawn(move || work(app, presses));
-                std::thread::spawn(hook);
             }
         }
+        crate::keyhook::install();
         let app = app.clone();
         tauri::async_runtime::spawn(async move {
             if let Err(err) = prepare_overlay(&app) {
@@ -259,48 +260,27 @@ mod win {
         }
     }
 
-    /// The low-level keyboard hook, on its own thread with the message loop it needs. It
-    /// only queues the press: a hook that's slow to return gets dropped by Windows.
-    fn hook() {
-        // SAFETY: a hook procedure installed for this thread's message loop, which runs
-        // until the process ends.
-        unsafe {
-            let module = GetModuleHandleW(None).ok();
-            if let Err(err) =
-                SetWindowsHookExW(WH_KEYBOARD_LL, Some(on_key), module.map(Into::into), 0)
-            {
-                log::error!("couldn't watch the volume keys: {err}");
-                return;
-            }
-            let mut message = MSG::default();
-            while GetMessageW(&mut message, None, 0, 0).as_bool() {
-                let _ = TranslateMessage(&message);
-                DispatchMessageW(&message);
-            }
+    /// Whether Zephyr is taking this key. Only a volume key's down is queued; its up is
+    /// taken too, so Windows doesn't change the level or show its flyout. Returns
+    /// immediately: the hook that calls this is removed if it's slow.
+    pub(crate) fn on_key(info: &KBDLLHOOKSTRUCT, message: u32) -> bool {
+        if !ENABLED.load(Ordering::Relaxed) {
+            return false;
         }
-    }
-
-    unsafe extern "system" fn on_key(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-        if code == HC_ACTION as i32 && ENABLED.load(Ordering::Relaxed) {
-            // SAFETY: for HC_ACTION, lparam points at the key's KBDLLHOOKSTRUCT.
-            let info = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
-            let key = VIRTUAL_KEY(info.vkCode as u16);
-            if key == VK_VOLUME_UP || key == VK_VOLUME_DOWN || key == VK_VOLUME_MUTE {
-                let message = wparam.0 as u32;
-                if message == WM_KEYDOWN || message == WM_SYSKEYDOWN {
-                    let alt = info.flags.0 & LLKHF_ALTDOWN.0 != 0;
-                    send(match key {
-                        VK_VOLUME_UP => Press::Up { alt },
-                        VK_VOLUME_DOWN => Press::Down { alt },
-                        _ => Press::Mute { alt },
-                    });
-                }
-                // Taken, down and up, so Windows neither changes the level nor shows its flyout.
-                return LRESULT(1);
+        let key = VIRTUAL_KEY(info.vkCode as u16);
+        if key == VK_VOLUME_UP || key == VK_VOLUME_DOWN || key == VK_VOLUME_MUTE {
+            if message == WM_KEYDOWN || message == WM_SYSKEYDOWN {
+                let alt = info.flags.0 & LLKHF_ALTDOWN.0 != 0;
+                send(match key {
+                    VK_VOLUME_UP => Press::Up { alt },
+                    VK_VOLUME_DOWN => Press::Down { alt },
+                    _ => Press::Mute { alt },
+                });
             }
+            // Taken, down and up, so Windows neither changes the level nor shows its flyout.
+            return true;
         }
-        // SAFETY: passing the key on, as every hook must.
-        unsafe { CallNextHookEx(None, code, wparam, lparam) }
+        false
     }
 
     /// Where the keys land, and until when, after an Alt press picked an app.

@@ -51,6 +51,7 @@ test('production window loaders preload the selected window stylesheet', async (
   for (const [search, hash, view] of [
     ['', '', 'BarView'],
     ['?view=osd', '', 'OsdView'],
+    ['?view=clipcycle', '', 'ClipCycleView'],
     ['?view=settings', '', 'SettingsView'],
     ['', '#settings', 'SettingsView'],
     ['?view=grid', '', 'GridView'],

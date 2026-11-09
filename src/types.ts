@@ -220,6 +220,8 @@ export interface ClipboardSettings {
   retentionDays: number;
   ignoredApps: string[];
   recognizeText: boolean;
+  /** Ctrl+C, then ↑ steps through history. Rust defaults this on. */
+  cycleKeys: boolean;
 }
 
 export type ClipKind = 'text' | 'link' | 'color' | 'image' | 'files';
@@ -262,6 +264,19 @@ export interface ClipDetail {
   copies: number;
   pinned: boolean;
   color: string | null;
+}
+
+/** `clipcycle-show`: newest first, `at` is the selected index. */
+export interface ClipCycleShown {
+  items: ClipSummary[];
+  at: number;
+}
+
+/** `clipcycle-done`: the list is gone and the pill is up. Rust hides the window after it. */
+export interface ClipCycleDone {
+  title: string;
+  kind: ClipKind;
+  pasted: boolean;
 }
 
 export interface FileIndexStatus {
