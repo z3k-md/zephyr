@@ -165,6 +165,7 @@ pub fn run() {
             commands::sound::osd_wheel,
             commands::sound::volume_key,
             commands::sound::osd_open_sound,
+            commands::sound::osd_hold,
             commands::resources::system_stats,
             commands::resources::resources_snapshot,
             commands::resources::resources_closed,

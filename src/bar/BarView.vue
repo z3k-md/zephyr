@@ -206,20 +206,41 @@
   // bar for a moment after each press. The Sound view already shows them, so not there.
   const volumeShown = shallowRef<VolumeShown | null>(null);
   let volumeTimer = 0;
+  /** The pointer is on the drawer or dragging in it: it stays up. */
+  let volumeHeld = false;
+  /** The Sound view grew out of the drawer, so it rises from there. */
+  const soundGrown = ref(false);
   function showVolume(shown: VolumeShown) {
     if (view.value === 'sound') return;
     volumeShown.value = shown;
+    hideVolumeLater();
+  }
+  function hideVolumeLater() {
     window.clearTimeout(volumeTimer);
+    if (volumeHeld) return;
     volumeTimer = window.setTimeout(() => (volumeShown.value = null), 2000);
   }
+  function holdVolume(on: boolean) {
+    volumeHeld = on;
+    hideVolumeLater();
+  }
+  watch(volumeShown, (shown) => {
+    if (!shown) volumeHeld = false;
+  });
   const VOLUME_KEYS: Record<string, 'up' | 'down' | 'mute'> = {
     AudioVolumeUp: 'up',
     AudioVolumeDown: 'down',
     AudioVolumeMute: 'mute',
   };
-  function openSoundFromDrawer() {
+  /** The Sound view, with `key` (master or an app) picked: from the drawer or Alt+Mute. */
+  async function openSound(key: string | null) {
+    soundGrown.value = !!volumeShown.value && view.value !== 'sound';
     volumeShown.value = null;
-    openView('sound');
+    volumeHeld = false;
+    window.clearTimeout(volumeTimer);
+    if (view.value !== 'sound') openView('sound');
+    await nextTick();
+    if (key) soundView.value?.select(key);
   }
   const clipView = ref<InstanceType<typeof ClipboardViewComponent> | null>(null);
   const typingView = ref<InstanceType<typeof TypingViewComponent> | null>(null);
@@ -819,7 +840,7 @@
       }),
       listen('clipboard-shown', () => openClip('')),
       listen<VolumeShown>('sound-key', (event) => showVolume(event.payload)),
-      listen('sound-open', () => openView('sound')),
+      listen<string | null>('sound-open', (event) => void openSound(event.payload)),
       // A hotkey the user gave a mode or scoped search (Settings > Shortcuts).
       listen<string>('bar-open', (event) => {
         query.value = '';
@@ -1226,6 +1247,11 @@
     if (event.key === 'Escape' && volumeShown.value) {
       event.preventDefault();
       volumeShown.value = null;
+      return;
+    }
+    if (event.key === 'Tab' && !event.shiftKey && volumeShown.value) {
+      event.preventDefault();
+      void openSound(volumeShown.value.key);
       return;
     }
     // With the bar in front, the volume keys reach the page instead of Zephyr's hook.
@@ -1888,8 +1914,17 @@
       @network="openView('network')"
       :initial-filter="resourcesFilter"
     />
-    <SoundView v-if="view === 'sound'" ref="soundView" @exit="leave" />
-    <SoundDrawer v-if="volumeShown" :shown="volumeShown" @open="openSoundFromDrawer" />
+    <SoundView
+      v-if="view === 'sound'"
+      ref="soundView"
+      :class="{ grow: soundGrown }"
+      :track="playingNow"
+      :position-ms="media.positionMs.value"
+      @exit="((soundGrown = false), leave())"
+      @media="media.press"
+      @focus-media="media.focus()"
+    />
+    <SoundDrawer v-if="volumeShown" :shown="volumeShown" @open="openSound" @hold="holdVolume" />
     <NetworkView
       v-if="view === 'network'"
       ref="networkView"

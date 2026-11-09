@@ -70,10 +70,16 @@ pub fn osd_wheel(delta: f32) {
     crate::volume_keys::wheel(delta.clamp(-0.2, 0.2));
 }
 
-/// A click on the volume overlay opens the Sound view.
+/// A click on the volume overlay opens the Sound view on the overlay's target.
 #[tauri::command]
-pub fn osd_open_sound(app: AppHandle) {
-    crate::volume_keys::open_sound(&app);
+pub fn osd_open_sound(app: AppHandle, key: Option<String>) {
+    crate::volume_keys::open_sound(&app, key);
+}
+
+/// The pointer came onto the volume overlay (true) or left it.
+#[tauri::command]
+pub fn osd_hold(app: AppHandle, on: bool) {
+    crate::volume_keys::hold(&app, on);
 }
 
 /// A volume key pressed with the bar in front, where the hook doesn't see it.

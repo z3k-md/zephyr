@@ -800,9 +800,14 @@ export function osdWheel(delta: number): Promise<void> {
   return invoke('osd_wheel', { delta });
 }
 
-/** A click on the volume overlay: the Sound view, in the bar. */
-export function osdOpenSound(): Promise<void> {
-  return invoke('osd_open_sound');
+/** A click on the volume overlay: the Sound view, in the bar, with `key` picked. */
+export function osdOpenSound(key: string | null): Promise<void> {
+  return invoke('osd_open_sound', { key });
+}
+
+/** The pointer came onto the volume overlay (true) or left it; it stays up while there. */
+export function osdHold(on: boolean): Promise<void> {
+  return invoke('osd_hold', { on });
 }
 
 /** Settings › Sound: where the volume overlay shows, `bottom`, `top` or `bottom-right`. */

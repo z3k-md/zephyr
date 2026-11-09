@@ -4,16 +4,15 @@
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import RowIcon from '../bar/RowIcon.vue';
   import SpeakerIcon from '../bar/SpeakerIcon.vue';
-  import { GLYPHS } from '../bar/glyphs';
-  import { osdOpenSound, osdWheel } from '../api';
+  import masterSpeaker from './master-speaker.png';
+  import { osdHold, osdOpenSound, osdWheel, soundSetMuted, soundSetVolume } from '../api';
   import type { VolumeShown } from '../types';
 
-  // The volume overlay, at the screen's corner while the bar is closed: the keys' target and
-  // its level, over the apps Alt+volume steps through. Rust shows and hides the window; the
-  // wheel over it moves the level, and a click opens the Sound view.
-
-  /** How many apps the strip shows, the target always among them. */
-  const STRIP = 8;
+  // The volume overlay, at the screen's corner while the bar is closed: the keys' target as
+  // its icon, a slider and its level, as Maestro drew it. Tab (Shift+Tab back) or Alt+volume
+  // steps through the sources. Rust shows and hides the window, and keeps it up while the
+  // pointer is on it; the wheel over it or a drag along its slider moves the level, a click
+  // on the icon mutes, and a click anywhere else opens the Sound view on the target.
 
   const shown = ref<VolumeShown | null>(null);
   /** Bumped when the overlay comes back after hiding, so the fade-in plays then and not on
@@ -39,22 +38,58 @@
   const target = computed(
     () => shown.value?.levels.find((level) => level.key === shown.value?.key) ?? null
   );
-  const strip = computed(() => {
-    const levels = shown.value?.levels ?? [];
-    const at = levels.findIndex((level) => level.key === shown.value?.key);
-    const start = Math.max(0, Math.min(at - Math.floor(STRIP / 2), levels.length - STRIP));
-    return levels.slice(start, start + STRIP);
-  });
   const percent = computed(() => Math.round((target.value?.volume ?? 0) * 100));
-  const subtitle = computed(() => {
-    if (!target.value) return '';
-    if (target.value.key === 'master') return 'Master · Alt+volume picks an app';
-    return target.value.muted ? 'Muted' : 'Alt+volume for the next app';
-  });
 
   function wheel(event: WheelEvent) {
     event.preventDefault();
     void osdWheel(event.deltaY < 0 ? 0.02 : -0.02);
+  }
+
+  /** Changes the target here at once; the caller tells the system. */
+  function update(change: { volume?: number; muted?: boolean }) {
+    const now = shown.value;
+    const level = target.value;
+    if (!now || !level) return;
+    shown.value = {
+      ...now,
+      levels: now.levels.map((item) => (item.key === level.key ? { ...item, ...change } : item)),
+    };
+  }
+
+  function setLevel(volume: number) {
+    const level = target.value;
+    if (!level) return;
+    volume = Math.min(1, Math.max(0, Math.round(volume * 100) / 100));
+    const wasMuted = level.muted;
+    update({ volume, muted: false });
+    void soundSetVolume(level.key, volume).catch(() => {});
+    if (wasMuted) void soundSetMuted(level.key, false).catch(() => {});
+  }
+
+  function toggleMute() {
+    const level = target.value;
+    if (!level) return;
+    update({ muted: !level.muted });
+    void soundSetMuted(level.key, !level.muted).catch(() => {});
+  }
+
+  function slide(event: PointerEvent) {
+    const track = event.currentTarget as HTMLElement;
+    const place = (move: PointerEvent) => {
+      const box = track.getBoundingClientRect();
+      setLevel((move.clientX - box.left) / Math.max(1, box.width));
+    };
+    track.setPointerCapture(event.pointerId);
+    place(event);
+    const onMove = (move: PointerEvent) => place(move);
+    const onUp = () => {
+      track.removeEventListener('pointermove', onMove);
+      track.removeEventListener('pointerup', onUp);
+      track.removeEventListener('pointercancel', onUp);
+    };
+    track.addEventListener('pointermove', onMove);
+    track.addEventListener('pointerup', onUp);
+    track.addEventListener('pointercancel', onUp);
   }
 </script>
 
@@ -67,46 +102,40 @@
     role="status"
     :aria-label="`${target.name} ${target.muted ? 'muted' : `${percent}%`}`"
     @wheel="wheel"
-    @click="osdOpenSound"
+    @pointerenter="osdHold(true)"
+    @pointerleave="osdHold(false)"
+    @mousedown.prevent
+    @click="osdOpenSound(target.key)"
   >
-    <div class="osd-top">
-      <SpeakerIcon
+    <button
+      type="button"
+      class="osd-source"
+      :aria-label="target.muted ? `Unmute ${target.name}` : `Mute ${target.name}`"
+      @click.stop="toggleMute"
+    >
+      <img
         v-if="target.key === 'master'"
-        :volume="target.volume"
-        :muted="target.muted"
-        :size="22"
+        class="osd-master"
+        :src="masterSpeaker"
+        alt=""
+        draggable="false"
       />
-      <RowIcon v-else :icon="target.icon" :label="target.name" :size="20" />
-      <span class="osd-name">
-        {{ target.name }}
-        <small>{{ subtitle }}</small>
-      </span>
-      <span class="osd-value">
-        <svg
-          v-if="target.muted"
-          viewBox="0 0 24 24"
-          aria-hidden="true"
-          v-html="GLYPHS.speakerMuted"
-        />
-        <template v-else>{{ percent }}</template>
-      </span>
+      <RowIcon v-else :key="target.key" :icon="target.icon" :label="target.name" :size="24" />
+      <SpeakerIcon :volume="target.volume" :muted="target.muted" :size="18" />
+    </button>
+    <div
+      class="osd-slider"
+      role="slider"
+      :aria-valuenow="percent"
+      aria-valuemin="0"
+      aria-valuemax="100"
+      @pointerdown.prevent="slide"
+      @click.stop
+    >
+      <span class="osd-track" />
+      <span class="osd-fill" :style="{ width: `${percent}%` }" />
+      <span class="osd-knob" :style="{ left: `${percent}%` }" />
     </div>
-    <div class="osd-bar"><span :style="{ width: `${percent}%` }" /></div>
-    <div v-if="strip.length > 1" class="osd-strip">
-      <span
-        v-for="level in strip"
-        :key="level.key"
-        class="osd-app"
-        :class="{ on: level.key === target.key, quiet: !level.active }"
-      >
-        <SpeakerIcon
-          v-if="level.key === 'master'"
-          :volume="level.volume"
-          :muted="level.muted"
-          :size="16"
-        />
-        <RowIcon v-else :icon="level.icon" :label="level.name" :size="16" />
-      </span>
-    </div>
+    <span class="osd-value">{{ percent }}</span>
   </div>
 </template>
