@@ -87,6 +87,10 @@ pub async fn save_clipboard_settings(
             log::error!("{err}");
         }
         clipboard::apply_settings(snapshot.clipboard.clone());
+        crate::clip_cycle::set_enabled(
+            &app,
+            snapshot.clipboard.enabled && snapshot.clipboard.cycle_keys,
+        );
         publish(&app, snapshot)
     })
     .await

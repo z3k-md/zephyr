@@ -34,6 +34,10 @@ const POLL: Duration = Duration::from_millis(400);
 #[serde(rename_all = "camelCase", default)]
 pub struct ClipboardSettings {
     pub enabled: bool,
+    /// Ctrl+C, then Up, steps through history. A missing field stays on: a bare
+    /// `bool` would read as off, and this ships on.
+    #[serde(default = "default_cycle_keys")]
+    pub cycle_keys: bool,
     /// Global shortcut that opens clipboard history; empty for none.
     pub shortcut: String,
     /// Days unpinned items are kept; 0 keeps them until the item limit.
@@ -53,6 +57,7 @@ impl Default for ClipboardSettings {
     fn default() -> Self {
         Self {
             enabled: true,
+            cycle_keys: true,
             shortcut: DEFAULT_SHORTCUT.into(),
             retention_days: 90,
             ignored_apps: [
@@ -94,6 +99,10 @@ impl ClipboardSettings {
         self.ignored_apps = seen;
         Ok(self)
     }
+}
+
+fn default_cycle_keys() -> bool {
+    true
 }
 
 // Items
@@ -672,20 +681,67 @@ pub fn color_hex(text: &str) -> Option<String> {
     (function && lower.ends_with(')') && lower.len() <= 40).then_some(lower)
 }
 
+/// The change count the watcher last saw. Shared so [`refresh_now`] checks the same
+/// count instead of racing the watcher into recording one copy twice.
+struct Seen {
+    last: Option<i64>,
+    ticks: u32,
+}
+
+fn lock_seen() -> std::sync::MutexGuard<'static, Seen> {
+    static SEEN: Mutex<Seen> = Mutex::new(Seen {
+        last: None,
+        ticks: 0,
+    });
+    SEEN.lock().unwrap_or_else(|poison| poison.into_inner())
+}
+
 fn watch() {
     let platform = platform();
-    let mut last = platform.change_count();
-    let mut ticks: u32 = 0;
+    {
+        let mut seen = lock_seen();
+        if seen.last.is_none() {
+            seen.last = Some(platform.change_count());
+        }
+    }
     loop {
         std::thread::sleep(POLL);
-        ticks = ticks.wrapping_add(1);
         // macOS: each check's pasteboard objects are let go before the next, rather than
         // piling up for the life of the thread.
         #[cfg(target_os = "macos")]
-        objc2::rc::autoreleasepool(|_| check(platform, &mut last, ticks));
+        objc2::rc::autoreleasepool(|_| poll(platform));
         #[cfg(not(target_os = "macos"))]
-        check(platform, &mut last, ticks);
+        poll(platform);
     }
+}
+
+/// One watcher tick. Holds the shared change count for the whole check.
+fn poll(platform: &dyn Platform) {
+    let mut seen = lock_seen();
+    if seen.last.is_none() {
+        return;
+    }
+    seen.ticks = seen.ticks.wrapping_add(1);
+    let ticks = seen.ticks;
+    if let Some(last) = seen.last.as_mut() {
+        check(platform, last, ticks);
+    }
+}
+
+/// Records a copy that landed since the watcher's last look, right now.
+///
+/// The watcher sleeps between checks, so Ctrl+C and an immediate Up can ask for
+/// history before that copy is in it. Safe from another thread: it takes the same
+/// lock as the watcher around the check.
+#[cfg(windows)]
+pub fn refresh_now() {
+    let platform = platform();
+    let mut seen = lock_seen();
+    let Some(last) = seen.last.as_mut() else {
+        return;
+    };
+    // Not a watcher tick. Tick 0 would also retry a keychain prompt.
+    check(platform, last, 1);
 }
 
 /// One look at the clipboard: records what was copied since the last.
@@ -839,6 +895,20 @@ pub fn list(query: &str, filter: &str, limit: usize) -> ClipList {
         problem: history.problem.clone(),
         enabled: history.settings.enabled,
     }
+}
+
+/// Unpinned history, newest first. Empty when history is off or still locked.
+#[cfg(any(windows, test))]
+pub fn recent(limit: usize) -> Vec<ClipSummary> {
+    let Ok(history) = history().lock() else {
+        return Vec::new();
+    };
+    if !history.settings.enabled || history.cipher.is_none() {
+        return Vec::new();
+    }
+    let mut items: Vec<&ClipItem> = history.items.iter().filter(|item| !item.pinned).collect();
+    items.sort_by(|a, b| b.last_copied.cmp(&a.last_copied).then(b.id.cmp(&a.id)));
+    items.into_iter().take(limit).map(summary).collect()
 }
 
 fn matches_words(item: &ClipItem, words: &[String]) -> bool {
@@ -1290,5 +1360,88 @@ mod tests {
         assert!(matches_words(&item, &["invoice".into()]));
         assert!(matches_words(&item, &["alpha".into(), "beta".into()]));
         assert!(!matches_words(&item, &["gamma".into()]));
+    }
+
+    #[test]
+    fn an_old_settings_file_keeps_cycling_on() {
+        let settings: ClipboardSettings = serde_json::from_str(
+            r#"{"enabled":true,"shortcut":"alt+shift+v","retentionDays":90,"ignoredApps":[],"recognizeText":true}"#,
+        )
+        .unwrap();
+        assert!(settings.cycle_keys);
+        assert!(ClipboardSettings::default().cycle_keys);
+    }
+
+    fn item(id: u64, text: &str, last: i64, pinned: bool) -> ClipItem {
+        ClipItem {
+            id,
+            kind: Kind::Text,
+            text: text.into(),
+            files: Vec::new(),
+            image: None,
+            ocr: None,
+            source: Some("Notes".into()),
+            first_copied: last,
+            last_copied: last,
+            copies: 1,
+            pinned,
+            hash: id.to_string(),
+        }
+    }
+
+    /// `recent` reads the process-wide history, so this puts it back afterwards.
+    struct PutBack {
+        items: Vec<ClipItem>,
+        cipher: Option<Arc<Cipher>>,
+        enabled: bool,
+    }
+
+    impl Drop for PutBack {
+        fn drop(&mut self) {
+            let Ok(mut history) = history().lock() else {
+                return;
+            };
+            history.items = std::mem::take(&mut self.items);
+            history.cipher = self.cipher.take();
+            history.settings.enabled = self.enabled;
+        }
+    }
+
+    #[test]
+    fn recent_lists_unpinned_newest_first() {
+        let _put_back = {
+            let mut history = history()
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            let put_back = PutBack {
+                items: std::mem::take(&mut history.items),
+                cipher: history.cipher.clone(),
+                enabled: history.settings.enabled,
+            };
+            history.cipher = Some(Arc::new(Cipher::from_key(&[9u8; 32]).unwrap()));
+            history.settings.enabled = true;
+            // The pin is the newest copy and must still be left out. `tie` and `mid`
+            // share a time, so the higher id comes first.
+            history.items = vec![
+                item(1, "old", 10, false),
+                item(3, "mid", 20, false),
+                item(5, "tie", 20, false),
+                item(2, "new", 30, false),
+                item(4, "pin", 40, true),
+            ];
+            put_back
+        };
+        let titles: Vec<String> = recent(10).into_iter().map(|item| item.title).collect();
+        assert_eq!(titles, ["new", "tie", "mid", "old"]);
+        assert_eq!(recent(1)[0].title, "new");
+
+        history().lock().unwrap().settings.enabled = false;
+        assert!(recent(10).is_empty());
+        {
+            let mut history = history().lock().unwrap();
+            history.settings.enabled = true;
+            history.cipher = None;
+        }
+        assert!(recent(10).is_empty());
     }
 }

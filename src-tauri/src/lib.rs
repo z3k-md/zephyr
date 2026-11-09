@@ -6,6 +6,7 @@ mod bookmarks;
 mod browser;
 mod calendar;
 mod capture;
+mod clip_cycle;
 mod clipboard;
 mod commands;
 mod countdown;
@@ -17,6 +18,8 @@ mod gpu;
 mod handoff;
 mod history;
 mod icons;
+#[cfg(windows)]
+mod keyhook;
 mod launch_groups;
 mod logger;
 mod login_task;
@@ -369,6 +372,10 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     nowplaying::start(app.handle());
     volume_keys::set_position(&snapshot.volume_overlay);
     volume_keys::set_enabled(app.handle(), snapshot.volume_keys);
+    clip_cycle::set_enabled(
+        app.handle(),
+        snapshot.clipboard.enabled && snapshot.clipboard.cycle_keys,
+    );
 
     if let Err(err) = tray::init(app) {
         log::error!("tray setup failed: {err}");
