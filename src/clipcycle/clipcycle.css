@@ -13,16 +13,17 @@ html.clipcycle-page #app {
   position: relative;
 }
 
+/* Nothing blurs behind this window, so the theme's glass sits on its solid menu color. */
 .cyc {
   position: absolute;
   left: 50%;
-  top: 50%;
+  bottom: 16px;
   width: 440px;
-  transform: translate(-50%, -50%);
+  transform: translateX(-50%);
   overflow: hidden;
   border: 1px solid var(--stroke-strong);
   border-radius: 14px;
-  background: var(--bg-solid);
+  background: var(--bg-solid), var(--menu-option-bg);
   color: var(--fg);
   font-size: 13px;
   box-shadow: 0 24px 60px color-mix(in srgb, var(--shade) 55%, transparent);
@@ -34,7 +35,7 @@ html.clipcycle-page #app {
 @keyframes cyc-in {
   from {
     opacity: 0;
-    transform: translate(-50%, -46%);
+    transform: translate(-50%, 8px);
   }
 }
 
@@ -170,7 +171,7 @@ html.clipcycle-page #app {
 .toast {
   position: absolute;
   left: 50%;
-  bottom: 46px;
+  bottom: 16px;
   display: flex;
   gap: 6px;
   max-width: 80%;
@@ -178,7 +179,7 @@ html.clipcycle-page #app {
   transform: translate(-50%, 0);
   border: 1px solid var(--stroke-strong);
   border-radius: 999px;
-  background: var(--bg-solid);
+  background: var(--bg-solid), var(--menu-option-bg);
   color: var(--fg);
   font-size: 12px;
   box-shadow: 0 10px 30px color-mix(in srgb, var(--shade) 45%, transparent);

@@ -490,6 +490,9 @@ mod win {
     /// The overlay's size, in logical pixels. The page draws the card inside it.
     const WIDTH: f64 = 460.0;
     const HEIGHT: f64 = 400.0;
+    /// The window's gap from the work area's bottom. The page keeps the card off the
+    /// window's bottom edge too, with room for its shadow.
+    const BOTTOM_MARGIN: f64 = 24.0;
 
     static ENABLED: AtomicBool = AtomicBool::new(false);
     static COMMANDS: OnceLock<Sender<Command>> = OnceLock::new();
@@ -724,8 +727,8 @@ mod win {
         }
     }
 
-    /// On the work area of the monitor the foreground window is on, centered and
-    /// a bit above the middle. The cursor's monitor stands in when that window
+    /// At the bottom center of the work area of the monitor the foreground window
+    /// is on, above the taskbar. The cursor's monitor stands in when that window
     /// can't be placed, then the primary. Shown without activating, so the app
     /// in front keeps the keys.
     fn place(app: &AppHandle, overlay: &tauri::WebviewWindow) {
@@ -756,7 +759,7 @@ mod win {
             .unwrap_or(1.0);
         let (width, height) = ((WIDTH * scale) as i32, (HEIGHT * scale) as i32);
         let x = left + (across - width) / 2;
-        let y = top + (f64::from(down - height) * 0.42) as i32;
+        let y = top + down - height - (BOTTOM_MARGIN * scale) as i32;
         let Ok(hwnd) = overlay.hwnd() else {
             return;
         };
