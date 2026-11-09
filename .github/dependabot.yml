@@ -29,6 +29,10 @@ updates:
       # Held by choice (2026-10-21).
       - dependency-name: keyring
         update-types: [version-update:semver-major]
+      # Moves with `windows`, tao, wry and cpal; bumped alone it puts two windows-core
+      # versions in the build and the COM interfaces stop compiling.
+      - dependency-name: windows-core
+        update-types: [version-update:semver-major]
 
   - package-ecosystem: bun
     directory: /
