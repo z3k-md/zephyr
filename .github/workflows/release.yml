@@ -186,3 +186,16 @@ jobs:
         run: |
           gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
             -f tag_name="$TAG" -F draft=false -f make_latest=true
+
+  # A release: published trigger would not run: releases created with GITHUB_TOKEN do not start
+  # other workflows. This job runs after publish, so a docs failure cannot affect the release.
+  docs:
+    needs: [version, publish]
+    if: needs.version.outputs.published == 'true'
+    uses: ./.github/workflows/docs.yml
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    with:
+      ref: ${{ needs.version.outputs.tag }}
