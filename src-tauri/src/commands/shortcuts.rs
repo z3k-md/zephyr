@@ -39,10 +39,16 @@ fn save_binding_now(app: &AppHandle, binding: crate::state::Binding) -> Result<P
     } else {
         ""
     };
+    let voice = if current.voice.enabled {
+        current.voice.shortcut.as_str()
+    } else {
+        ""
+    };
     let taken = [
         (current.summon_shortcut.as_str(), "the bar"),
         (clipboard, "clipboard history"),
         (current.notes_shortcut.as_str(), "notes"),
+        (voice, "voice input"),
     ];
     let updated = crate::bindings::upsert(&current.bindings, binding, &taken)?;
     let snapshot = state.update(|persisted| {

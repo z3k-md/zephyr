@@ -47,6 +47,7 @@ mod timer;
 mod tray;
 mod updater;
 mod util;
+pub mod voice;
 mod volume_keys;
 mod weather;
 mod web;
@@ -91,6 +92,19 @@ pub fn run() {
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, pressed, event| {
+                    // Release is delivered on both platforms (global-hotkey 0.8): Windows polls
+                    // the main key with GetAsyncKeyState after WM_HOTKEY, and macOS registers
+                    // kEventHotKeyReleased. Voice is handled before the press-only return so a
+                    // release still reaches the session.
+                    if shortcut::is_voice(pressed) {
+                        if !shortcut::recording() {
+                            match event.state {
+                                ShortcutState::Pressed => voice::session::press(app),
+                                ShortcutState::Released => voice::session::release(),
+                            }
+                        }
+                        return;
+                    }
                     if event.state != ShortcutState::Pressed {
                         return;
                     }
@@ -241,6 +255,12 @@ pub fn run() {
             commands::notes::keep_note_window,
             commands::notes::close_note_window,
             commands::notes::save_notes_shortcut,
+            commands::voice::voice_status,
+            commands::voice::voice_download,
+            commands::voice::voice_cancel_download,
+            commands::voice::voice_delete_model,
+            commands::voice::save_voice_settings,
+            commands::voice::voice_cancel,
             commands::shortcuts::pause_shortcuts,
             commands::shortcuts::save_binding,
             commands::shortcuts::binding_failures,
@@ -333,6 +353,9 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         .map_err(Box::<dyn std::error::Error>::from)?;
     // Before anything that starts a thread or takes a shortcut, which may look settings up.
     app.manage(state);
+    if let Ok(dir) = app.path().app_local_data_dir() {
+        voice::init(&dir);
+    }
 
     register_shortcuts(app.handle(), &snapshot);
     apply_autostart_later(app.handle(), &snapshot);

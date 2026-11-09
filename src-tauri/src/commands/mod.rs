@@ -28,6 +28,7 @@ pub mod sound;
 pub mod stocks;
 pub mod sync;
 pub mod updates;
+pub mod voice;
 pub mod weather;
 
 /// Runs blocking work (files, processes, the registry, the keychain) on a worker thread.

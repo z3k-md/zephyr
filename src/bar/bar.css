@@ -13,12 +13,12 @@
     inset 0 1px 0 var(--highlight),
     inset 0 0 0 0.5px var(--fill-faint);
   overflow: hidden;
-  /* One fixed size, like Raycast: results scroll inside it and the window never resizes
-     as you type. Each view fills the space and keeps its footer at the bottom. */
+  /* The results keep one size and the footer stays at the bottom. A wrapped query adds
+     its extra lines (--query-extra) so the window grows instead of eating those rows. */
   position: relative;
   display: flex;
   flex-direction: column;
-  height: var(--bar-height);
+  height: calc(var(--bar-height) + var(--query-extra, 0px));
 }
 
 :root {
@@ -411,6 +411,61 @@
   padding: 12px 12px 12px 18px;
 }
 
+/* The search row's controls sit on the first line. One line is the same center as
+   before; further lines leave them there. Slots are each control's own border box. */
+.bar > .input-row {
+  --query-font: 18px;
+  --query-pad: 4px;
+  --query-line: calc(var(--query-font) * 1.4);
+  align-items: flex-start;
+}
+
+:root[data-style='windows'] .bar > .input-row {
+  --query-font: 16px;
+}
+
+:root[data-style='mac'] .bar > .input-row {
+  --query-font: 22px;
+}
+
+.bar > .input-row > :is(.mark, .voice-pill, .scope-label, .bar-settings, .bar-update) {
+  margin-top: calc(var(--query-pad) + (var(--query-line) - var(--slot)) / 2);
+}
+
+.bar > .input-row > .mark {
+  --slot: 18px;
+}
+
+:root[data-style='windows'] .bar > .input-row > .mark {
+  --slot: 16px;
+}
+
+:root[data-style='mac'] .bar > .input-row > .mark {
+  --slot: 21px;
+}
+
+.bar > .input-row > .voice-pill {
+  --slot: 28px;
+}
+
+.bar > .input-row > .scope-label {
+  /* 12px type, 1.4 line, 3px padding and 1px border on each side. */
+  --slot: calc(12px * 1.4 + 8px);
+}
+
+.bar > .input-row > .bar-settings {
+  --slot: 30px;
+}
+
+.bar > .input-row > .bar-update {
+  --slot: 26px;
+}
+
+/* No chrome of their own: fill the first line and center what they draw. */
+.bar > .input-row > :is(.voice-status, .move-hint) {
+  height: calc(var(--query-line) + 2 * var(--query-pad));
+}
+
 .mark {
   width: 18px;
   height: 18px;
@@ -436,6 +491,7 @@
   position: relative;
   display: flex;
   flex: 1;
+  align-items: flex-start;
   min-width: 0;
 }
 
@@ -454,6 +510,73 @@
 
 .ghost-typed {
   color: transparent;
+}
+
+/* The search field wraps like the mirror beside it. One line matches the old input;
+   the mirror's height (queryField.ts) grows it, up to four lines, then it scrolls.
+   field-sizing stays off: WKWebView may not honor the textarea.query rule below. */
+.bar > .input-row .query-wrap .query {
+  font-size: var(--query-font);
+  line-height: var(--query-line);
+  padding: var(--query-pad) 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.bar > .input-row .query.measure {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  /* No bottom edge: the height has to be the text, not the field it is sizing. */
+  display: block;
+  height: auto;
+  min-height: calc(var(--query-line) + 2 * var(--query-pad));
+  max-height: none;
+  overflow: visible;
+  visibility: hidden;
+  pointer-events: none;
+  user-select: none;
+}
+
+.bar > .input-row .query.ghost {
+  display: block;
+  align-items: stretch;
+  overflow: hidden;
+  line-height: var(--query-line);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Scrolls with the field. The padding stays put, matching a textarea, so this moves
+   instead of the overlay's own scrollTop. */
+.bar > .input-row .ghost-body {
+  display: block;
+}
+
+.bar > .input-row textarea.query {
+  display: block;
+  width: 100%;
+  height: calc(var(--query-line) + 2 * var(--query-pad));
+  min-height: calc(var(--query-line) + 2 * var(--query-pad));
+  max-height: calc(var(--query-line) * 4 + 2 * var(--query-pad));
+  margin: 0;
+  overflow-x: hidden;
+  overflow-y: hidden;
+  resize: none;
+  appearance: none;
+  field-sizing: fixed;
+  scrollbar-width: none;
+}
+
+.bar > .input-row textarea.query::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.bar > .input-row textarea.query::placeholder {
+  white-space: nowrap;
 }
 
 .query:focus-visible {
@@ -1289,6 +1412,65 @@ textarea.query {
   stroke-width: 1.8;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+/* Hold-to-talk. The level (0–1) is the mic, updated by Rust while the key is down. */
+.voice-pill {
+  --level: 0;
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  margin-left: -6px;
+  border-radius: 999px;
+  color: var(--fg);
+  background: color-mix(in srgb, var(--focus) calc(16% + var(--level) * 50%), transparent);
+  box-shadow: 0 0 0 calc(var(--level) * 5px) color-mix(in srgb, var(--focus) 28%, transparent);
+  transition:
+    background-color 60ms linear,
+    box-shadow 60ms linear;
+}
+
+.voice-pill svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.voice-status {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.voice-hint {
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--chip);
+  color: var(--fg);
+  font-weight: 500;
+}
+
+.voice-loading {
+  color: var(--faint);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voice-pill {
+    transition: none;
+    box-shadow: none;
+    background: var(--chip);
+  }
 }
 
 /* What's playing, at the end of the search field: one card whose hover lights the cover,

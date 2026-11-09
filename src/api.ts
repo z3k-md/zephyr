@@ -39,6 +39,7 @@ import type {
   PermissionId,
   TypingBest,
   SuggestResponse,
+  VoiceStatus,
   NetworkAddress,
   NetworkHistory,
   NetworkSummary,
@@ -292,6 +293,32 @@ export function openNotes(id?: string, body?: string): Promise<void> {
 
 export function saveNotesShortcut(shortcut: string): Promise<Snapshot> {
   return invoke<Snapshot>('save_notes_shortcut', { shortcut });
+}
+
+export function voiceStatus(): Promise<VoiceStatus> {
+  return invoke<VoiceStatus>('voice_status');
+}
+
+/** Starts the speech-model download. Progress arrives as `voice-download` events. */
+export function voiceDownload(): Promise<void> {
+  return invoke('voice_download');
+}
+
+export function voiceCancelDownload(): Promise<void> {
+  return invoke('voice_cancel_download');
+}
+
+export function voiceDeleteModel(): Promise<void> {
+  return invoke('voice_delete_model');
+}
+
+export function saveVoiceSettings(enabled: boolean, shortcut: string): Promise<Snapshot> {
+  return invoke<Snapshot>('save_voice_settings', { enabled, shortcut });
+}
+
+/** Aborts the current hold. Rust then sends `voice-final` with `cancelled: true`. */
+export function voiceCancel(): Promise<void> {
+  return invoke('voice_cancel');
 }
 
 /** Turns Zephyr's own shortcuts off while one is being recorded, and back on after. */

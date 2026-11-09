@@ -87,6 +87,7 @@ export const GLYPHS: Record<string, string> = {
   // Sound: a speaker, and the same speaker struck through when muted.
   speaker:
     '<path d="M4.5 9.5h3l4.5-4v13l-4.5-4h-3z"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/>',
+  mic: '<rect x="9" y="3.5" width="6" height="10" rx="3"/><path d="M7 10.5a5 5 0 0 0 10 0M12 15.5v4M8.5 19.5h7"/>',
   speakerMuted: '<path d="M4.5 9.5h3l4.5-4v13l-4.5-4h-3z"/><path d="m16 9.5 5 5M21 9.5l-5 5"/>',
   music:
     '<path d="M9 17.5V6l10-2v11.5"/><circle cx="6.5" cy="17.5" r="2.5"/><circle cx="16.5" cy="15.5" r="2.5"/>',

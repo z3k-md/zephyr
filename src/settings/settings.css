@@ -1668,3 +1668,38 @@
   flex: none;
   gap: 4px;
 }
+
+.voice-option {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin: 10px 0;
+}
+
+.voice-option .voice-meter,
+.voice-option .voice-progress {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.voice-meter {
+  width: min(100%, 360px);
+  height: 6px;
+  margin: 8px 0;
+  border-radius: 999px;
+  background: var(--stroke);
+  overflow: hidden;
+}
+
+.voice-meter > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--focus);
+}
+
+.voice-meter > span.pending {
+  width: 100%;
+  opacity: 0.4;
+}

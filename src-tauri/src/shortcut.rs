@@ -14,6 +14,13 @@ pub const DEFAULT_SHORTCUT: &str = "command+space";
 #[cfg(not(target_os = "macos"))]
 pub const DEFAULT_SHORTCUT: &str = "alt+space";
 
+/// Hold-to-talk. Same canonical form as the other shortcuts (`ctrl+alt+space`).
+#[cfg(target_os = "macos")]
+pub const DEFAULT_VOICE_SHORTCUT: &str = "control+shift+space";
+
+#[cfg(not(target_os = "macos"))]
+pub const DEFAULT_VOICE_SHORTCUT: &str = "ctrl+alt+space";
+
 pub fn canonical_shortcut(input: &str) -> Result<String, String> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
@@ -25,12 +32,15 @@ pub fn canonical_shortcut(input: &str) -> Result<String, String> {
 
 static CLIPBOARD_ID: AtomicU32 = AtomicU32::new(0);
 static NOTES_ID: AtomicU32 = AtomicU32::new(0);
+static VOICE_ID: AtomicU32 = AtomicU32::new(0);
 /// Optional shortcuts besides the summon one. Bug captures aren't among them: Ctrl+Shift+S
 /// and Ctrl+R work only inside Zephyr's windows (main.ts), so other apps keep them.
 #[derive(Default, Clone, Copy)]
 pub struct Extras<'a> {
     pub clipboard: Option<&'a str>,
     pub notes: Option<&'a str>,
+    /// Hold-to-talk. Registered only while voice is on and the model is installed.
+    pub voice: Option<&'a str>,
     /// Hotkeys the user gave commands, apps and bookmarks.
     pub bindings: &'a [crate::state::Binding],
 }
@@ -86,9 +96,8 @@ pub fn pause(app: &AppHandle) {
 
 static RECORDING: AtomicBool = AtomicBool::new(false);
 
-/// Whether a shortcut is being recorded (between `pause` and the next `register`); Windows
-/// passes Alt+Space to the page then (window.rs).
-#[cfg(windows)]
+/// Whether a shortcut is being recorded (between `pause` and the next `register`). Presses
+/// in that gap are ignored; on Windows, Alt+Space is handed to the page instead (window.rs).
 pub fn recording() -> bool {
     RECORDING.load(Ordering::SeqCst)
 }
@@ -102,12 +111,17 @@ pub fn register(app: &AppHandle, shortcut: &str, extras: Extras<'_>) -> Result<(
     let _ = shortcuts.unregister_all();
     CLIPBOARD_ID.store(0, Ordering::SeqCst);
     NOTES_ID.store(0, Ordering::SeqCst);
+    VOICE_ID.store(0, Ordering::SeqCst);
     // A summon key another app holds shouldn't take the other shortcuts down with it:
     // register the rest, then report it.
     let summon = shortcuts
         .register(parsed)
         .map_err(|err| format!("Couldn't register {shortcut}: {err}"));
-    for (wanted, slot) in [(extras.clipboard, &CLIPBOARD_ID), (extras.notes, &NOTES_ID)] {
+    for (wanted, slot) in [
+        (extras.clipboard, &CLIPBOARD_ID),
+        (extras.notes, &NOTES_ID),
+        (extras.voice, &VOICE_ID),
+    ] {
         let Some(wanted) = wanted.filter(|value| !value.is_empty()) else {
             continue;
         };
@@ -161,6 +175,11 @@ pub fn is_clipboard(shortcut: &Shortcut) -> bool {
     id != 0 && shortcut.id() == id
 }
 
+pub fn is_voice(shortcut: &Shortcut) -> bool {
+    let id = VOICE_ID.load(Ordering::SeqCst);
+    id != 0 && shortcut.id() == id
+}
+
 fn parse(shortcut: &str) -> Result<Shortcut, String> {
     shortcut
         .parse()
@@ -174,6 +193,9 @@ mod tests {
     #[test]
     fn the_default_summon_shortcut_parses() {
         assert!(canonical_shortcut(DEFAULT_SHORTCUT).is_ok());
+        assert!(canonical_shortcut(DEFAULT_VOICE_SHORTCUT).is_ok());
+        assert!(canonical_shortcut("control+shift+space").is_ok());
+        assert!(canonical_shortcut("ctrl+alt+space").is_ok());
         assert!(canonical_shortcut("alt+space").is_ok());
         assert!(canonical_shortcut("command+space").is_ok());
         assert!(canonical_shortcut("ctrl+alt+k").is_ok());
