@@ -82,7 +82,8 @@ pub struct Snapshot {
 
 struct Table {
     system: System,
-    users: Users,
+    /// None when the account list can't be read; rows then show no owner.
+    users: Option<Users>,
     /// Processes whose path, command, folder and owner were read. Those never change, and
     /// for other users' processes the reads fail every time, so each is asked once.
     described: HashSet<Pid>,
@@ -113,14 +114,14 @@ struct Identity {
 }
 
 impl Identity {
-    fn of(process: &sysinfo::Process, users: &Users) -> Option<Identity> {
+    fn of(process: &sysinfo::Process, users: Option<&Users>) -> Option<Identity> {
         let name = process.name().to_string_lossy().into_owned();
         if name.is_empty() {
             return None;
         }
         let user = process
             .user_id()
-            .and_then(|id| users.get_user_by_id(id))
+            .and_then(|id| users?.get_user_by_id(id))
             .map(|user| user.name().to_string())
             .unwrap_or_default();
         let command: Vec<String> = process
@@ -287,17 +288,30 @@ pub fn snapshot(sort: &str, filter: &str, limit: usize) -> Snapshot {
     let mut guard = TABLE
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let table = guard.get_or_insert_with(|| Table {
-        system: System::new(),
-        users: Users::new_with_refreshed_list(),
-        described: HashSet::new(),
-        identities: HashMap::new(),
-        counters: HashMap::new(),
-        histories: HashMap::new(),
-        usage: HashMap::new(),
-        last: Instant::now(),
-        used: Instant::now(),
-    });
+    if guard.is_none() {
+        *guard = System::new().ok().map(|system| Table {
+            system,
+            users: Users::new_with_refreshed_list().ok(),
+            described: HashSet::new(),
+            identities: HashMap::new(),
+            counters: HashMap::new(),
+            histories: HashMap::new(),
+            usage: HashMap::new(),
+            last: Instant::now(),
+            used: Instant::now(),
+        });
+    }
+    let Some(table) = guard.as_mut() else {
+        return Snapshot {
+            totals,
+            cores: stats::cores(),
+            history: stats::history_buckets(120),
+            rows: Vec::new(),
+            processes: 0,
+            uptime: System::uptime().unwrap_or_default(),
+            battery: battery(),
+        };
+    };
     let elapsed = table.last.elapsed().as_secs_f64().max(0.2);
     let usage = measure(table, elapsed);
     table.last = Instant::now();
@@ -358,7 +372,7 @@ pub fn snapshot(sort: &str, filter: &str, limit: usize) -> Snapshot {
         history: stats::history_buckets(120),
         rows,
         processes,
-        uptime: System::uptime(),
+        uptime: System::uptime().unwrap_or_default(),
         battery: battery(),
     }
 }
@@ -390,7 +404,7 @@ fn describe(table: &mut Table, changed: &[Pid]) {
     for pid in changed {
         if let Some(process) = alive.get(pid) {
             table.described.insert(*pid);
-            if let Some(identity) = Identity::of(process, &table.users) {
+            if let Some(identity) = Identity::of(process, table.users.as_ref()) {
                 table.identities.insert(pid.as_u32(), identity);
             }
         }
@@ -1041,19 +1055,21 @@ pub fn relaunch(name: &str, pids: &[u32]) -> Result<(), String> {
 /// The processes among `pids` that, read afresh, still belong to the row called `name`.
 fn still_named(name: &str, pids: &[u32]) -> Vec<u32> {
     let asked: Vec<Pid> = pids.iter().map(|pid| Pid::from_u32(*pid)).collect();
-    let mut system = System::new();
+    let Ok(mut system) = System::new() else {
+        return Vec::new();
+    };
     system.refresh_processes_specifics(
         ProcessesToUpdate::Some(&asked),
         true,
         ProcessRefreshKind::nothing().with_exe(UpdateKind::Always),
     );
-    let users = Users::new();
+    let users = Users::new().ok();
     pids.iter()
         .copied()
         .filter(|pid| {
             system
                 .process(Pid::from_u32(*pid))
-                .and_then(|process| Identity::of(process, &users))
+                .and_then(|process| Identity::of(process, users.as_ref()))
                 .is_some_and(|identity| identity.name.eq_ignore_ascii_case(name))
         })
         .collect()
@@ -1249,13 +1265,14 @@ mod tests {
     #[test]
     fn only_processes_still_under_the_name_are_acted_on() {
         let own = std::process::id();
-        let mut system = System::new();
+        let mut system = System::new().unwrap();
         system.refresh_processes_specifics(
             ProcessesToUpdate::Some(&[Pid::from_u32(own)]),
             true,
             ProcessRefreshKind::nothing().with_exe(UpdateKind::Always),
         );
-        let name = Identity::of(system.process(Pid::from_u32(own)).unwrap(), &Users::new())
+        let users = Users::new().ok();
+        let name = Identity::of(system.process(Pid::from_u32(own)).unwrap(), users.as_ref())
             .unwrap()
             .name;
         assert_eq!(still_named(&name.to_uppercase(), &[own]), [own]);

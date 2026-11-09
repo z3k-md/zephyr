@@ -279,13 +279,13 @@ pub fn totals() -> Stats {
 }
 
 impl Sampler {
-    fn new() -> Self {
-        let mut system = System::new();
+    fn new() -> Option<Self> {
+        let mut system = System::new().ok()?;
         system.refresh_cpu_usage();
-        Sampler {
+        Some(Sampler {
             system,
-            disks: Disks::new_with_refreshed_list(),
-            networks: Networks::new_with_refreshed_list(),
+            disks: Disks::new_with_refreshed_list().ok()?,
+            networks: Networks::new_with_refreshed_list().ok()?,
             gpu: crate::gpu::Reader::new(),
             last: Instant::now(),
             latest: None,
@@ -295,7 +295,15 @@ impl Sampler {
             temps: None,
             gpu_read: None,
             gpu_by_process: std::collections::HashMap::new(),
+        })
+    }
+
+    /// The sampler, made on first use. None where sysinfo can't read this system.
+    fn get(slot: &mut Option<Sampler>) -> Option<&mut Sampler> {
+        if slot.is_none() {
+            *slot = Sampler::new();
         }
+        slot.as_mut()
     }
 }
 
@@ -320,7 +328,7 @@ fn tick(full: bool) -> Option<Stats> {
     let per_process = RESOURCES_OPEN.load(Ordering::SeqCst);
     let (mut reader, reuse) = {
         let mut guard = SAMPLER.lock().ok()?;
-        let sampler = guard.get_or_insert_with(Sampler::new);
+        let sampler = Sampler::get(&mut guard)?;
         // While nothing shows it, the GPU is read every few seconds, the last reading
         // standing in between.
         if !full
@@ -341,7 +349,7 @@ fn tick(full: bool) -> Option<Stats> {
         None => reader.as_mut().and_then(|reader| reader.read(per_process)),
     };
     let mut guard = SAMPLER.lock().ok()?;
-    let sampler = guard.get_or_insert_with(Sampler::new);
+    let sampler = Sampler::get(&mut guard)?;
     if let Some(mut reader) = reader {
         sampler.gpu_read = Some(Instant::now());
         if per_process {
@@ -376,7 +384,6 @@ fn record(sampler: &mut Sampler, gpu: Option<crate::gpu::Gpu>, full: bool) -> St
     });
     let disk = sampler
         .disks
-        .list_mut()
         .iter_mut()
         .find(|disk| disk.mount_point() == Path::new(&mount));
     let (disk_free, disk_total) = match (disk, previous) {
@@ -450,7 +457,7 @@ fn record(sampler: &mut Sampler, gpu: Option<crate::gpu::Gpu>, full: bool) -> St
             .system
             .cpus()
             .iter()
-            .map(|cpu| cpu.cpu_usage().round().clamp(0.0, 100.0) as u8)
+            .map(|cpu| cpu.usage().round().clamp(0.0, 100.0) as u8)
             .collect();
         sampler.cores.push_back((Instant::now(), per_core));
         sampler.history.push_back((
@@ -544,12 +551,14 @@ pub fn gpu_by_process() -> std::collections::HashMap<u32, f32> {
 /// or without the monitor the busiest real one. Summing them all counts a VPN's traffic twice
 /// (the tunnel and the link under it) and counts loopback as network.
 fn throughput(networks: &Networks) -> (u64, u64) {
-    let list = networks.list();
-    if let Some(data) = crate::net::primary_interface().and_then(|name| list.get(&name)) {
+    if let Some(data) =
+        crate::net::primary_interface().and_then(|name| networks.get(std::ffi::OsStr::new(&name)))
+    {
         return (data.received(), data.transmitted());
     }
-    list.iter()
-        .filter(|(name, _)| !virtual_interface(name))
+    networks
+        .iter()
+        .filter(|(name, _)| !virtual_interface(&name.to_string_lossy()))
         .map(|(_, data)| (data.received(), data.transmitted()))
         .max_by_key(|(down, up)| down + up)
         .unwrap_or((0, 0))

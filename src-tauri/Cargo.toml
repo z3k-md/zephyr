@@ -64,7 +64,7 @@ tungstenite = { version = "0.30.0", default-features = false, features = ["hands
 if-addrs = "0.15.0"
 socket2 = "0.6"
 tokio = { version = "1", features = ["sync", "time"] }
-sysinfo = { version = "0.39", default-features = false, features = ["system", "disk", "network", "user"] }
+sysinfo = { version = "0.40", default-features = false, features = ["system", "disk", "network", "user"] }
 tauri-plugin-drag = "2.1.1"
 # Resources: the battery, where there is one.
 starship-battery = "0.12"
@@ -97,7 +97,7 @@ tar = "0.4.46"
 
 [target.'cfg(windows)'.dependencies]
 # The Windows speech runtime ships as a zip. deflate is the method the official archive uses.
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 windows-core = "0.62"
 windows = { version = "0.62", features = [
     "Foundation",
