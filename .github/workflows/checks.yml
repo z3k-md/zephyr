@@ -163,20 +163,19 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
           BEFORE: ${{ github.event.before }}
         run: |
-          args=""
           if [ "$EVENT_NAME" = pull_request ]; then
             git fetch origin "$BASE_REF"
-            args="--base origin/$BASE_REF"
+            set -- --base "origin/$BASE_REF"
           elif [ "$EVENT_NAME" = push ]; then
             base="$BEFORE"
             if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
               base="HEAD~1"
             fi
-            args="--base $base"
+            set -- --base "$base"
           else
-            args="--all"
+            set -- --all
           fi
-          node scripts/docs-check.mjs $args
+          node scripts/docs-check.mjs "$@"
 
       - name: Build docs
         run: bun run docs:build
