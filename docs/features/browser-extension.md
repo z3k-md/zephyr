@@ -1,6 +1,6 @@
 ---
 title: Browser extension
-summary: Switch to an open tab instead of duplicating it; block sites during focus sessions.
+summary: Switch to an open tab; block sites during focus sessions.
 status: shipped
 group: bar
 platforms: [windows, macos]
@@ -11,11 +11,7 @@ code:
   - src-tauri/src/loopback.rs
 ---
 
-The Chromium extension lets Zephyr switch to a tab you already have open instead of opening the page again. It also enforces site blocking during a focus session when [Timers and focus](/features/timers-and-focus) is configured.
-
-Works in Chrome, Edge, Brave and other Chromium browsers. Without the extension, bookmarks still open, just always in a new tab.
-
-## Use it
+The Chromium extension lets Zephyr switch to a tab you already have open instead of opening the page again. It also enforces site blocking during a focus session when [Timers and focus](/features/timers-and-focus) is configured. Works in Chrome, Edge, Brave and other Chromium browsers. Without the extension, bookmarks still open, always in a new tab.
 
 Load the unpacked extension from the repo's `extension` folder (install steps live in `extension/README.md`).
 
@@ -25,7 +21,7 @@ When the WebSocket is not up yet, Zephyr opens the page through `http://127.0.0.
 
 ## Settings
 
-Focus blocking lists come from **Settings > Focus** (sites to block until the session ends). See [Timers and focus](/features/timers-and-focus).
+Focus blocking lists come from Settings > Focus (sites to block until the session ends). See [Timers and focus](/features/timers-and-focus).
 
 ## How it works
 

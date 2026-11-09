@@ -1,6 +1,6 @@
 ---
 title: Sync
-summary: Sign in with Google, set up encryption keys, and approve new computers.
+summary: Google sign-in, encryption keys, and device approval.
 status: partial
 group: account
 platforms: [windows, macos]
@@ -13,19 +13,15 @@ code:
   - src/bar/useDevices.ts
   - supabase/**
 gaps:
-  - Sync notes across computers
-  - Sync clipboard history across computers
+  - Notes sync
+  - Clipboard sync
 ---
 
-Settings > Sync signs in with Google, creates end-to-end encryption keys and a recovery key, and
-lets you approve new computers from one you already use. Syncing notes and clipboard history is
-planned next; no user data syncs yet.
+Settings > Sync signs in with Google in the browser, creates end-to-end encryption keys and a
+recovery key, and approves new computers from one you already use. Nothing syncs yet.
 
-## Use it
-
-Sign in with Google in the browser, save the recovery key, and finish setup on this computer. When
-another device asks to join, a card appears in the bar with a short code; allow or deny it there
-or in Settings > Sync.
+When another computer asks to join, a card with a short code appears in the bar. Allow or deny it
+there or in Settings > Sync.
 
 ## Keys
 
@@ -36,10 +32,10 @@ or in Settings > Sync.
 
 ## Settings
 
-Settings > Sync covers sign-in, recovery key, device list, sign out, and revoking a device.
+Settings > Sync: sign in and out, the recovery key, the device list, and revoking a device.
 
 ## Privacy
 
-Notes and clipboard items are meant to sync sealed with one account key only devices ever see. The
-server stores device public keys, metadata, and ciphertext envelopes—not the account key or your
-recovery key in the clear. Sync requests run in Rust; the webview never sees an access token.
+The account key exists in the clear only on your computers. The server stores device public keys,
+metadata, and the account key encrypted to each approved device; never the account key or the
+recovery key in the clear. Sync requests run in Rust, so the webview never sees an access token.

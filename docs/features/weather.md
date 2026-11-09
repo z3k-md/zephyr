@@ -1,6 +1,6 @@
 ---
 title: Weather
-summary: Forecast from Open-Meteo for your place or any city you name.
+summary: Open-Meteo forecast for your place or a named city.
 status: shipped
 group: utilities
 platforms: [windows, macos]
@@ -17,12 +17,8 @@ code:
 ---
 
 Type `weather`, `weather raleigh nc`, or `stockholm sweden weather` to open the weather card.
-The footer chip shows the current place when forecast data is available.
-
-## Use it
-
-The card shows now, the next hours, and a few days ahead. Tab steps through the next 48 hours with
-each hour's chance of rain; Shift+Tab moves back. Ctrl+Enter opens a fuller forecast in the browser.
+The footer chip shows the current place when forecast data is available. The card shows now, the
+next hours, and four days ahead.
 
 ## Keys
 
@@ -31,6 +27,8 @@ each hour's chance of rain; Shift+Tab moves back. Ctrl+Enter opens a fuller fore
 | Tab                 | Next hour          |
 | Shift+Tab           | Previous hour      |
 | Ctrl+Enter (⌘Enter) | Open full forecast |
+
+Tab steps through the next 48 hours; each step shows that hour's chance of rain.
 
 ## Settings
 

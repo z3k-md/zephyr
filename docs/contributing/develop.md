@@ -17,4 +17,4 @@ Before pushing, run `bun run check` (`scripts/check.sh`). It runs what Checks ru
 
 The version in `package.json` and `src-tauri/Cargo.toml` is the last release's, for local builds. Releases stamp both from the tag, so they aren't bumped by hand. `rust-version` in `Cargo.toml` follows the toolchain in `rust-toolchain.toml`; a test fails if they differ.
 
-Docs: `bun run docs:dev` serves the site locally; see [How the docs work](/contributing/docs).
+`bun run docs:dev` serves this site locally; see [How the docs work](/contributing/docs).

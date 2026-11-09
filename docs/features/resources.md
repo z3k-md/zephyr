@@ -1,6 +1,6 @@
 ---
 title: System resources
-summary: CPU, memory, GPU, and network use over the last 15 minutes, with running apps.
+summary: Live processes with fifteen-minute CPU, memory, GPU, and network.
 status: shipped
 group: utilities
 platforms: [windows, macos]
@@ -19,11 +19,6 @@ code:
 Type `top` or **System Resources** to open the live process list. Apps sit above background
 processes. Sparklines show CPU, memory, GPU, and network for about the last 15 minutes. The
 footer chip links here too.
-
-## Use it
-
-Enter switches to a running app's window. Shift+Space shows more detail on a row. Tab changes
-sort order (CPU, memory, and others). Ctrl+K opens row actions including quit.
 
 ## Keys
 

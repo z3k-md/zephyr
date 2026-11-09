@@ -13,13 +13,9 @@ code:
 ---
 
 What's playing appears at the end of the search row and in the footer when a supported app is
-active. Use play, pause, and skip controls, or global shortcuts from anywhere in the bar.
-
-## Use it
-
-Click the strip for previous, play/pause, and next. Scroll over it to change that app's volume
-(mixer level on Windows, app volume on macOS for supported players). Right-click switches focus
-to the playing app.
+active. Click the strip for previous, play/pause, and next. Scroll over it to change that app's
+volume (mixer level on Windows, app volume on macOS for supported players). Right-click switches
+focus to the playing app.
 
 ## Keys
 

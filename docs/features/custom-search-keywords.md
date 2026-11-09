@@ -1,6 +1,6 @@
 ---
 title: Custom search keywords
-summary: Short keywords besides Google for sites like YouTube and GitHub.
+summary: Short keywords that send bar text to chosen sites.
 status: planned
 group: bar
 ---

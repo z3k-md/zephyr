@@ -1,6 +1,6 @@
 ---
 title: Clipboard history
-summary: Search everything you've copied and paste it into the app in front.
+summary: Search everything you've copied and paste it into the front app.
 status: shipped
 group: utilities
 platforms: [windows, macos]
@@ -13,20 +13,14 @@ code:
   - src/bar/ClipboardView.vue
   - src/clipcycle/**
 gaps:
-  - Sync across computers (waits on Sync)
+  - Clipboard sync
 ---
 
-⌘⇧V (Alt+Shift+V on Windows) or `!clip` opens clipboard history from the bar. Search text,
-links, colors, images, files, and text recognized inside screenshots.
+Alt+Shift+V (⌘⇧V) or `!clip` opens it. It searches copied text, links, colors, images and files,
+and the text inside copied screenshots.
 
-## Use it
-
-Pick a row and Enter pastes into the app in front. Ctrl+Enter (⌘Enter) copies without pasting.
-Shift+Enter pastes as plain text. Tab cycles the type filter. Ctrl+K lists more actions on a row.
-
-On Windows, hold Ctrl after Ctrl+C and press ↑ or ↓ to step through earlier copies without
-opening the bar. Release Ctrl to copy the selected item, press V to paste it, or Esc to cancel.
-The popup shows a short preview of each item.
+On Windows, the clipboard cycler steps through earlier copies without opening the bar, in a small
+popup that previews each one.
 
 ## Keys
 

@@ -17,15 +17,9 @@ code:
   - src/osd/**
 ---
 
-Type `vol`, `mixer`, or **Sound** to open the volume mixer (Windows only). Every app's volume
-has a live meter. ↑↓ picks a row, ←→ adjusts level (Shift for 10%), M mutes, 1–9 and 0 jump to
-10–100%, and Tab switches the output device. With the bar open, hardware volume keys can show
-levels in the bar instead of the overlay.
-
-## Use it
-
-The master output device is always the first row. Pick an app row and move levels with the arrow
-keys or digit keys. Ctrl+K lists actions such as mute or switch device.
+Type `vol`, `mixer`, or **Sound** to open the volume mixer (Windows only). The master output
+device is always the first row. Every app has a live meter. With the bar open, hardware volume
+keys can show levels in the bar instead of the overlay.
 
 ## Keys
 

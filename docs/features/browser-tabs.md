@@ -1,6 +1,6 @@
 ---
 title: Browser tabs
-summary: Search open tabs through the extension and switch to one.
+summary: Search open tabs in the extension and switch to one.
 status: planned
 group: bar
 ---

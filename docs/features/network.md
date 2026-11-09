@@ -1,6 +1,6 @@
 ---
 title: Network
-summary: Router, internet, and DNS latency over time, and what's wrong right now.
+summary: Router, internet, and DNS latency over time plus current faults.
 status: shipped
 group: utilities
 platforms: [windows, macos]
@@ -16,13 +16,9 @@ code:
 ---
 
 Type `ping` or **Network** to open the connection view. Charts show median and p95 latency to your
-router, the internet, and DNS, plus packet loss. The footer warns when something looks wrong. You
-can also start a [speed test](/features/speed-test) from here.
-
-## Use it
-
-Live charts update every second while the view is open. Hover or focus a bucket to read exact
-numbers. Ctrl+K runs actions such as starting or canceling a speed test.
+router, the internet, and DNS, plus packet loss. The footer warns when something looks wrong.
+Start a [speed test](/features/speed-test) from here. Charts update every second while the view
+is open; hover or focus a bucket for exact numbers.
 
 ## Keys
 

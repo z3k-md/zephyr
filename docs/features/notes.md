@@ -1,6 +1,6 @@
 ---
 title: Notes
-summary: Quick rich-text notes in their own windows, searchable from the bar.
+summary: Rich-text notes in windows, searchable from the bar.
 status: shipped
 group: utilities
 platforms: [windows, macos]
@@ -13,12 +13,9 @@ code:
 ---
 
 ⌥⌘N (Ctrl+Alt+N on Windows) or `!note` opens a note or finds one in the bar. Notes are HTML
-files in Zephyr's settings folder; open notes come back after a restart.
-
-## Use it
-
-From the bar, pick a note or start a new one with Enter. The shortcut opens a small note window
-over your work. Each note saves as you type.
+files in Zephyr's settings folder; open notes return after a restart. Pick a note or start a new
+one with Enter from the bar. The global shortcut opens a small note window over your work. Each
+note saves as you type.
 
 ## Keys
 

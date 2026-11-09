@@ -1,6 +1,6 @@
 ---
 title: Shell
-summary: Run shell commands in the bar, or hand off to a real terminal.
+summary: Run shell commands in the bar or open them in a terminal.
 status: shipped
 group: utilities
 platforms: [windows, macos]
@@ -13,13 +13,7 @@ code:
 ---
 
 `>` or `!sh` opens the shell in the bar. On Windows use Git Bash, PowerShell, or WSL; on macOS
-commands run in your login shell.
-
-## Use it
-
-Type a command and Enter runs it; output streams in the bar. Recent commands appear while you
-type. Ctrl+Enter (⌘Enter) opens the same command in a real terminal. A running command stops with
-Ctrl+C (⌘C on macOS).
+commands run in your login shell. Output streams in the bar. Recent commands appear while you type.
 
 ## Keys
 

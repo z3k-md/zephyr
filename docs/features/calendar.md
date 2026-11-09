@@ -17,12 +17,8 @@ code:
 lists today under other results so Calculator and the Calendar app stay on top. Enter joins a
 meeting or copies details when there is no link. A meeting starting within 10 minutes (or one that
 started less than 5 minutes ago) can lead the empty bar; the footer names the next one within 15
-minutes.
-
-## Use it
-
-Add one or more feeds in Settings > Calendar. Rows show time, title, and which calendar they came
-from. With a join URL, Enter opens it; otherwise Enter copies the event text.
+minutes. Add feeds in Settings > Calendar. With a join URL, Enter opens it; otherwise Enter copies
+the event text.
 
 ## Keys
 
@@ -35,7 +31,7 @@ from. With a join URL, Enter opens it; otherwise Enter copies the event text.
 
 Settings > Calendar adds named iCal feeds: Google Calendar's secret address in iCal format,
 Outlook's published ICS link, or iCloud's public link. The URL is stored in the system keychain
-and is not shown again. You can rename, reorder, and remove feeds.
+and is not shown again. Rename, reorder, and remove feeds there.
 
 ## Privacy
 

@@ -12,13 +12,8 @@ code:
 ---
 
 `:fire`, `:arrow`, or `!emoji` (for example `fire !emoji`) opens the emoji grid in the bar.
-Recents and your skin tone are remembered.
-
-## Use it
-
-Type to search names and keywords. Enter pastes into the app in front. Ctrl+Enter (⌘Enter)
-copies. Tab cycles the skin tone on supported emoji. Arrow keys and Page Up/Down move the
-selection.
+Recents and your skin tone are remembered. Type to search names and keywords. Tab cycles skin tone
+on supported emoji.
 
 ## Keys
 

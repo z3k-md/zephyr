@@ -1,6 +1,6 @@
 ---
 title: Voice
-summary: Hold a shortcut and speak; words land in the bar for Enter or a spoken command.
+summary: Hold a shortcut, speak, then Enter or a spoken command.
 status: shipped
 group: bar
 platforms: [windows, macos]
@@ -12,13 +12,9 @@ code:
   - src/bar/voice.test.ts
 ---
 
-Turn it on in Settings > Voice, which downloads the speech model (about 750 MB). Then hold the voice shortcut and speak; letting go leaves the words in the bar for Enter. Saying "search", "ask", "open" or "cancel" first or last runs it on release, and a scope word first, like "file" or "note", narrows it.
+Turn it on in Settings > Voice, which downloads the speech model (about 750 MB). Hold the voice shortcut and speak; letting go leaves the words in the bar for Enter unless you lead or trail with `search`, `ask`, `open` or `cancel`. A spoken scope word first, like `file` or `note`, narrows the query the same as typing `!` prefixes.
 
-## Use it
-
-The hotkey works only once the model is installed.
-
-Spoken scope words (`app`, `files`, `bookmark`, `setting`, `clipboard`, `note`, `emoji`, `shell`) become the same `!` prefixes as typing. Trailing words like "search" or "open" run on release; "go" and "enter" are recognized only at the end.
+Spoken scope words (`app`, `files`, `bookmark`, `setting`, `clipboard`, `note`, `emoji`, `shell`) become the same `!` prefixes as typing. Trailing `go` and `enter` run on release; they are recognized only at the end. The hotkey works only once the model is installed.
 
 ## Keys
 
@@ -26,11 +22,11 @@ Spoken scope words (`app`, `files`, `bookmark`, `setting`, `clipboard`, `note`, 
 | -------------- | ------------------- | ------------------------------- |
 | Ctrl+Alt+Space | Control+Shift+Space | Hold to talk; release to finish |
 
-While holding the shortcut, the bar shows the transcription. Release to fill the query or run a trailing command.
+While holding the shortcut, the bar shows the transcription.
 
 ## Settings
 
-**Settings > Voice** — enable voice input, record the hold shortcut, download or remove the model.
+Settings > Voice: enable voice input, record the hold shortcut, download or remove the model.
 
 ## Privacy
 

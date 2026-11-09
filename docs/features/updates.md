@@ -13,24 +13,12 @@ gaps:
   - Authenticode signing for the Windows installer
 ---
 
-Installed copies check for updates shortly after launch and whenever the bar opens (at most every few minutes), and install them automatically. Settings and the tray menu also have **Check for updates**. A card in the corner shows the download, then counts down a few seconds before installing; **Install now** skips the wait, and **Later** puts it off, with a button in the bar to install whenever suits.
-
-## Use it
-
-Updates download in the background and verify against Zephyr's updater signing key. The Windows installer itself is not Authenticode-signed yet; SmartScreen may warn on first install, while updates still use Zephyr's own signature.
-
-Choose **Stable** or **Nightly** in Settings; nightly builds come from `develop` and stay until a newer stable passes them.
-
-## Keys
-
-| Key | Does                                         |
-| --- | -------------------------------------------- |
-| —   | Updates run from the corner card or Settings |
+Zephyr checks for updates 5 seconds after launch and when the bar opens, at most every 3 minutes, and installs them automatically. A card in the corner shows the download, then installs after a 5-second countdown. **Install now** skips the countdown; **Later** defers it to a button in the bar.
 
 ## Settings
 
-**Settings > General** — **Check for updates** and the update channel (Stable or Nightly).
+Settings > General has **Check for updates** and the channel: **Stable** or **Nightly**. Nightly builds come from `develop`; a newer stable release replaces them. The tray menu also has **Check for updates**.
 
 ## How it works
 
-The updater reads `latest.json` from GitHub Releases (or the nightly manifest when that channel is on). Deferred installs download again when you choose to install later, and the signature is checked again each time.
+The updater reads `latest.json` from GitHub Releases, or the nightly manifest on that channel. Every download is verified against Zephyr's updater signing key, including a deferred install, which downloads again. This signature is separate from Authenticode, which the Windows installer doesn't have yet.

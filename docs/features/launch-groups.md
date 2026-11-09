@@ -13,8 +13,6 @@ code:
 
 Launch groups open several apps, links and folders in one go ("Coding", "Gaming"). Apps already running come forward. Run a group by typing its name in the bar or pressing its global hotkey.
 
-## Use it
-
 Create groups in Settings > Launch groups. Each group has a name, an optional hotkey, and a list of apps (from the same search ranking as the bar), links and folders. An empty group is dropped when you leave the settings page.
 
 ## Keys
@@ -26,4 +24,4 @@ Create groups in Settings > Launch groups. Each group has a name, an optional ho
 
 ## Settings
 
-**Settings > Launch groups** — add and edit groups, pick apps, set a hotkey per group.
+Settings > Launch groups: add and edit groups, pick apps, set a hotkey per group.

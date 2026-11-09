@@ -1,6 +1,6 @@
 ---
 title: Linux
-summary: A Zephyr launcher for Linux desktop environments.
+summary: The launcher bar on Linux desktop environments.
 status: planned
 group: bar
 ---

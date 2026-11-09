@@ -15,14 +15,10 @@ code:
 ---
 
 Type `pick color`, `color picker`, or `eyedropper` in the bar, or set a hotkey in Settings >
-Shortcuts. The screen freezes and a loupe magnifies the pixel under the cursor. Click or Enter
-copies its hex; Esc or right-click cancels. Parsed color strings in the bar still use
-[Colors](/features/colors).
-
-## Use it
-
-Move the pointer or nudge with arrow keys (Shift for 10 pixels). The hex updates in the loupe.
-On macOS the picker reads the main display and needs Screen Recording permission.
+Shortcuts. The screen freezes and a loupe magnifies the pixel under the cursor. Move the pointer
+or nudge with arrow keys (Shift for 10 pixels). The hex updates in the loupe. Parsed color strings
+in the bar still use [Colors](/features/colors). On macOS the picker reads the main display and
+needs Screen Recording permission.
 
 ## Keys
 
