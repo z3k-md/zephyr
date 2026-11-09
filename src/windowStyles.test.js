@@ -67,8 +67,9 @@ test('production window loaders preload the selected window stylesheet', async (
       querySelector: () => null,
       createElement: () => ({
         addEventListener(event, callback) {
-          if (event === 'load') queueMicrotask(callback);
+          if (event === 'load') queueMicrotask(() => callback({ type: 'load' }));
         },
+        removeEventListener() {},
       }),
       head: {
         appendChild(link) {
