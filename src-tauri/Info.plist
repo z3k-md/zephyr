@@ -10,5 +10,7 @@
 	<string>Zephyr indexes this folder so you can find your files from the bar. Nothing leaves your Mac.</string>
 	<key>NSDownloadsFolderUsageDescription</key>
 	<string>Zephyr indexes this folder so you can find your files from the bar. Nothing leaves your Mac.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Zephyr listens only while you hold the voice shortcut, to turn what you say into a search. Audio stays on your Mac.</string>
 </dict>
 </plist>

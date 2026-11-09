@@ -5,10 +5,13 @@
   // The app's own icon, for rows that open its Settings window.
   import zephyrIcon from '../../src-tauri/icons/64x64.png';
 
-  const props = withDefaults(defineProps<{ icon?: string; label: string; size?: 32 | 20 | 16 }>(), {
-    icon: '',
-    size: 20,
-  });
+  const props = withDefaults(
+    defineProps<{ icon?: string; label: string; size?: 32 | 24 | 20 | 16 }>(),
+    {
+      icon: '',
+      size: 20,
+    }
+  );
 
   const glyph = computed(() => {
     if (props.icon.startsWith('glyph:')) return GLYPHS[props.icon.slice(6)] ?? null;

@@ -6,7 +6,7 @@ import type { Snapshot, SuggestionRow } from '../types';
 
 export function useTypeAhead(ctx: {
   query: Ref<string>;
-  inputEl: Ref<HTMLInputElement | null>;
+  inputEl: Ref<HTMLTextAreaElement | null>;
   snapshot: Ref<Snapshot | null>;
   /** No completion in a scoped search. */
   scoped: () => boolean;
@@ -47,7 +47,8 @@ export function useTypeAhead(ctx: {
     return match ? match.slice(typed.length) : '';
   });
 
-  /** The completion only shows while the cursor sits at the end of text that fits the box. */
+  /** The completion only shows while the cursor sits at the end. A sideways overflow hides
+   *  it; wrapped lines still fit, so a pixel of scrollWidth noise doesn't. */
   function trackCaret() {
     const input = inputEl.value;
     if (!input) return;
@@ -55,7 +56,7 @@ export function useTypeAhead(ctx: {
     caretAtEnd.value =
       input.selectionStart === end &&
       input.selectionEnd === end &&
-      input.scrollWidth <= input.clientWidth;
+      input.scrollWidth <= input.clientWidth + 1;
   }
 
   /** Right arrow or End at the end of the text takes the completion; whether it did. */

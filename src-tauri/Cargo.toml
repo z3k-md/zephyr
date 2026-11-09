@@ -24,7 +24,7 @@ tauri-plugin-updater = { version = "2.13", default-features = false, features = 
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-reqwest = { version = "0.13", default-features = false, features = ["gzip", "charset", "native-tls", "stream"] }
+reqwest = { version = "0.13", default-features = false, features = ["gzip", "charset", "native-tls", "stream", "blocking"] }
 # The speed test streams its uploads.
 bytes = "1"
 futures-util = { version = "0.3", default-features = false }
@@ -45,6 +45,13 @@ semver = "1"
 chacha20poly1305 = "0.11"
 base64 = "0.23"
 sha2 = "0.11"
+# Hold-to-talk capture. Samples stay in memory; the stream is dropped on key release.
+cpal = "0.18"
+# On-device speech to text. `load-dynamic` loads ONNX Runtime from the model folder the
+# first time voice is used, so the library stays out of the Zephyr binary. `api-31` is the
+# API ort 2.0.0-rc.15 was built for (ONNX Runtime 1.31). DirectML is not a feature: the
+# newest Microsoft.ML.OnnxRuntime.DirectML package is 1.24.4, which is too old for API 31.
+parakeet-rs = { version = "0.4.4", default-features = false, features = ["load-dynamic", "api-31"] }
 getrandom = "0.4"
 tiny_http = "0.12"
 uuid = { version = "1", features = ["v4"] }
@@ -84,8 +91,13 @@ block2 = "0.6"
 objc2-foundation = "0.3"
 objc2-vision = "0.3"
 tauri-nspanel = "2.1"
+# The macOS speech runtime ships as a gzipped tar. Both crates are pure Rust.
+flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }
+tar = "0.4.46"
 
 [target.'cfg(windows)'.dependencies]
+# The Windows speech runtime ships as a zip. deflate is the method the official archive uses.
+zip = { version = "2", default-features = false, features = ["deflate"] }
 windows-core = "0.62"
 windows = { version = "0.62", features = [
     "Foundation",
@@ -149,3 +161,7 @@ debug = "line-tables-only"
 
 [profile.dev.package."*"]
 debug = false
+
+[dev-dependencies]
+# The voice bench reads 16 kHz clips. Not linked into the app.
+hound = "3.5"

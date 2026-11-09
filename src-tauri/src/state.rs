@@ -8,7 +8,7 @@ use crate::apps::{self, LaunchEntry};
 use crate::clipboard::ClipboardSettings;
 use crate::files;
 use crate::history::{self, HistoryEntry};
-use crate::shortcut::{DEFAULT_SHORTCUT, LEGACY_DEFAULT_SHORTCUT};
+use crate::shortcut::{DEFAULT_SHORTCUT, DEFAULT_VOICE_SHORTCUT, LEGACY_DEFAULT_SHORTCUT};
 use crate::util::LogErr;
 
 /// A field missing from the file falls back to its default instead of discarding every setting.
@@ -41,6 +41,10 @@ pub struct Persisted {
     /// Global shortcut that opens the notes window; empty for none.
     #[serde(default = "default_notes_shortcut")]
     pub notes_shortcut: String,
+    /// Hold-to-talk. Off until turned on, and the hotkey is registered only once the model
+    /// is installed.
+    #[serde(default)]
+    pub voice: VoiceSettings,
     /// Best typing test result per mode, e.g. `time-30` or `words-25`.
     pub typing_bests: Vec<TypingBest>,
     /// Reopening the bar within this many seconds returns to the view it closed on
@@ -235,6 +239,29 @@ fn default_notes_shortcut() -> String {
     "ctrl+alt+n".into()
 }
 
+/// Hold-to-talk. `enabled` defaults off. The shortcut matches the other hotkeys' canonical form.
+/// Keys this struct no longer has are ignored, so an older file still loads.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct VoiceSettings {
+    pub enabled: bool,
+    #[serde(default = "default_voice_shortcut")]
+    pub shortcut: String,
+}
+
+impl Default for VoiceSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            shortcut: default_voice_shortcut(),
+        }
+    }
+}
+
+fn default_voice_shortcut() -> String {
+    DEFAULT_VOICE_SHORTCUT.to_string()
+}
+
 const SCHEMA_VERSION: u32 = 4;
 
 /// Files written before `version` existed should still migrate.
@@ -265,6 +292,7 @@ impl Persisted {
             view_opens: Vec::new(),
             clipboard: ClipboardSettings::default(),
             notes_shortcut: default_notes_shortcut(),
+            voice: VoiceSettings::default(),
             typing_bests: Vec::new(),
             resume_seconds: default_resume_seconds(),
             active_mode: String::new(),
@@ -312,6 +340,9 @@ impl Persisted {
             if clashes(&self.notes_shortcut) {
                 return Err("That shortcut already opens notes".into());
             }
+            if clashes(self.registered_voice_shortcut()) {
+                return Err("That shortcut already starts voice input".into());
+            }
             if let Some(binding) = self
                 .bindings
                 .iter()
@@ -335,6 +366,9 @@ impl Persisted {
         if clashes(&self.summon_shortcut) || clashes(&self.clipboard.shortcut) {
             return Err("Notes needs its own shortcut".into());
         }
+        if clashes(self.registered_voice_shortcut()) {
+            return Err("That shortcut already starts voice input".into());
+        }
         if let Some(binding) = self
             .bindings
             .iter()
@@ -346,6 +380,61 @@ impl Persisted {
         Ok(())
     }
 
+    /// Saves hold-to-talk. The shortcut is checked the same way as notes, against the summon
+    /// key, clipboard, notes, and binding hotkeys. An empty shortcut is kept only while voice
+    /// is off.
+    pub fn set_voice(&mut self, enabled: bool, shortcut: String) -> Result<(), String> {
+        let shortcut = shortcut.trim().to_string();
+        let shortcut = if shortcut.is_empty() {
+            shortcut
+        } else {
+            crate::shortcut::canonical_shortcut(&shortcut)?
+        };
+        if enabled {
+            if shortcut.is_empty() {
+                return Err("A shortcut is required".into());
+            }
+            let clashes = |other: &str| crate::shortcut::clashes(other, &shortcut);
+            if clashes(&self.summon_shortcut) || clashes(&self.clipboard.shortcut) {
+                return Err("Voice needs its own shortcut".into());
+            }
+            if clashes(&self.notes_shortcut) {
+                return Err("That shortcut already opens notes".into());
+            }
+            if let Some(binding) = self
+                .bindings
+                .iter()
+                .find(|binding| clashes(&binding.hotkey))
+            {
+                return Err(format!("That shortcut already runs {}", binding.label));
+            }
+        }
+        if !shortcut.is_empty() {
+            self.voice.shortcut = shortcut;
+        }
+        self.voice.enabled = enabled;
+        Ok(())
+    }
+
+    /// The voice hotkey while voice is on. Empty when it is off, so it clashes with nothing.
+    fn registered_voice_shortcut(&self) -> &str {
+        if self.voice.enabled {
+            self.voice.shortcut.as_str()
+        } else {
+            ""
+        }
+    }
+
+    /// Passed to shortcut registration: the voice hotkey only when it is on and the model is
+    /// on disk.
+    pub fn voice_hotkey(&self, model_installed: bool) -> Option<&str> {
+        if self.voice.enabled && model_installed && !self.voice.shortcut.is_empty() {
+            Some(self.voice.shortcut.as_str())
+        } else {
+            None
+        }
+    }
+
     /// Checks a summon shortcut against the other shortcuts Zephyr registers.
     pub fn check_summon_shortcut(&self, shortcut: &str) -> Result<(), String> {
         let clashes = |other: &str| crate::shortcut::clashes(other, shortcut);
@@ -354,6 +443,9 @@ impl Persisted {
         }
         if clashes(&self.notes_shortcut) {
             return Err("That shortcut already opens notes".into());
+        }
+        if clashes(self.registered_voice_shortcut()) {
+            return Err("That shortcut already starts voice input".into());
         }
         if let Some(binding) = self
             .bindings
@@ -393,6 +485,7 @@ impl Persisted {
                 .enabled
                 .then_some(self.clipboard.shortcut.as_str()),
             notes: Some(self.notes_shortcut.as_str()),
+            voice: self.voice_hotkey(crate::voice::model_installed()),
             bindings: &self.bindings,
         }
     }
@@ -865,6 +958,69 @@ mod tests {
             Err("That shortcut already runs Code".to_string())
         );
         assert!(state.check_summon_shortcut("alt+space").is_ok());
+    }
+
+    #[test]
+    fn voice_defaults_off_and_clashes_like_the_other_shortcuts() {
+        let fresh = Persisted::parse(br#"{"version": 4}"#).unwrap();
+        assert!(!fresh.voice.enabled);
+        assert_eq!(fresh.voice.shortcut, default_voice_shortcut());
+        assert!(fresh.voice_hotkey(true).is_none());
+        assert!(fresh.voice_hotkey(false).is_none());
+
+        let mut state = Persisted::fresh();
+        state.summon_shortcut = "ctrl+alt+k".into();
+        state.clipboard.shortcut = "ctrl+shift+v".into();
+        state.clipboard.enabled = true;
+        state.notes_shortcut = "ctrl+alt+n".into();
+        state.bindings.push(Binding {
+            target: "app:code".into(),
+            label: "Code".into(),
+            hotkey: "ctrl+alt+c".into(),
+            ..Binding::default()
+        });
+        assert!(state.set_voice(true, "Ctrl+Alt+K".into()).is_err());
+        assert!(state.set_voice(true, "Shift+Ctrl+V".into()).is_err());
+        assert!(state.set_voice(true, "ctrl+alt+n".into()).is_err());
+        assert!(state.set_voice(true, "alt+ctrl+c".into()).is_err());
+        assert!(state.set_voice(true, String::new()).is_err());
+        assert!(state.set_voice(true, "ctrl+alt+space".into()).is_ok());
+        assert!(state.voice.enabled);
+        assert_eq!(state.voice.shortcut, "ctrl+alt+space");
+        assert!(state.voice_hotkey(false).is_none());
+        assert_eq!(state.voice_hotkey(true), Some("ctrl+alt+space"));
+
+        assert!(state.set_notes_shortcut("ctrl+alt+space".into()).is_err());
+        assert!(state.check_summon_shortcut("ctrl+alt+space").is_err());
+        state.voice.enabled = false;
+        assert!(state.voice_hotkey(true).is_none());
+        assert!(state.set_notes_shortcut("ctrl+alt+m".into()).is_ok());
+
+        let json = serde_json::to_value(&state).unwrap();
+        assert_eq!(json["voice"]["enabled"], false);
+        assert_eq!(json["voice"]["shortcut"], "ctrl+alt+space");
+        assert_eq!(
+            json["voice"],
+            serde_json::json!({ "enabled": false, "shortcut": "ctrl+alt+space" })
+        );
+    }
+
+    #[test]
+    fn an_older_voice_block_still_loads() {
+        // The previous build wrote two extra keys beside the shortcut. They are not fields
+        // anymore; the rest of the file has to survive.
+        let parsed = Persisted::parse(
+            br#"{"version":4,"summonShortcut":"alt+space","theme":"slate","voice":{"enabled":true,"shortcut":"ctrl+alt+space","model":"fp32","accelerator":"gpu"}}"#,
+        )
+        .unwrap();
+        assert!(parsed.voice.enabled);
+        assert_eq!(parsed.voice.shortcut, "ctrl+alt+space");
+        assert_eq!(parsed.summon_shortcut, "alt+space");
+        assert_eq!(parsed.theme, "slate");
+        assert_eq!(
+            serde_json::to_value(&parsed.voice).unwrap(),
+            serde_json::json!({ "enabled": true, "shortcut": "ctrl+alt+space" })
+        );
     }
 
     #[test]

@@ -1,28 +1,23 @@
 <script setup lang="ts">
   import { computed, onMounted, onUnmounted, ref } from 'vue';
-  import RowIcon from './RowIcon.vue';
-  import SpeakerIcon from './SpeakerIcon.vue';
-  import { GLYPHS } from './glyphs';
   import { vTip } from '../tip';
   import { usePoll } from '../poll';
   import KeyHints from '../components/KeyHints.vue';
   import BackButton from './BackButton.vue';
+  import MixerRow from './MixerRow.vue';
+  import NowPlayingStrip from './NowPlayingStrip.vue';
   import ActionMenu from '../components/ActionMenu.vue';
   import { MENU_HINTS, useActionMenu, type MenuAction } from '../components/actionMenu';
-  import {
-    errorMessage,
-    soundSetDevice,
-    soundSetMuted,
-    soundSetVolume,
-    soundSnapshot,
-  } from '../api';
-  import type { Sound } from '../types';
+  import { errorMessage, soundSetDevice, soundSnapshot } from '../api';
+  import { STEP, useMixer, type MixerLevel } from './mixer';
+  import type { MediaControl, NowPlaying, Sound } from '../types';
 
-  // The Sound view: the output device and its level, and every app's level in the volume
-  // mixer, with how loud each is right now. The first row is the device's own level; the arrows
-  // pick a row and move it, M mutes it, 1–9 and 0 jump to 10–100%, and Tab moves to the next
-  // output device.
-  const emit = defineEmits<{ exit: [] }>();
+  // The Sound view: what's playing, the output device and its level, and every app's level in
+  // the volume mixer, with how loud each is right now. The first row is the device's own
+  // level; the arrows pick a row and move it, M mutes it, 1–9 and 0 jump to 10–100%, and Tab
+  // moves to the next output device.
+  defineProps<{ track: NowPlaying | null; positionMs: number | null }>();
+  const emit = defineEmits<{ exit: []; media: [MediaControl]; focusMedia: [] }>();
 
   const LIST_HINTS = [
     { keys: 'left', label: '' },
@@ -33,20 +28,11 @@
   ];
   /** Fast enough for the meters to move with the sound. */
   const POLL_MS = 120;
-  /** A row just changed here keeps its new level this long, so a refresh already on its way
-   *  doesn't pull the slider back. */
-  const HOLD_MS = 800;
-  const STEP = 0.02;
   const BIG_STEP = 0.1;
 
   /** A row: the device's level (`master`) or an app's. */
-  interface Row {
-    key: string;
-    name: string;
+  interface Row extends MixerLevel {
     detail: string;
-    icon: string;
-    volume: number;
-    muted: boolean;
     peak: number;
     active: boolean;
   }
@@ -55,9 +41,17 @@
   const loaded = ref(false);
   const notice = ref<string | null>(null);
   const selected = ref(0);
+  /** A row asked for by key (from the drawer or Alt+Mute), picked once the rows load. */
+  const wanted = ref<string | null>(null);
   const live = ref(false);
-  /** Levels set here and not yet confirmed by a refresh, by row key. */
-  const held = ref<Record<string, { volume: number; muted: boolean; until: number }>>({});
+  const {
+    withHeld,
+    apply,
+    nudge,
+    toggleMute,
+    slide: slideRow,
+    wheel,
+  } = useMixer((message) => (notice.value = message));
   const menu = useActionMenu(() => actions.value);
   const { open: actionsOpen, index: actionIndex } = menu;
 
@@ -82,6 +76,18 @@
       notice.value = errorMessage(error);
     }
     loaded.value = true;
+    if (wanted.value) select(wanted.value);
+  }
+
+  /** Picks the row for `key` (master or an app), now or once the rows load. */
+  function select(key: string) {
+    const at = rows.value.findIndex((row) => row.key === key);
+    if (at >= 0) {
+      selected.value = at;
+      wanted.value = null;
+    } else {
+      wanted.value = key;
+    }
   }
 
   const rows = computed<Row[]>(() => {
@@ -100,11 +106,7 @@
       },
       ...now.apps.map((app) => ({ ...app, detail: '' })),
     ];
-    const time = performance.now();
-    return list.map((row) => {
-      const hold = held.value[row.key];
-      return hold && hold.until > time ? { ...row, volume: hold.volume, muted: hold.muted } : row;
-    });
+    return withHeld(list);
   });
 
   /** Where "Quiet" starts: the first app that isn't playing. */
@@ -115,62 +117,9 @@
 
   const current = computed(() => rows.value[Math.min(selected.value, rows.value.length - 1)]);
 
-  function percent(value: number): number {
-    return Math.round(value * 100);
-  }
-
-  /** Sets a row's level and mute here at once, then on the system. */
-  async function apply(row: Row, volume: number, muted: boolean) {
-    volume = Math.min(1, Math.max(0, Math.round(volume * 100) / 100));
-    held.value = {
-      ...held.value,
-      [row.key]: { volume, muted, until: performance.now() + HOLD_MS },
-    };
-    try {
-      if (volume !== row.volume) await soundSetVolume(row.key, volume);
-      if (muted !== row.muted) {
-        await soundSetMuted(row.key, muted);
-      }
-    } catch (error) {
-      notice.value = errorMessage(error);
-    }
-  }
-
-  function nudge(row: Row, delta: number) {
-    // Turning a muted row up unmutes it, as Windows' own slider does.
-    void apply(row, row.volume + delta, row.muted && delta <= 0);
-  }
-
-  function toggleMute(row: Row) {
-    void apply(row, row.volume, !row.muted);
-  }
-
-  /** The level under the pointer, while it presses or drags along a slider. */
   function slide(row: Row, event: PointerEvent) {
-    const track = event.currentTarget as HTMLElement;
-    const place = (move: PointerEvent) => {
-      const box = track.getBoundingClientRect();
-      const level = (move.clientX - box.left) / Math.max(1, box.width);
-      void apply(row, level, false);
-    };
     selected.value = rows.value.findIndex((item) => item.key === row.key);
-    track.setPointerCapture(event.pointerId);
-    place(event);
-    const onMove = (move: PointerEvent) => place(move);
-    const onUp = () => {
-      track.removeEventListener('pointermove', onMove);
-      track.removeEventListener('pointerup', onUp);
-      track.removeEventListener('pointercancel', onUp);
-    };
-    track.addEventListener('pointermove', onMove);
-    track.addEventListener('pointerup', onUp);
-    track.addEventListener('pointercancel', onUp);
-  }
-
-  /** The wheel over a row: a notch is one step. */
-  function wheel(row: Row, event: WheelEvent) {
-    event.preventDefault();
-    nudge(row, event.deltaY < 0 ? STEP : -STEP);
+    slideRow(row, event);
   }
 
   async function useDevice(id: string) {
@@ -260,7 +209,7 @@
     }
   }
 
-  defineExpose({ onKey, start, stop });
+  defineExpose({ onKey, start, stop, select });
 </script>
 
 <template>
@@ -270,6 +219,17 @@
       <span class="chip scope-label">Sound</span>
       <span class="net-title">{{ sound?.device?.detail ?? '' }}</span>
       <span class="res-live" :class="{ on: live && !!sound }" aria-hidden="true" />
+    </div>
+
+    <div v-if="track" class="sound-now" @mousedown.prevent>
+      <NowPlayingStrip
+        :track="track"
+        :position-ms="positionMs"
+        @toggle="emit('media', 'toggle')"
+        @next="emit('media', 'next')"
+        @previous="emit('media', 'previous')"
+        @focus="emit('focusMedia')"
+      />
     </div>
 
     <p v-if="notice" class="notice">{{ notice }}</p>
@@ -293,68 +253,30 @@
       <template v-for="(row, index) in rows" :key="row.key">
         <div v-if="index === 1 && row.active" class="sound-section">Playing</div>
         <div v-if="index === quietFrom" class="sound-section">Quiet</div>
-        <div
-          class="sound-row"
-          :class="{ selected: index === selected, muted: row.muted, master: index === 0 }"
-          role="option"
-          :aria-selected="index === selected"
-          :aria-label="`${row.name}, ${row.muted ? 'muted' : `${percent(row.volume)}%`}`"
-          @mousemove="selected = index"
+        <MixerRow
+          :row="row"
+          :selected="index === selected"
+          :master="index === 0"
+          @hover="selected = index"
           @wheel="wheel(row, $event)"
+          @slide="slide(row, $event)"
+          @mute="toggleMute(row)"
         >
-          <SpeakerIcon v-if="index === 0" :volume="row.volume" :muted="row.muted" />
-          <RowIcon v-else :icon="row.icon" :label="row.name" :size="20" />
-          <span class="sound-name">
-            {{ row.name }}
-            <small v-if="index === 0 && (sound?.devices.length ?? 0) > 1">
-              <button
-                v-for="device in sound?.devices ?? []"
-                :key="device.id"
-                type="button"
-                class="sound-device"
-                :class="{ on: device.id === sound?.device?.id }"
-                v-tip="device.detail"
-                @mousedown.prevent
-                @click="useDevice(device.id)"
-              >
-                {{ device.name }}
-              </button>
-            </small>
-          </span>
-          <span
-            class="sound-slider"
-            role="slider"
-            :aria-valuenow="percent(row.volume)"
-            aria-valuemin="0"
-            aria-valuemax="100"
-            @pointerdown.prevent="slide(row, $event)"
-          >
-            <span class="sound-track">
-              <span
-                class="sound-peak"
-                :style="{ width: `${percent(row.muted ? 0 : row.peak)}%` }"
-              />
-            </span>
-            <span class="sound-fill" :style="{ width: `${percent(row.volume)}%` }" />
-            <span class="sound-knob" :style="{ left: `${percent(row.volume)}%` }" />
-          </span>
-          <span class="sound-pct">{{ percent(row.volume) }}%</span>
-          <button
-            type="button"
-            class="sound-mute"
-            :class="{ on: row.muted }"
-            :aria-label="row.muted ? `Unmute ${row.name}` : `Mute ${row.name}`"
-            v-tip="row.muted ? 'Unmute (M)' : 'Mute (M)'"
-            @mousedown.prevent
-            @click="toggleMute(row)"
-          >
-            <svg
-              viewBox="0 0 24 24"
-              aria-hidden="true"
-              v-html="row.muted ? GLYPHS.speakerMuted : GLYPHS.speaker"
-            />
-          </button>
-        </div>
+          <small v-if="index === 0 && (sound?.devices.length ?? 0) > 1">
+            <button
+              v-for="device in sound?.devices ?? []"
+              :key="device.id"
+              type="button"
+              class="sound-device"
+              :class="{ on: device.id === sound?.device?.id }"
+              v-tip="device.detail"
+              @mousedown.prevent
+              @click="useDevice(device.id)"
+            >
+              {{ device.name }}
+            </button>
+          </small>
+        </MixerRow>
       </template>
     </div>
 

@@ -22,6 +22,8 @@ export interface Snapshot {
   viewOpens: LaunchEntry[];
   clipboard: ClipboardSettings;
   notesShortcut: string;
+  /** Hold-to-talk dictation. Audio never leaves the machine. */
+  voice: VoiceSettings;
   typingBests: TypingBest[];
   resumeSeconds: number;
   activeMode: string;
@@ -70,6 +72,56 @@ export interface Snapshot {
   emojiRecents: string[];
   /** iCal feeds. The link for each one stays in the keychain. */
   calendarFeeds: CalendarFeed[];
+}
+
+/** Hold-to-talk: whether it is on, and the shortcut. */
+export interface VoiceSettings {
+  enabled: boolean;
+  /** Same format as `notesShortcut` (`ctrl+alt+space`). Empty means no shortcut. */
+  shortcut: string;
+}
+
+/** The speech model in Settings > Voice. */
+export interface VoiceModelCard {
+  name: string;
+  sizeLabel: string;
+  installed: boolean;
+  downloading: boolean;
+  received: number;
+  total: number;
+  sizeBytes: number;
+}
+
+/** The speech model and what the engine has loaded. */
+export interface VoiceStatus {
+  model: VoiceModelCard;
+  /** "Loaded in …" or "Not loaded yet". */
+  loadedLabel: string;
+  loadError: string | null;
+  error: string | null;
+  license: string;
+}
+
+export interface VoiceStatePayload {
+  state: 'listening' | 'finishing' | 'idle';
+  modelReady: boolean;
+}
+
+export interface VoiceLevelPayload {
+  level: number;
+}
+
+export interface VoiceTextPayload {
+  text: string;
+}
+
+export interface VoiceFinalPayload {
+  text: string;
+  cancelled: boolean;
+}
+
+export interface VoiceErrorPayload {
+  message: string;
 }
 
 export type WeatherUnit = 'c' | 'f';

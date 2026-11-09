@@ -10,21 +10,34 @@ html.osd-page #app {
 }
 
 .osd {
+  position: relative;
+  isolation: isolate;
   display: flex;
-  flex-direction: column;
-  gap: 8px;
+  align-items: center;
+  gap: 12px;
   box-sizing: border-box;
   height: 100%;
-  padding: 12px 14px;
+  padding: 0 16px 0 10px;
   border: 1px solid var(--stroke-strong);
   border-radius: 14px;
   background: var(--bg-solid);
   color: var(--fg);
-  font-size: 13px;
   font-variant-numeric: tabular-nums;
   cursor: default;
   user-select: none;
   animation: osd-in 120ms ease-out;
+}
+
+/* A second, fainter coat of the theme's background, so less shows through the toast than
+   through the bar. */
+.osd::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: var(--bg-solid);
+  opacity: 0.5;
 }
 
 @keyframes osd-in {
@@ -34,83 +47,94 @@ html.osd-page #app {
   }
 }
 
-.osd-top {
+/* The target's icon and its speaker, pressed to mute. */
+.osd-source {
   display: flex;
+  flex: none;
   align-items: center;
-  gap: 10px;
+  gap: 6px;
+  height: 34px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+  transition: background 150ms;
 }
 
-.osd-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.osd-name small {
-  display: block;
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.osd-value {
-  font-size: 20px;
-  font-weight: 600;
-}
-
-.osd-value svg {
-  width: 20px;
-  height: 20px;
-  fill: none;
-  stroke: var(--bad);
-  stroke-width: 1.8;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.osd-bar {
-  height: 4px;
-  overflow: hidden;
-  border-radius: 4px;
+.osd-source:hover {
   background: var(--chip-hover);
 }
 
-.osd-bar span {
-  display: block;
-  height: 100%;
-  border-radius: 4px;
-  background: var(--fg);
+.osd-master {
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+}
+
+.osd.muted .speaker-icon {
+  color: var(--bad);
+}
+
+/* The slider's hit area, taller than the track, to press or drag along. */
+.osd-slider {
+  position: relative;
+  flex: 1;
+  height: 20px;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.osd-track,
+.osd-fill {
+  position: absolute;
+  top: 7px;
+  left: 0;
+  height: 6px;
+  border-radius: 6px;
+}
+
+.osd-track {
+  right: 0;
+  background: color-mix(in srgb, var(--focus) 18%, var(--chip-hover));
+}
+
+.osd-fill {
+  background: var(--focus);
   transition: width 80ms linear;
 }
 
-.osd.muted .osd-bar span {
+.osd-knob {
+  position: absolute;
+  top: 4px;
+  width: 12px;
+  height: 12px;
+  margin-left: -6px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 0 0 2px var(--focus);
+  transition: left 80ms linear;
+}
+
+.osd.muted .osd-fill {
   background: var(--faint);
 }
 
-.osd-strip {
-  display: flex;
-  gap: 8px;
-  padding-top: 6px;
-  border-top: 1px solid var(--stroke);
+.osd.muted .osd-knob {
+  box-shadow: 0 0 0 2px var(--faint);
 }
 
-.osd-app {
-  display: grid;
-  place-items: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 6px;
-  opacity: 0.6;
+.osd-value {
+  flex: none;
+  width: 34px;
+  text-align: right;
+  font-size: 18px;
+  font-weight: 500;
 }
 
-.osd-app.quiet {
-  opacity: 0.35;
-}
-
-.osd-app.on {
-  opacity: 1;
-  background: var(--chip-hover);
+.osd.muted .osd-value {
+  color: var(--muted);
 }
 
 /* App icons (RowIcon), as the bar draws them; this page doesn't load the bar's rules. */

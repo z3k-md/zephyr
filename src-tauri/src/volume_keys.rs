@@ -1,7 +1,8 @@
 //! The volume keys, taken over (Settings › Sound): Zephyr changes the level itself and shows
 //! its own overlay instead of Windows' flyout, or a drawer in the bar when the bar is open.
 //! Plain keys change master. Alt with Volume Up or Down steps through the apps with audio, and
-//! the app picked stays the keys' target until the overlay fades.
+//! the app picked stays the keys' target until the overlay fades; while the overlay is up, Tab
+//! and Shift+Tab step through them too. Alt+Mute opens the bar's Sound view on the target.
 
 #[cfg(windows)]
 use serde::Serialize;
@@ -21,7 +22,7 @@ pub struct Shown {
 }
 
 #[cfg(windows)]
-pub use win::{guard, open_sound, press, set_enabled, set_position, wheel};
+pub use win::{guard, hold, open_sound, press, set_enabled, set_position, wheel};
 
 #[cfg(not(windows))]
 pub fn set_enabled(_app: &tauri::AppHandle, _on: bool) {}
@@ -30,9 +31,11 @@ pub fn set_position(_position: &str) {}
 #[cfg(not(windows))]
 pub fn wheel(_delta: f32) {}
 #[cfg(not(windows))]
+pub fn hold(_app: &tauri::AppHandle, _on: bool) {}
+#[cfg(not(windows))]
 pub fn press(_key: &str, _alt: bool) {}
 #[cfg(not(windows))]
-pub fn open_sound(_app: &tauri::AppHandle) {}
+pub fn open_sound(_app: &tauri::AppHandle, _key: Option<String>) {}
 
 #[cfg(windows)]
 mod win {
@@ -45,8 +48,9 @@ mod win {
     use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::UI::Input::KeyboardAndMouse::{
-        INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY,
-        VK_VOLUME_DOWN, VK_VOLUME_MUTE, VK_VOLUME_UP,
+        GetAsyncKeyState, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput,
+        VIRTUAL_KEY, VK_CONTROL, VK_LWIN, VK_RWIN, VK_SHIFT, VK_TAB, VK_VOLUME_DOWN,
+        VK_VOLUME_MUTE, VK_VOLUME_UP,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         CallNextHookEx, DispatchMessageW, GWL_EXSTYLE, GWL_STYLE, GetMessageW, GetWindowLongPtrW,
@@ -65,12 +69,15 @@ mod win {
     /// The overlay stays this long after the last press; an app picked with Alt stays the
     /// target as long.
     const SHOWN_FOR: Duration = Duration::from_millis(1600);
+    /// While the pointer is on the overlay the app picked stays the target; this only bounds
+    /// a pointer that left without the overlay hearing it.
+    const HELD_FOR: Duration = Duration::from_secs(60);
     /// The overlay's size, in logical pixels, and its gap from the screen's edge: more at the
     /// bottom, so it sits above the taskbar where Windows' own flyout does.
-    const WIDTH: f64 = 300.0;
-    const HEIGHT: f64 = 104.0;
-    const MARGIN: f64 = 16.0;
-    const BOTTOM_MARGIN: f64 = 48.0;
+    const WIDTH: f64 = 272.0;
+    const HEIGHT: f64 = 64.0;
+    const MARGIN: f64 = 24.0;
+    const BOTTOM_MARGIN: f64 = 64.0;
     /// An unassigned key, pressed after an Alt+volume key is taken so the app in front
     /// doesn't read the lone Alt as a tap that opens its menu bar.
     const MENU_MASK: VIRTUAL_KEY = VIRTUAL_KEY(0xE8);
@@ -78,6 +85,14 @@ mod win {
     static ENABLED: AtomicBool = AtomicBool::new(false);
     static PRESSES: OnceLock<Sender<Press>> = OnceLock::new();
     static HIDE: crate::timer::Debounce = crate::timer::Debounce::new();
+    /// The pointer is over the overlay: it stays up, and the app picked stays the target.
+    static HOVERED: AtomicBool = AtomicBool::new(false);
+    /// The overlay is up, so Tab steps through the sources instead of reaching the app in
+    /// front.
+    static SHOWING: AtomicBool = AtomicBool::new(false);
+    /// A Tab went down while the overlay was up, so its release is taken too, and only then:
+    /// an app that saw the press must see the release.
+    static TAB_TAKEN: AtomicBool = AtomicBool::new(false);
     /// Where the overlay shows (Settings › Sound): `bottom` or `top`, centered, or
     /// `bottom-right`.
     static POSITION: Mutex<String> = Mutex::new(String::new());
@@ -95,8 +110,14 @@ mod win {
         },
         /// The wheel over the overlay: steps the target.
         Wheel(f32),
+        /// Tab (Shift+Tab back) while the overlay is up: the next source.
+        Cycle {
+            back: bool,
+        },
         /// The bar took over showing levels; the target goes back to master.
         Reset,
+        /// The pointer came onto the overlay (true) or left it.
+        Hold(bool),
     }
 
     /// Turns the takeover on or off. The hook and its worker start the first time it's on
@@ -128,6 +149,17 @@ mod win {
 
     pub fn wheel(delta: f32) {
         send(Press::Wheel(delta));
+    }
+
+    /// The pointer over the overlay keeps it up; leaving starts the fade's wait again.
+    pub fn hold(app: &AppHandle, on: bool) {
+        HOVERED.store(on, Ordering::SeqCst);
+        if let Some(overlay) = app.get_webview_window("osd") {
+            HIDE.schedule(if on { HELD_FOR } else { SHOWN_FOR }, move || {
+                hide(&overlay)
+            });
+        }
+        send(Press::Hold(on));
     }
 
     /// A volume key the bar's page got: with Zephyr's own window in front, the hook never
@@ -242,15 +274,17 @@ mod win {
         });
     }
 
-    /// A click on the overlay: the Sound view, in the bar.
-    pub fn open_sound(app: &AppHandle) {
+    /// A click on the overlay or Alt+Mute: the Sound view, in the bar, with `key` (master or
+    /// an app) picked.
+    pub fn open_sound(app: &AppHandle, key: Option<String>) {
         HIDE.cancel();
+        HOVERED.store(false, Ordering::SeqCst);
         if let Some(overlay) = app.get_webview_window("osd") {
             hide(&overlay);
         }
         send(Press::Reset);
         crate::window::show_bar(app);
-        let _ = app.emit_to("main", "sound-open", ());
+        let _ = app.emit_to("main", "sound-open", key);
     }
 
     fn send(press: Press) {
@@ -298,9 +332,36 @@ mod win {
                 // Taken, down and up, so Windows neither changes the level nor shows its flyout.
                 return LRESULT(1);
             }
+            if key == VK_TAB && take_tab(wparam.0 as u32, info) {
+                return LRESULT(1);
+            }
         }
         // SAFETY: passing the key on, as every hook must.
         unsafe { CallNextHookEx(None, code, wparam, lparam) }
+    }
+
+    /// Whether the hook takes this Tab: a plain or shifted one while the overlay is up, and
+    /// the release of one it took. Alt, Ctrl and Win with Tab always pass, for Alt+Tab and
+    /// the like.
+    fn take_tab(message: u32, info: &KBDLLHOOKSTRUCT) -> bool {
+        if message != WM_KEYDOWN && message != WM_SYSKEYDOWN {
+            return TAB_TAKEN.swap(false, Ordering::SeqCst);
+        }
+        // SAFETY: plain key state reads.
+        let held = |key: VIRTUAL_KEY| unsafe { GetAsyncKeyState(i32::from(key.0)) } < 0;
+        if !SHOWING.load(Ordering::SeqCst)
+            || info.flags.0 & LLKHF_ALTDOWN.0 != 0
+            || held(VK_CONTROL)
+            || held(VK_LWIN)
+            || held(VK_RWIN)
+        {
+            return false;
+        }
+        TAB_TAKEN.store(true, Ordering::SeqCst);
+        send(Press::Cycle {
+            back: held(VK_SHIFT),
+        });
+        true
     }
 
     /// Where the keys land, and until when, after an Alt press picked an app.
@@ -320,6 +381,12 @@ mod win {
                 picked = None;
                 continue;
             }
+            if let Press::Hold(on) = press {
+                if let Some(picked) = picked.as_mut() {
+                    picked.until = Instant::now() + if on { HELD_FOR } else { SHOWN_FOR };
+                }
+                continue;
+            }
             if matches!(
                 press,
                 Press::Up { alt: true } | Press::Down { alt: true } | Press::Mute { alt: true }
@@ -337,13 +404,18 @@ mod win {
                 .map(|picked| picked.key.clone())
                 .filter(|key| levels.iter().any(|level| &level.key == key));
             let mut key = held.unwrap_or_else(|| MASTER_KEY.to_string());
+            if let Press::Mute { alt: true } = press {
+                picked = None;
+                open_sound(&app, Some(key));
+                continue;
+            }
             let at = levels
                 .iter()
                 .position(|level| level.key == key)
                 .unwrap_or(0);
             let changed = match press {
-                Press::Up { alt: true } | Press::Down { alt: true } => {
-                    let forward = matches!(press, Press::Up { .. });
+                Press::Up { alt: true } | Press::Down { alt: true } | Press::Cycle { .. } => {
+                    let forward = matches!(press, Press::Up { .. } | Press::Cycle { back: false });
                     let count = levels.len();
                     let next = if forward {
                         (at + 1) % count
@@ -357,16 +429,17 @@ mod win {
                 Press::Down { alt: false } => audio::step(&Target::from_key(&key), -STEP),
                 Press::Wheel(delta) => audio::step(&Target::from_key(&key), delta),
                 Press::Mute { .. } => audio::toggle_mute(&Target::from_key(&key)),
-                Press::Reset => None,
+                Press::Reset | Press::Hold(_) => None,
             };
             if let Some(level) = changed
                 && let Some(slot) = levels.iter_mut().find(|slot| slot.key == level.key)
             {
                 *slot = level;
             }
+            let hovered = HOVERED.load(Ordering::SeqCst);
             picked = Some(Picked {
                 key: key.clone(),
-                until: now + SHOWN_FOR,
+                until: now + if hovered { HELD_FOR } else { SHOWN_FOR },
             });
             show(&app, &Shown { key, levels });
         }
@@ -383,8 +456,14 @@ mod win {
         };
         let _ = app.emit_to("osd", "osd-show", shown);
         place(app, &overlay);
+        SHOWING.store(true, Ordering::SeqCst);
+        let wait = if HOVERED.load(Ordering::SeqCst) {
+            HELD_FOR
+        } else {
+            SHOWN_FOR
+        };
         let hidden = overlay.clone();
-        HIDE.schedule(SHOWN_FOR, move || {
+        HIDE.schedule(wait, move || {
             hide(&hidden);
         });
     }
@@ -489,6 +568,7 @@ mod win {
                 .map_err(|err| err.to_string())?;
         if let Ok(hwnd) = overlay.hwnd() {
             popup(HWND(hwnd.0));
+            stay_inactive(&overlay);
             // Dropping the frame grows the client area, but the page keeps the old size (a
             // title bar short, which cut off the strip) until Tauri sees a resize; so resize
             // through Tauri, there and back.
@@ -496,6 +576,44 @@ mod win {
             let _ = overlay.set_size(tauri::LogicalSize::new(WIDTH, HEIGHT));
         }
         Ok(())
+    }
+
+    /// A click on the overlay (its mute) neither activates it, taking focus from the app in
+    /// front, nor repaints the frame `popup` hid, which showed in its transparent corners.
+    fn stay_inactive(overlay: &tauri::WebviewWindow) {
+        use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
+        use windows::Win32::UI::WindowsAndMessaging::{
+            MA_NOACTIVATE, WM_MOUSEACTIVATE, WM_NCACTIVATE,
+        };
+
+        unsafe extern "system" fn proc(
+            hwnd: HWND,
+            message: u32,
+            wparam: WPARAM,
+            lparam: LPARAM,
+            _id: usize,
+            _data: usize,
+        ) -> LRESULT {
+            match message {
+                WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
+                WM_NCACTIVATE => LRESULT(1),
+                // SAFETY: the default handling for every other message.
+                _ => unsafe { DefSubclassProc(hwnd, message, wparam, lparam) },
+            }
+        }
+
+        let Ok(hwnd) = overlay.hwnd() else {
+            return;
+        };
+        let hwnd = hwnd.0 as isize;
+        // A window is subclassed on the thread that owns it.
+        let _ = overlay.app_handle().run_on_main_thread(move || {
+            // SAFETY: a live window handle and a subclass procedure that lives as long as
+            // the app.
+            unsafe {
+                let _ = SetWindowSubclass(HWND(hwnd as *mut _), Some(proc), 0x6f7364, 0);
+            }
+        });
     }
 
     /// A bare popup: no title bar or frame (which showed despite `decorations(false)`), out
@@ -524,6 +642,7 @@ mod win {
     /// Hides it straight through Windows. It's shown that way, so Tauri still thinks it's
     /// hidden and its own hide does nothing.
     fn hide(overlay: &tauri::WebviewWindow) {
+        SHOWING.store(false, Ordering::SeqCst);
         if let Ok(hwnd) = overlay.hwnd() {
             // SAFETY: the overlay's own window handle; a stale one only makes the call fail.
             unsafe {

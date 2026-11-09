@@ -551,6 +551,12 @@ const ZEPHYR: &[Setting] = &[
         &["notes shortcut", "quick notes", "notes folder"],
     ),
     zephyr(
+        "zephyr.voice",
+        "Zephyr Voice",
+        "voice",
+        &["voice", "dictation", "speech", "microphone", "talk"],
+    ),
+    zephyr(
         "zephyr.shortcuts",
         "Zephyr Shortcuts",
         "shortcuts",

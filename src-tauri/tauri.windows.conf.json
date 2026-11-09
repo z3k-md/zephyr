@@ -1,0 +1,10 @@
+{
+  "bundle": {
+    "resources": {
+      "resources/msvcp140.dll": "msvcp140.dll",
+      "resources/msvcp140_1.dll": "msvcp140_1.dll",
+      "resources/vcruntime140.dll": "vcruntime140.dll",
+      "resources/vcruntime140_1.dll": "vcruntime140_1.dll"
+    }
+  }
+}

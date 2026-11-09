@@ -39,6 +39,11 @@
     saveShellProgram,
     shellInfo,
     saveNotesShortcut,
+    saveVoiceSettings,
+    voiceCancelDownload,
+    voiceDeleteModel,
+    voiceDownload,
+    voiceStatus,
     errorMessage,
     fileIndexStatus,
     getSnapshot,
@@ -74,6 +79,9 @@
     type ShellInfo,
     type ShellProgram,
     type Snapshot,
+    type VoiceModelCard,
+    type VoiceSettings,
+    type VoiceStatus,
   } from '../types';
 
   const snapshot = ref<Snapshot | null>(null);
@@ -139,11 +147,18 @@
         if (event.payload) void revealSection(event.payload);
         else open('general');
         window.setTimeout(() => void refresh(), 50);
+        void loadVoice();
       })
     );
     const section = new URLSearchParams(window.location.search).get('section');
     if (section) void revealSection(section);
     void pollFileStatus();
+    void loadVoice();
+    unlistens.push(
+      await listen<VoiceStatus>('voice-download', (event) => {
+        voiceModel.value = event.payload;
+      })
+    );
   });
 
   onUnmounted(() => {
@@ -186,6 +201,13 @@
         ]),
     { id: 'terminal', label: 'Terminal', icon: 'prompt', group: 'utilities' },
     { id: 'notes', label: 'Notes', icon: 'note', group: 'utilities' },
+    {
+      id: 'voice',
+      label: 'Voice',
+      icon: 'mic',
+      group: 'utilities',
+      keywords: 'microphone dictation speech hold parakeet',
+    },
     {
       id: 'network',
       label: 'Network',
@@ -721,6 +743,89 @@
     await save(saveNotesShortcut(shortcut));
   }
 
+  const DEFAULT_VOICE: VoiceSettings = {
+    enabled: false,
+    shortcut: 'ctrl+alt+space',
+  };
+  const voiceModel = ref<VoiceStatus | null>(null);
+  const voiceSettings = computed(() => ({
+    ...DEFAULT_VOICE,
+    ...snapshot.value?.voice,
+  }));
+  /** Null while the download hasn't reported a size, so the bar stays indeterminate. */
+  function voicePercent(model: VoiceModelCard): number | null {
+    if (!model.downloading || model.total <= 0) return null;
+    return Math.min(100, Math.round((model.received / model.total) * 100));
+  }
+  function voiceProgressLabel(model: VoiceModelCard): string {
+    if (!model.downloading) return '';
+    if (model.total > 0) return `${formatBytes(model.received)} of ${formatBytes(model.total)}`;
+    return model.received > 0 ? formatBytes(model.received) : 'Downloading…';
+  }
+  function formatBytes(bytes: number): string {
+    if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    let value = bytes;
+    let unit = 0;
+    while (value >= 1024 && unit < units.length - 1) {
+      value /= 1024;
+      unit += 1;
+    }
+    const digits = unit === 0 || value >= 10 ? 0 : 1;
+    return `${value.toFixed(digits)} ${units[unit]}`;
+  }
+
+  async function loadVoice() {
+    try {
+      voiceModel.value = await voiceStatus();
+    } catch {
+      voiceModel.value = null;
+    }
+  }
+
+  async function setVoice(partial: Partial<VoiceSettings>) {
+    const next = { ...voiceSettings.value, ...partial };
+    const saved = await save(saveVoiceSettings(next.enabled, next.shortcut));
+    if (!saved || !partial.enabled) return;
+    await loadVoice();
+    const model = voiceModel.value?.model;
+    if (model?.installed || model?.downloading) return;
+    try {
+      await voiceDownload();
+    } catch (error) {
+      formError.value = errorMessage(error);
+    }
+  }
+
+  function toggleVoice(event: Event) {
+    void setVoice({ enabled: (event.target as HTMLInputElement).checked });
+  }
+
+  async function downloadVoiceModel() {
+    try {
+      await voiceDownload();
+    } catch (error) {
+      formError.value = errorMessage(error);
+    }
+  }
+
+  async function cancelVoiceDownload() {
+    try {
+      await voiceCancelDownload();
+    } catch (error) {
+      formError.value = errorMessage(error);
+    }
+  }
+
+  async function deleteVoiceModel() {
+    try {
+      await voiceDeleteModel();
+      await loadVoice();
+    } catch (error) {
+      formError.value = errorMessage(error);
+    }
+  }
+
   async function loadClip() {
     try {
       clipCount.value = (await clipStats()).total ?? 0;
@@ -1153,6 +1258,72 @@
           <button type="button" @click="openNotes()">Open notes</button>
           <button type="button" @click="revealNotes">Show notes folder</button>
         </div>
+      </section>
+
+      <section v-if="snapshot" v-show="!search && active === 'voice'" id="section-voice">
+        <h2>Voice</h2>
+        <label class="check">
+          <input
+            type="checkbox"
+            :checked="voiceSettings.enabled"
+            :disabled="busy"
+            @change="toggleVoice"
+          />
+          Voice input
+        </label>
+        <div class="field" data-focus="shortcut">
+          <span>Hold to talk</span>
+          <ShortcutRecorder
+            :keys="voiceSettings.shortcut"
+            clearable
+            :disabled="busy"
+            @record="setVoice({ shortcut: $event })"
+            @invalid="formError = $event"
+          />
+        </div>
+        <h3>Model</h3>
+        <p v-if="voiceModel" class="hint-text">{{ voiceModel.license }}</p>
+        <p v-if="voiceModel?.error" class="notice">{{ voiceModel.error }}</p>
+        <div v-if="voiceModel" class="voice-option">
+          <span>{{ voiceModel.model.name }}</span>
+          <span class="hint-text">{{ voiceModel.model.sizeLabel }}</span>
+          <span v-if="voiceModel.model.installed" class="hint-text">Installed</span>
+          <button v-if="voiceModel.model.downloading" type="button" @click="cancelVoiceDownload">
+            Cancel
+          </button>
+          <button v-else-if="voiceModel.model.installed" type="button" @click="deleteVoiceModel">
+            Delete
+          </button>
+          <button v-else type="button" @click="downloadVoiceModel">Download</button>
+          <div
+            v-if="voiceModel.model.downloading"
+            class="voice-meter"
+            role="progressbar"
+            :aria-valuenow="voicePercent(voiceModel.model) ?? undefined"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            :aria-label="voiceModel.model.name"
+            :aria-valuetext="voiceProgressLabel(voiceModel.model)"
+          >
+            <span
+              :class="{ pending: voicePercent(voiceModel.model) === null }"
+              :style="
+                voicePercent(voiceModel.model) === null
+                  ? undefined
+                  : { width: `${voicePercent(voiceModel.model)}%` }
+              "
+            />
+          </div>
+          <p v-if="voiceModel.model.downloading" class="hint-text voice-progress">
+            {{ voiceProgressLabel(voiceModel.model) }}
+          </p>
+        </div>
+        <p v-if="voiceModel" class="hint-text">{{ voiceModel.loadedLabel }}</p>
+        <p v-if="voiceModel?.loadError" class="notice">{{ voiceModel.loadError }}</p>
+        <p class="hint-text">
+          Recording only happens while you hold the shortcut. Audio stays on this computer and is
+          never saved.
+        </p>
       </section>
 
       <SyncSection v-if="snapshot" v-show="!search && active === 'sync'" />

@@ -39,6 +39,7 @@ import type {
   PermissionId,
   TypingBest,
   SuggestResponse,
+  VoiceStatus,
   NetworkAddress,
   NetworkHistory,
   NetworkSummary,
@@ -292,6 +293,32 @@ export function openNotes(id?: string, body?: string): Promise<void> {
 
 export function saveNotesShortcut(shortcut: string): Promise<Snapshot> {
   return invoke<Snapshot>('save_notes_shortcut', { shortcut });
+}
+
+export function voiceStatus(): Promise<VoiceStatus> {
+  return invoke<VoiceStatus>('voice_status');
+}
+
+/** Starts the speech-model download. Progress arrives as `voice-download` events. */
+export function voiceDownload(): Promise<void> {
+  return invoke('voice_download');
+}
+
+export function voiceCancelDownload(): Promise<void> {
+  return invoke('voice_cancel_download');
+}
+
+export function voiceDeleteModel(): Promise<void> {
+  return invoke('voice_delete_model');
+}
+
+export function saveVoiceSettings(enabled: boolean, shortcut: string): Promise<Snapshot> {
+  return invoke<Snapshot>('save_voice_settings', { enabled, shortcut });
+}
+
+/** Aborts the current hold. Rust then sends `voice-final` with `cancelled: true`. */
+export function voiceCancel(): Promise<void> {
+  return invoke('voice_cancel');
 }
 
 /** Turns Zephyr's own shortcuts off while one is being recorded, and back on after. */
@@ -800,9 +827,14 @@ export function osdWheel(delta: number): Promise<void> {
   return invoke('osd_wheel', { delta });
 }
 
-/** A click on the volume overlay: the Sound view, in the bar. */
-export function osdOpenSound(): Promise<void> {
-  return invoke('osd_open_sound');
+/** A click on the volume overlay: the Sound view, in the bar, with `key` picked. */
+export function osdOpenSound(key: string | null): Promise<void> {
+  return invoke('osd_open_sound', { key });
+}
+
+/** The pointer came onto the volume overlay (true) or left it; it stays up while there. */
+export function osdHold(on: boolean): Promise<void> {
+  return invoke('osd_hold', { on });
 }
 
 /** Settings › Sound: where the volume overlay shows, `bottom`, `top` or `bottom-right`. */

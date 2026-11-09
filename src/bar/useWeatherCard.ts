@@ -13,7 +13,7 @@ export function useWeatherCard(ctx: {
   /** The card shows on the main bar with no scope, and gives way to the ⌘K menu. */
   shown: () => boolean;
   menuOpen: Ref<boolean>;
-  inputEl: Ref<HTMLInputElement | null>;
+  inputEl: Ref<HTMLTextAreaElement | null>;
   notice: Ref<string | null>;
   clearAfterOpen: () => void;
 }) {

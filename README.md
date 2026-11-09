@@ -17,6 +17,12 @@ A launcher bar for Windows and macOS. Summon it over any app and type to open an
 - Reopening the bar soon after closing it returns to the view you were in (Settings > General).
 - The footer shows CPU, GPU and memory, network trouble, the weather and the next meeting; click any of them for more.
 
+### Voice
+
+Turn it on in Settings > Voice, which downloads the speech model (about 750 MB). Then hold Ctrl+Alt+Space (Control+Shift+Space on a Mac) and speak; letting go leaves the words in the bar for Enter. Saying "search", "ask", "open" or "cancel" first or last runs it on release, and a scope word first, like "file" or "note", narrows it.
+
+The mic is on only while the shortcut is held. Speech is recognized on this computer, and audio is never saved or sent anywhere.
+
 ### Scopes
 
 A `!word` before or after the text narrows the search. Unknown `!words` stay as search text.

@@ -88,7 +88,15 @@
   import { enterAction } from './calendar';
   import { useRunKey } from './useRunKey';
   import { useSuggest } from './useSuggest';
+  import { useVoice } from './useVoice';
   import { useTypeAhead } from './useTypeAhead';
+  import {
+    QUERY_MAX_LINES,
+    flattenQueryNewlines,
+    queryBoxHeight,
+    queryDocumentCaret,
+    queryLineCount,
+  } from './queryField';
   import { pastAnswers, rememberAnswer } from './answerHistory';
   import { useTickerCard } from './useTickerCard';
   import { useWeatherCard } from './useWeatherCard';
@@ -130,7 +138,11 @@
   }
 
   const root = ref<HTMLElement | null>(null);
-  const inputEl = ref<HTMLInputElement | null>(null);
+  const inputEl = ref<HTMLTextAreaElement | null>(null);
+  // Off-screen copy of the query, wrapped the same way, so the field's height isn't
+  // measured by collapsing the textarea itself.
+  const queryMeasureEl = ref<HTMLElement | null>(null);
+  const queryGhostEl = ref<HTMLElement | null>(null);
   // Replaced whole on every change, never edited in place, so neither needs deep tracking.
   const snapshot = shallowRef<Snapshot | null>(null);
   const query = ref('');
@@ -172,6 +184,11 @@
   // rows and job counts stay current without asking again.
   const lastResponse = shallowRef<SuggestResponse | null>(null);
   const lastQuery = ref('');
+  /** What was sent for the reply in `lastQuery`, scope bang included, so voice can tell
+   *  its results from an earlier search of the same words. */
+  const lastTyped = ref('');
+  /** While the box shows words from the mic, bug captures omit that text. */
+  const voiceRedact = ref(false);
   const mode = ref<'search' | 'recent'>('recent');
   const notice = ref<string | null>(null);
   const selected = ref(-1);
@@ -206,20 +223,41 @@
   // bar for a moment after each press. The Sound view already shows them, so not there.
   const volumeShown = shallowRef<VolumeShown | null>(null);
   let volumeTimer = 0;
+  /** The pointer is on the drawer or dragging in it: it stays up. */
+  let volumeHeld = false;
+  /** The Sound view grew out of the drawer, so it rises from there. */
+  const soundGrown = ref(false);
   function showVolume(shown: VolumeShown) {
     if (view.value === 'sound') return;
     volumeShown.value = shown;
+    hideVolumeLater();
+  }
+  function hideVolumeLater() {
     window.clearTimeout(volumeTimer);
+    if (volumeHeld) return;
     volumeTimer = window.setTimeout(() => (volumeShown.value = null), 2000);
   }
+  function holdVolume(on: boolean) {
+    volumeHeld = on;
+    hideVolumeLater();
+  }
+  watch(volumeShown, (shown) => {
+    if (!shown) volumeHeld = false;
+  });
   const VOLUME_KEYS: Record<string, 'up' | 'down' | 'mute'> = {
     AudioVolumeUp: 'up',
     AudioVolumeDown: 'down',
     AudioVolumeMute: 'mute',
   };
-  function openSoundFromDrawer() {
+  /** The Sound view, with `key` (master or an app) picked: from the drawer or Alt+Mute. */
+  async function openSound(key: string | null) {
+    soundGrown.value = !!volumeShown.value && view.value !== 'sound';
     volumeShown.value = null;
-    openView('sound');
+    volumeHeld = false;
+    window.clearTimeout(volumeTimer);
+    if (view.value !== 'sound') openView('sound');
+    await nextTick();
+    if (key) soundView.value?.select(key);
   }
   const clipView = ref<InstanceType<typeof ClipboardViewComponent> | null>(null);
   const typingView = ref<InstanceType<typeof TypingViewComponent> | null>(null);
@@ -462,10 +500,21 @@
   // Bug captures (Ctrl+R and Ctrl+Shift+S, unless turned off in Settings): while one runs,
   // the bar logs what it does.
   const capturing = ref(false);
-  function trace(kind: string, data: unknown) {
-    if (capturing.value) {
-      void captureEvent(kind, data).catch(() => undefined);
+  function scrubVoice(data: unknown): unknown {
+    if (!data || typeof data !== 'object') return data;
+    if (Array.isArray(data)) return data.map(scrubVoice);
+    const copy: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(data as Record<string, unknown>)) {
+      if (key === 'text') continue;
+      if (key === 'label' && query.value && value === query.value) continue;
+      copy[key] = scrubVoice(value);
     }
+    return copy;
+  }
+
+  function trace(kind: string, data: unknown) {
+    if (!capturing.value) return;
+    void captureEvent(kind, voiceRedact.value ? scrubVoice(data) : data).catch(() => undefined);
   }
   void captureRecording()
     .then((on) => (capturing.value = on))
@@ -745,6 +794,8 @@
     resumeTimers();
     prefetchViews();
     sentHeight = 0;
+    // Resend whatever height the field is at, in case the window changed while hidden.
+    syncHeight();
     // Opens the connection to the suggestion service before the first keystroke.
     void warmSuggestions().catch(() => undefined);
     void devices.loadDevices();
@@ -819,7 +870,7 @@
       }),
       listen('clipboard-shown', () => openClip('')),
       listen<VolumeShown>('sound-key', (event) => showVolume(event.payload)),
-      listen('sound-open', () => openView('sound')),
+      listen<string | null>('sound-open', (event) => void openSound(event.payload)),
       // A hotkey the user gave a mode or scoped search (Settings > Shortcuts).
       listen<string>('bar-open', (event) => {
         query.value = '';
@@ -849,6 +900,7 @@
     unlistens.push(...(await listening));
 
     if (root.value) {
+      applyQueryHeight();
       observer = new ResizeObserver(() => syncHeight());
       observer.observe(root.value);
       syncHeight();
@@ -1030,6 +1082,20 @@
   }
 
   watch(query, () => {
+    const flat = flattenQueryNewlines(query.value);
+    if (flat !== query.value) {
+      const field = inputEl.value;
+      const start = field?.selectionStart ?? 0;
+      const end = field?.selectionEnd ?? start;
+      const caretStart = flattenQueryNewlines(query.value.slice(0, start)).length;
+      const caretEnd = flattenQueryNewlines(query.value.slice(0, end)).length;
+      query.value = flat;
+      void nextTick(() => {
+        field?.setSelectionRange(caretStart, caretEnd);
+        trackCaret();
+      });
+      return;
+    }
     if (!scope.value && view.value === 'root' && runAlias()) return;
     const scoped = /^!([a-z]+)\s+(.*)$/is.exec(query.value);
     if (!scope.value && scoped && SCOPES[scoped[1].toLowerCase()]) {
@@ -1102,7 +1168,8 @@
   }
 
   // Every view is the bar's one fixed size, so the window (and its blur) always matches the
-  // panel exactly. Views used to widen the window without widening the panel.
+  // panel exactly. Views used to widen the window without widening the panel. A wrapped
+  // query adds its extra lines on top of that size.
   // The last height sent, so an unchanged layout doesn't cross to Rust again; forgotten on
   // each summon, in case the window was resized meanwhile.
   let sentHeight = 0;
@@ -1116,6 +1183,175 @@
     void setBarHeight(height).catch(() => (sentHeight = 0));
   }
 
+  // The last box applied to the field, so a ResizeObserver tick that changes nothing
+  // doesn't write height again (that write is what would flicker the window).
+  let queryFit = '';
+
+  /** One line stays the old input's box. More lines raise the field and the window by
+   *  the same amount, so the results underneath keep the rows they had. */
+  function applyQueryHeight() {
+    const measure = queryMeasureEl.value;
+    const field = inputEl.value;
+    const bar = root.value;
+    if (!measure || !field || !bar) return;
+    const style = getComputedStyle(measure);
+    const line = parseFloat(style.lineHeight);
+    const pad = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+    const border = parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth);
+    if (!(line > 0)) return;
+    const full = measure.getBoundingClientRect().height;
+    const lines = queryLineCount(full, line, pad, border);
+    const height = queryBoxHeight(line, pad, border, lines);
+    const one = queryBoxHeight(line, pad, border, 1);
+    const extra = Math.max(0, height - one);
+    const overflows =
+      queryLineCount(full, line, pad, border, QUERY_MAX_LINES + 1) > QUERY_MAX_LINES;
+    const overflow = overflows ? 'auto' : 'hidden';
+    const signature = `${height}|${extra}|${overflow}`;
+    if (signature !== queryFit) {
+      queryFit = signature;
+      field.style.height = `${height}px`;
+      field.style.overflowY = overflow;
+      bar.style.setProperty('--query-extra', `${extra}px`);
+      syncHeight();
+      if (previewOpen.value) measurePreview();
+    }
+    revealQueryCaret(field);
+    syncQueryGhost();
+  }
+
+  /** Programmatic text (voice, a cleared field) doesn't scroll the caret into view. */
+  function revealQueryCaret(field: HTMLTextAreaElement) {
+    const end = field.value.length;
+    const start = field.selectionStart ?? 0;
+    const stop = field.selectionEnd ?? start;
+    // Partials replace the whole value while the key is held; keep the latest words in view.
+    if (voicePhase.value !== 'idle') {
+      field.setSelectionRange(end, end);
+      field.scrollTop = field.scrollHeight;
+      return;
+    }
+    if (start === end && stop === end) field.scrollTop = field.scrollHeight;
+    else if (start === 0 && stop === 0) field.scrollTop = 0;
+  }
+
+  function syncQueryGhost() {
+    const field = inputEl.value;
+    const ghost = queryGhostEl.value;
+    if (!field || !ghost) return;
+    const shift = `translateY(-${field.scrollTop}px)`;
+    if (ghost.style.transform !== shift) ghost.style.transform = shift;
+  }
+
+  watch(query, () => void nextTick(applyQueryHeight));
+
+  watch(
+    queryMeasureEl,
+    (el, _prev, onCleanup) => {
+      if (!el) return;
+      const measureObserver = new ResizeObserver(() => applyQueryHeight());
+      measureObserver.observe(el);
+      applyQueryHeight();
+      onCleanup(() => measureObserver.disconnect());
+    },
+    { flush: 'post' }
+  );
+
+  watch(queryGhostEl, () => syncQueryGhost());
+
+  watch(inputEl, (el) => {
+    if (el) return;
+    queryFit = '';
+    root.value?.style.setProperty('--query-extra', '0px');
+    syncHeight();
+  });
+
+  /** Enter never becomes a newline, including the key that commits an IME composition. */
+  function blockQueryNewline(event: KeyboardEvent) {
+    if (event.key === 'Enter' && event.target === inputEl.value) event.preventDefault();
+  }
+
+  function onQueryKeydown(event: KeyboardEvent) {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      return;
+    }
+    if (event.isComposing || event.keyCode === 229) return;
+    // Up and down move the results. A wrapped field would otherwise walk lines.
+    if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+      event.preventDefault();
+      return;
+    }
+    if (event.defaultPrevented) return;
+    const edge = queryEdge(event);
+    const field = inputEl.value;
+    if (!edge || !field) return;
+    event.preventDefault();
+    const range = queryDocumentCaret(
+      edge,
+      field.value.length,
+      field.selectionStart ?? 0,
+      field.selectionEnd ?? 0,
+      field.selectionDirection ?? 'none',
+      event.shiftKey
+    );
+    field.setSelectionRange(range.start, range.end, range.direction);
+    field.scrollTop = edge === 'start' ? 0 : field.scrollHeight;
+    syncQueryGhost();
+    trackCaret();
+  }
+
+  /** Home and End cover the whole value. On a Mac, ⌘←/⌘→ do too; a textarea's own
+   *  handling of those stops at the visual line. */
+  function queryEdge(event: KeyboardEvent): 'start' | 'end' | null {
+    if (event.altKey) return null;
+    if (event.key === 'Home') return 'start';
+    if (event.key === 'End') return 'end';
+    if (isMac && event.metaKey && !event.ctrlKey) {
+      if (event.key === 'ArrowLeft') return 'start';
+      if (event.key === 'ArrowRight') return 'end';
+    }
+    return null;
+  }
+
+  function onQueryBeforeInput(event: InputEvent) {
+    if (event.inputType === 'insertLineBreak' || event.inputType === 'insertParagraph') {
+      event.preventDefault();
+      return;
+    }
+    if (event.inputType !== 'insertFromDrop' || event.isComposing) return;
+    const data = event.data;
+    if (!data || !/[\r\n\u2028\u2029]/.test(data)) return;
+    event.preventDefault();
+    insertQueryText(flattenQueryNewlines(data));
+  }
+
+  function onQueryPaste(event: ClipboardEvent) {
+    const text = event.clipboardData?.getData('text/plain');
+    if (text == null || !/[\r\n\u2028\u2029]/.test(text)) return;
+    event.preventDefault();
+    insertQueryText(flattenQueryNewlines(text));
+  }
+
+  /** Drops the flattened text in at the caret. insertText keeps it on the field's undo stack. */
+  function insertQueryText(text: string) {
+    const field = inputEl.value;
+    if (!field) {
+      query.value += text;
+      return;
+    }
+    field.focus();
+    if (document.execCommand('insertText', false, text)) return;
+    const start = field.selectionStart ?? query.value.length;
+    const end = field.selectionEnd ?? start;
+    query.value = query.value.slice(0, start) + text + query.value.slice(end);
+    const caret = start + text.length;
+    void nextTick(() => {
+      field.setSelectionRange(caret, caret);
+      trackCaret();
+    });
+  }
+
   /** Shows a suggest reply. The watch on the built rows keeps the selection; an arrow
    *  pressed before any row existed moves once the rows are here. */
   async function applySuggestions(
@@ -1125,6 +1361,7 @@
   ) {
     lastResponse.value = response;
     lastQuery.value = query.value;
+    lastTyped.value = typed;
     mode.value = response.mode;
     notice.value = response.notice;
     if (pendingMove && items.value.length > 0) {
@@ -1212,6 +1449,8 @@
   }
 
   function onKey(event: KeyboardEvent) {
+    blockQueryNewline(event);
+    if (voiceKey(event)) return;
     trace('key', {
       key: event.key,
       ctrl: event.ctrlKey,
@@ -1226,6 +1465,11 @@
     if (event.key === 'Escape' && volumeShown.value) {
       event.preventDefault();
       volumeShown.value = null;
+      return;
+    }
+    if (event.key === 'Tab' && !event.shiftKey && volumeShown.value) {
+      event.preventDefault();
+      void openSound(volumeShown.value.key);
       return;
     }
     // With the bar in front, the volume keys reach the page instead of Zephyr's hook.
@@ -1509,6 +1753,10 @@
   const movable = ref(false);
   let gridReady = false;
   function trackModifiers(event: KeyboardEvent | MouseEvent) {
+    if (voicePhase.value !== 'idle' && 'key' in event && voiceShortcutKey(event)) {
+      movable.value = false;
+      return;
+    }
     movable.value = moveKeyOnly(event);
     // The grid's window is made the first time Ctrl is held, so the drag never waits on it.
     if (movable.value && !gridReady) {
@@ -1847,6 +2095,60 @@
       notice.value = errorMessage(error);
     }
   }
+
+  const {
+    phase: voicePhase,
+    level: voiceLevel,
+    modelReady: voiceReady,
+    hint: voiceHint,
+    onKey: voiceKey,
+    matchesShortcut: voiceShortcutKey,
+  } = useVoice({
+    query,
+    scope,
+    view,
+    notice,
+    selected,
+    lastQuery,
+    lastTyped,
+    lastResponse,
+    typedText,
+    items: () => items.value,
+    shortcut: () => snapshot.value?.voice?.shortcut ?? 'ctrl+alt+space',
+    redact: voiceRedact,
+    emojiOpen: () => emojiOpen.value,
+    pressEnter: () => {
+      const event = new KeyboardEvent('keydown', {
+        key: 'Enter',
+        bubbles: true,
+        cancelable: true,
+      });
+      if (emojiOpen.value) {
+        if (!emojiGrid.value) return false;
+        emojiGrid.value.onKey(event);
+        return true;
+      }
+      if (view.value === 'root') return false;
+      const current = viewShowing();
+      if (!current) return false;
+      current.onKey(event);
+      return true;
+    },
+    accept,
+    googleAiMode,
+    close: closeFromRoot,
+    reset: resetForSummon,
+    clear: clearAfterOpen,
+    onListen: () => {
+      movable.value = false;
+    },
+  });
+
+  const queryPlaceholder = computed(() => {
+    if (voicePhase.value !== 'idle' && !query.value) return 'Listening…';
+    if (scope.value) return `Search ${scope.value.name.toLowerCase()}`;
+    return 'Search or open an app';
+  });
 </script>
 
 <template>
@@ -1888,8 +2190,17 @@
       @network="openView('network')"
       :initial-filter="resourcesFilter"
     />
-    <SoundView v-if="view === 'sound'" ref="soundView" @exit="leave" />
-    <SoundDrawer v-if="volumeShown" :shown="volumeShown" @open="openSoundFromDrawer" />
+    <SoundView
+      v-if="view === 'sound'"
+      ref="soundView"
+      :class="{ grow: soundGrown }"
+      :track="playingNow"
+      :position-ms="media.positionMs.value"
+      @exit="((soundGrown = false), leave())"
+      @media="media.press"
+      @focus-media="media.focus()"
+    />
+    <SoundDrawer v-if="volumeShown" :shown="volumeShown" @open="openSound" @hold="holdVolume" />
     <NetworkView
       v-if="view === 'network'"
       ref="networkView"
@@ -1905,23 +2216,35 @@
     />
     <template v-if="view === 'root'">
       <div ref="inputRowEl" class="input-row">
-        <svg class="mark" viewBox="0 0 24 24" aria-hidden="true">
+        <span
+          v-if="voicePhase !== 'idle'"
+          class="voice-pill"
+          :style="{ '--level': voiceLevel }"
+          aria-hidden="true"
+        >
+          <svg viewBox="0 0 24 24" v-html="GLYPHS.mic" />
+        </span>
+        <svg v-else class="mark" viewBox="0 0 24 24" aria-hidden="true">
           <circle cx="11" cy="11" r="6.5" />
           <path d="M16 16.5 20 20.5" />
         </svg>
         <span v-if="scope" class="chip scope-label">{{ scope.name }}</span>
         <div class="query-wrap">
+          <span ref="queryMeasureEl" class="query measure" aria-hidden="true">{{ query }}</span>
           <!-- The typed text is invisible here; it only pushes the completion into place. -->
           <span v-if="ghost" class="query ghost" aria-hidden="true"
-            ><span class="ghost-typed">{{ query }}</span
-            >{{ ghost }}</span
+            ><span ref="queryGhostEl" class="ghost-body"
+              ><span class="ghost-typed">{{ query }}</span
+              >{{ ghost }}</span
+            ></span
           >
-          <input
+          <textarea
             ref="inputEl"
             v-model="query"
             class="query"
-            type="text"
+            rows="1"
             role="combobox"
+            aria-multiline="false"
             aria-autocomplete="both"
             :aria-controls="actionsOpen ? 'actions' : 'results'"
             :aria-expanded="items.length > 0"
@@ -1932,16 +2255,24 @@
                   ? `result-${selected}`
                   : undefined
             "
-            :placeholder="scope ? `Search ${scope.name.toLowerCase()}` : 'Search or open an app'"
+            :placeholder="queryPlaceholder"
             spellcheck="false"
             autocomplete="off"
             autocapitalize="off"
+            @keydown="onQueryKeydown"
+            @beforeinput="onQueryBeforeInput"
+            @paste="onQueryPaste"
             @input="trackCaret"
+            @scroll="syncQueryGhost"
             @keyup="trackCaret"
             @click="trackCaret"
             @select="trackCaret"
           />
         </div>
+        <span v-if="voicePhase !== 'idle'" class="voice-status">
+          <span v-if="!voiceReady" class="voice-loading">Loading speech model…</span>
+          <span v-if="voiceHint" class="voice-hint">{{ voiceHint }}</span>
+        </span>
         <!-- With Ctrl held the bar can be dragged. -->
         <span v-if="movable" class="move-hint">
           <svg viewBox="0 0 24 24" aria-hidden="true">
