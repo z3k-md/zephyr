@@ -29,6 +29,7 @@ done
 if $all; then
   rust=true
   web=true
+  docs=true
 else
   base=$(git merge-base HEAD origin/develop 2> /dev/null || echo HEAD)
   eval "$(
@@ -38,7 +39,7 @@ else
     } | bash scripts/changes.sh
   )"
 fi
-echo "rust=$rust web=$web"
+echo "rust=$rust web=$web docs=$docs"
 
 started=$SECONDS
 step() {
@@ -58,6 +59,19 @@ bun install --frozen-lockfile --silent
 
 step "Prettier"
 bunx prettier --check .
+
+# Warnings only: docs-check always exits 0, and a failed site build doesn't stop the other checks.
+step "Docs"
+docs_scope=""
+if $all; then docs_scope=--all; fi
+if $node_ok; then
+  node scripts/docs-check.mjs $docs_scope
+else
+  bun scripts/docs-check.mjs $docs_scope
+fi
+if $docs; then
+  bun run docs:build || echo "Docs build failed; it doesn't block the push, but fix it."
+fi
 
 if $web; then
   step "Typecheck"

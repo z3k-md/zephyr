@@ -138,3 +138,47 @@ jobs:
       - uses: docker://rhysd/actionlint:1.7.12
         with:
           args: -color
+
+  # Outside the checks matrix: branch rulesets only require "Checks (windows-latest)" and
+  # "Checks (macos-latest)" to pass, so this job can fail without blocking promotion to main.
+  docs:
+    name: Docs
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: ./.github/actions/setup
+        with:
+          rust: false
+
+      - name: Docs check
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          args=""
+          if [ "$EVENT_NAME" = pull_request ]; then
+            git fetch origin "$BASE_REF"
+            args="--base origin/$BASE_REF"
+          elif [ "$EVENT_NAME" = push ]; then
+            base="$BEFORE"
+            if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
+              base="HEAD~1"
+            fi
+            args="--base $base"
+          else
+            args="--all"
+          fi
+          node scripts/docs-check.mjs $args
+
+      - name: Build docs
+        run: bun run docs:build
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
