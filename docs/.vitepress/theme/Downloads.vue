@@ -4,48 +4,71 @@
   import { data as release } from '../release.data';
 
   const installHref = withBase('/guide/install');
-  const releasesFallback = 'https://github.com/z3k-md/zephyr/releases/latest';
-
-  const versionLabel = computed(() => (release.version ? `v${release.version}` : 'Latest release'));
-
-  const windowsHref = computed(() => release.windows ?? release.url ?? releasesFallback);
-  const macosHref = computed(() => release.macos ?? release.url ?? releasesFallback);
+  const windowsHref = computed(() => release.windows ?? release.url);
+  const macosHref = computed(() => release.macos ?? release.url);
 </script>
 
 <template>
-  <form class="downloads" @submit.prevent>
+  <div class="downloads">
     <div class="downloads-buttons">
-      <a class="VPButton medium brand" :href="windowsHref" target="_blank" rel="noreferrer">
-        Windows
-      </a>
-      <a class="VPButton medium brand" :href="macosHref" target="_blank" rel="noreferrer">
-        macOS (Apple silicon)
-      </a>
+      <a class="downloads-button" :href="windowsHref">Windows</a>
+      <a class="downloads-button" :href="macosHref">macOS (Apple silicon)</a>
     </div>
     <p class="downloads-meta">
-      <span>{{ versionLabel }}</span>
-      <span aria-hidden="true"> · </span>
-      <a :href="installHref">Install guide</a>
+      <span v-if="release.version">v{{ release.version }} · </span>
+      <a :href="installHref">First launch</a>
     </p>
-  </form>
+  </div>
 </template>
 
 <style scoped>
   .downloads {
-    margin: 1.5rem 0 2rem;
-    text-align: center;
+    padding-top: 24px;
   }
 
   .downloads-buttons {
     display: flex;
     flex-wrap: wrap;
-    justify-content: center;
-    gap: 0.75rem;
+    gap: 12px;
+  }
+
+  .downloads-button {
+    display: inline-block;
+    border: 1px solid var(--vp-button-brand-border);
+    border-radius: 20px;
+    padding: 0 20px;
+    line-height: 38px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--vp-button-brand-text);
+    background-color: var(--vp-button-brand-bg);
+    text-decoration: none;
+    transition: background-color 0.25s;
+  }
+
+  .downloads-button:hover {
+    border-color: var(--vp-button-brand-hover-border);
+    color: var(--vp-button-brand-hover-text);
+    background-color: var(--vp-button-brand-hover-bg);
   }
 
   .downloads-meta {
-    margin: 0.75rem 0 0;
-    font-size: 0.875rem;
+    margin: 12px 0 0;
+    font-size: 14px;
     color: var(--vp-c-text-2);
+  }
+
+  .downloads-meta a {
+    color: var(--vp-c-brand-1);
+  }
+
+  @media (max-width: 959px) {
+    .downloads-buttons {
+      justify-content: center;
+    }
+
+    .downloads-meta {
+      text-align: center;
+    }
   }
 </style>

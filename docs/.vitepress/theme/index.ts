@@ -10,10 +10,8 @@ export default {
   extends: DefaultTheme,
   Layout: () =>
     h(DefaultTheme.Layout, null, {
+      'home-hero-info-after': () => h(Downloads),
       'doc-before': () => h(FeatureMeta),
       'doc-after': () => h(NotYet),
     }),
-  enhanceApp({ app }) {
-    app.component('Downloads', Downloads);
-  },
 } satisfies Theme;

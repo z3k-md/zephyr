@@ -19,7 +19,7 @@
       <ul>
         <li v-for="(gap, index) in gaps" :key="index">{{ gap }}</li>
       </ul>
-      <p>See the <a :href="roadmapHref">roadmap</a> for what is still being built.</p>
+      <p><a :href="roadmapHref">Roadmap</a></p>
     </div>
   </div>
 </template>

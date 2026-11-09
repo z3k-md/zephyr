@@ -4,13 +4,10 @@ layout: home
 hero:
   name: Zephyr
   text: A launcher bar for Windows and macOS
-  tagline: Summon it over any app and type to open an app, a setting, a file or a link, or search Google.
+  tagline: Open it over any app, then type to open an app, a setting, a file or a link, or search Google.
   actions:
-    - theme: brand
-      text: Get started
-      link: /guide/install
     - theme: alt
-      text: Features
+      text: The bar
       link: /guide/the-bar
     - theme: alt
       text: GitHub
@@ -18,32 +15,30 @@ hero:
 
 features:
   - title: Scopes
-    details: Narrow the bar with !app, !file, !clip, and other scope words.
+    details: '!app, !f, !clip and more narrow a search to one source.'
     link: /features/scopes
   - title: Answers
-    details: Math, units, time zones, stocks, colors, and network checks in the top row.
+    details: Math, units, time zones and dates in the top row as you type.
     link: /features/answers
-  - title: Clipboard
-    details: Search everything you have copied and paste it into the app in front.
+  - title: Clipboard history
+    details: Everything you've copied, searchable, pasted into the app in front.
     link: /features/clipboard
   - title: Apps and windows
-    details: Open apps, switch windows, and manage what is already running.
+    details: Open apps, switch to their windows, or quit them.
     link: /features/apps-and-windows
   - title: Files
-    details: Search file and folder names under your home folder with !f.
+    details: File and folder names under your home folder, with preview.
     link: /features/files
   - title: Sound
-    details: Per-app volume, mute, and output device from the bar on Windows.
+    details: Per-app volume, mute and output device. Windows only.
     link: /features/sound
   - title: Timers and focus
-    details: Countdown timers and focus sessions with footer status.
+    details: Countdowns and focus sessions that block sites and minimize apps.
     link: /features/timers-and-focus
   - title: Voice
-    details: Hold a shortcut and speak; recognition stays on this computer.
+    details: Hold a shortcut and speak. Recognized on this computer.
     link: /features/voice
   - title: Calendar
-    details: Today's agenda from a linked calendar, with meeting join from the bar.
+    details: Today's meetings from an iCal link; Enter joins one.
     link: /features/calendar
 ---
-
-<Downloads />
